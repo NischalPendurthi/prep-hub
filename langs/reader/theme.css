@@ -1,0 +1,14 @@
+/* Prep Hub: map the reader tokens onto the shared hub tokens (shared/hub.css).
+   Body text stays in the serif reading face; UI, headings and code use the hub fonts.
+   :not(#_) lifts specificity above the guide's own light/dark :root rules. */
+:root:not(#_) {
+  --bg: var(--hub-bg); --surface: var(--hub-surface); --surface-2: var(--hub-surface-2); --rule: var(--hub-line);
+  --ink: var(--hub-ink); --ink-2: var(--hub-ink-2); --ink-3: var(--hub-ink-3);
+  --accent: var(--hub-accent); --accent-ink: var(--hub-accent-ink); --accent-soft: var(--hub-accent-soft);
+  --trap: var(--hub-warn); --trap-soft: var(--hub-warn-soft);
+  --code-bg: var(--hub-code-bg); --shadow: var(--hub-shadow);
+  --f-display: var(--hub-sans); --f-mono: var(--hub-mono);
+}
+body { margin: 0; }
+/* The hub bar already names the tool; on narrow phones give the filter and search the room. */
+@media (max-width: 420px) { .topbar .brand { display: none; } }

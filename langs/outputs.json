@@ -1,0 +1,1018 @@
+{
+ "python:c01-alias": {
+  "hash": "a14b6423cfa971f4",
+  "out": "[1, 2, 3, 4] True\nabc abcd False"
+ },
+ "python:c01-bigint": {
+  "hash": "47dd136b292c53b7",
+  "out": "1267650600228229401496703205376 101 40\n30 4300\nValueError: Exceeds the limit (4300 digits) for integer string conversio\n4155"
+ },
+ "python:c01-c-deepsize": {
+  "hash": "54f2b4ba1d2925e3",
+  "out": "120 762\n56 120"
+ },
+ "python:c01-c-freeze": {
+  "hash": "a9de931afe089f49",
+  "out": "(('a', frozenset({3, 4})), ('b', (1, 2)))\nresult"
+ },
+ "python:c01-c-obitem": {
+  "hash": "63430f0bc0f2b939",
+  "out": "True True\n1 10640 10001"
+ },
+ "python:c01-c-sentinel": {
+  "hash": "eee64ac02a3960ba",
+  "out": "<MISSING> True\nTrue None"
+ },
+ "python:c01-consts": {
+  "hash": "681265a013cda480",
+  "out": "True\nFalse\nTrue (None, (1000, 1000))"
+ },
+ "python:c01-copies": {
+  "hash": "53c6008534b2b580",
+  "out": "[[1, 0], [0, 0]] [[0, 0], [0, 0]]\n[[7, 0], [7, 0]] [[7, 0], [0, 0]]"
+ },
+ "python:c01-d-bool": {
+  "hash": "efab8046cd77c83f",
+  "out": "main.py:3: SyntaxWarning: \"is\" with 'int' literal. Did you mean \"==\"?\n  print(hash(True) == hash(1), True is 1 == True)\n2 10 True\n2 yes\nTrue False"
+ },
+ "python:c01-d-bug-append": {
+  "hash": "a80510abe5d6bfc5",
+  "out": "[1, 2, 3] [1, 2, 3]"
+ },
+ "python:c01-d-bug-default": {
+  "hash": "48bae3b4c1863a7e",
+  "out": "['a', 'b'] ['a', 'b']"
+ },
+ "python:c01-d-bug-is": {
+  "hash": "44660195486e8f9b",
+  "out": "True\nFalse"
+ },
+ "python:c01-d-grid": {
+  "hash": "e81ff3ba4b18120d",
+  "out": "[[' ', 'X', ' '], [' ', 'X', ' '], [' ', 'X', ' ']]"
+ },
+ "python:c01-d-iadd": {
+  "hash": "788db7d4a436868a",
+  "out": "[1, 2] [1, 2] True (1,) [1, 2]"
+ },
+ "python:c01-d-keys": {
+  "hash": "4a8ebc1af242a819",
+  "out": "{1: 'bool'}\n1"
+ },
+ "python:c01-d-nan": {
+  "hash": "a2deadfe557a3b24",
+  "out": "True False 0\n[3.0, nan, 1.0, 2.0]"
+ },
+ "python:c01-id-reuse": {
+  "hash": "808322a1f691e9fc",
+  "out": "True\nFalse"
+ },
+ "python:c01-immortal": {
+  "hash": "585eebff2af3a3d6",
+  "out": "4294967295\n4294967295\n2"
+ },
+ "python:c01-intcache": {
+  "hash": "4527d3a87977509a",
+  "out": "True False\nTrue 257"
+ },
+ "python:c01-intern": {
+  "hash": "6fd6dae204553918",
+  "out": "True False True\nTrue\nTrue"
+ },
+ "python:c01-nan": {
+  "hash": "7df46e676cbd0ce7",
+  "out": "False True\nTrue True\nFalse"
+ },
+ "python:c01-sizes": {
+  "hash": "05cdf9ca6cfea995",
+  "out": " object()   16\n     None   16\n      1.0   24\n        0   28\n        1   28\n    2**30   32\n    2**60   36\n       \"\"   41\n    \"abc\"   44\n       ()   40\n       []   56\n       {}   64\n    set()  216"
+ },
+ "python:c01-tuple-iadd": {
+  "hash": "198921166c809289",
+  "out": "error: 'tuple' object does not support item assignment\n([1, 2, 99], 3)"
+ },
+ "python:c01-type-chain": {
+  "hash": "7ea31a71fb10a0e4",
+  "out": "<class 'int'> <class 'type'> <class 'type'>\n(<class 'int'>, <class 'object'>)\nTrue True\nTrue False"
+ },
+ "python:c02-c-accum": {
+  "hash": "36a1a8cb0ae6a0c3",
+  "out": "naive [102, 102, 102]\nwith_default [100, 101, 102]\nwith_factory [100, 101, 102]"
+ },
+ "python:c02-c-memoize": {
+  "hash": "d7e7f8cf12de43cd",
+  "out": "102334155 41 fib 41"
+ },
+ "python:c02-c-once": {
+  "hash": "c98af1a592cbe726",
+  "out": "initialising\nNone None"
+ },
+ "python:c02-c-report": {
+  "hash": "3f06b1aa9cedb574",
+  "out": "  outer: local=['check', 'data', 'seen', 'x'], global=['set']\n    check: local=['x'], free=['seen'], global=['LIMIT']"
+ },
+ "python:c02-cells": {
+  "hash": "21e1686670556c69",
+  "out": "2\n('count',) True\n2\n('count',)"
+ },
+ "python:c02-class-scope": {
+  "hash": "0721c58cb1120639",
+  "out": "name 'base' is not defined\n[10, 11]\nmodule [0, 1, 2]"
+ },
+ "python:c02-d-bug-class": {
+  "hash": "1daf63a8687ae23b",
+  "out": "Traceback (most recent call last):\n  File \"main.py\", line 1, in <module>\n    class Units:\n  File \"main.py\", line 3, in Units\n    table = {name: factor * i for i, name in enumerate([\"k\", \"M\", \"G\"], 1)}\n                   ^^^^^^\nNameError: name 'factor' is not defined"
+ },
+ "python:c02-d-bug-retry": {
+  "hash": "14f46d68c0d96532",
+  "out": "['attempt 3', 'attempt 3', 'attempt 3']"
+ },
+ "python:c02-d-bug-time": {
+  "hash": "f1ce0e16c36e7c7f",
+  "out": "True"
+ },
+ "python:c02-d-counter": {
+  "hash": "3230d70321f63e1e",
+  "out": "1 2 1 False"
+ },
+ "python:c02-d-defaults": {
+  "hash": "f9889f2c22363822",
+  "out": "1 2 2 1 3"
+ },
+ "python:c02-d-late": {
+  "hash": "56a4e99628ea5905",
+  "out": "['C', 'C', 'C']"
+ },
+ "python:c02-d-scopes": {
+  "hash": "026e76be9d7d3284",
+  "out": "3 4"
+ },
+ "python:c02-d-walrus": {
+  "hash": "84672843f9985961",
+  "out": "[0, 1, 3, 6] 6"
+ },
+ "python:c02-defaults": {
+  "hash": "5e4f88fb0d0957e0",
+  "out": "[1, 2] [1, 2]\n([1, 2],)\n[1] [2]"
+ },
+ "python:c02-dis": {
+  "hash": "22bdc128ce3a80ac",
+  "out": "  5           0 RESUME                   0\n\n  6           2 LOAD_FAST                0 (a)\n              4 LOAD_CONST               1 (2)\n              6 BINARY_OP                5 (*)\n             10 STORE_FAST               1 (b)\n\n  7          12 LOAD_FAST                1 (b)\n             14 LOAD_GLOBAL              0 (g_value)\n             24 BINARY_OP                0 (+)\n             28 LOAD_GLOBAL              3 (NULL + len)\n             38 LOAD_CONST               2 ('x')\n             40 CALL                     1\n             48 BINARY_OP                0 (+)\n             52 RETURN_VALUE"
+ },
+ "python:c02-late": {
+  "hash": "e40ffc11eec02dbd",
+  "out": "[2, 2, 2]\n[0, 1, 2]\n[0, 1, 2]"
+ },
+ "python:c02-legb": {
+  "hash": "e6912d845151d92c",
+  "out": "enclosing\nbuiltins True"
+ },
+ "python:c02-nonlocal": {
+  "hash": "7c710be777a43723",
+  "out": "5 changed by inner\nSyntaxError: no binding for nonlocal 'missing' found"
+ },
+ "python:c02-shadow": {
+  "hash": "9002727df0af9eaa",
+  "out": "TypeError: 'list' object is not callable\n['a', 'b', 'c']"
+ },
+ "python:c02-symtable": {
+  "hash": "129255d34da714f6",
+  "out": "f a local\nf b local\nf g local\nf total global\ng a free\ng b free\ng len global"
+ },
+ "python:c02-unbound": {
+  "hash": "46fdcb46b218cd25",
+  "out": "UnboundLocalError: cannot access local variable 'count' where it is not associated with a value\nUnboundLocalError: cannot access local variable 'count' where it is not associated with a value"
+ },
+ "python:c03-adaptive": {
+  "hash": "4b91396ed8ca3a31",
+  "out": "  7           0 RESUME                   0\n\n  8           2 LOAD_FAST                0 (p)\n              4 LOAD_ATTR_INSTANCE_VALUE     0 (x)\n             24 RETURN_VALUE\n 10           0 RESUME                   0\n\n 11           2 LOAD_FAST__LOAD_FAST     0 (a)\n              4 LOAD_FAST                1 (b)\n              6 BINARY_OP_ADD_INT        0 (+)\n             10 RETURN_VALUE"
+ },
+ "python:c03-c-hist": {
+  "hash": "63faa123382d3baa",
+  "out": "[('LOAD_FAST', 5), ('SWAP', 5), ('STORE_FAST', 4), ('RESUME', 2)]"
+ },
+ "python:c03-c-stable": {
+  "hash": "2d5a5414e21f0d0a",
+  "out": "['BINARY_OP_ADD_INT'] ['BINARY_OP_ADD_INT']\nstable not slower: True"
+ },
+ "python:c03-c-trace": {
+  "hash": "87a4e49ea6c7251f",
+  "out": "(3, [2, 3, 4, 3, 4, 3, 4, 3, 5])"
+ },
+ "python:c03-c-vm": {
+  "hash": "dca8aa8b134204ea",
+  "out": "[('LOAD', 'a'), ('CONST', 2), ('OP', '+'), ('LOAD', 'b'), ('OP', '*'), ('LOAD', 'a'), ('CONST', 4), ('OP', '/'), ('OP', '-')]\n(28.0, 3)"
+ },
+ "python:c03-codeobj": {
+  "hash": "88e9b7116d97d8d4",
+  "out": "area 2 1 4\n('w', 'h', 'unit', 'scale')\n(None, 1.0) () 2\n30 bytes of bytecode"
+ },
+ "python:c03-d-bug-lbyl": {
+  "hash": "e233a6ed191377ae",
+  "out": "eafp not slower: True"
+ },
+ "python:c03-d-bug-replace": {
+  "hash": "d59515bca8efc60d",
+  "out": "AttributeError: readonly attribute\nhi"
+ },
+ "python:c03-d-count": {
+  "hash": "39474880f726356f",
+  "out": "['*', '*', '*'] (None, 24, 60)"
+ },
+ "python:c03-d-folding": {
+  "hash": "939072d49dab1365",
+  "out": "(None, (1024, '-----', (1, 2, 3)))\nTrue (None, 1024)"
+ },
+ "python:c03-d-names": {
+  "hash": "00d82c32a22978e4",
+  "out": "('a', 'b') ('len', 'c')\nNameError: name 'c' is not defined"
+ },
+ "python:c03-d-recursion": {
+  "hash": "a5d8d3e551158203",
+  "out": "True"
+ },
+ "python:c03-despecialise": {
+  "hash": "022bd1e9fe79460b",
+  "out": "BINARY_OP_ADD_UNICODE"
+ },
+ "python:c03-dis-expr": {
+  "hash": "c09c931a4f1e2ce1",
+  "out": "  3           0 RESUME                   0\n\n  4           2 LOAD_FAST                0 (a)\n              4 LOAD_FAST                1 (b)\n              6 LOAD_FAST                2 (c)\n              8 BINARY_OP                5 (*)\n             12 BINARY_OP                0 (+)\n             16 RETURN_VALUE"
+ },
+ "python:c03-dis-loop": {
+  "hash": "9d89fb5d7cd6d894",
+  "out": "  3           0 RESUME                   0\n\n  4           2 LOAD_CONST               1 (0)\n              4 STORE_FAST               1 (n)\n\n  5           6 LOAD_FAST                0 (xs)\n              8 GET_ITER\n        >>   10 FOR_ITER                13 (to 40)\n             14 STORE_FAST               2 (x)\n\n  6          16 LOAD_FAST                2 (x)\n             18 LOAD_CONST               1 (0)\n             20 COMPARE_OP              68 (>)\n             24 POP_JUMP_IF_TRUE         1 (to 28)\n             26 JUMP_BACKWARD            9 (to 10)\n\n  7     >>   28 LOAD_FAST                1 (n)\n             30 LOAD_CONST               2 (1)\n             32 BINARY_OP               13 (+=)\n             36 STORE_FAST               1 (n)\n             38 JUMP_BACKWARD           15 (to 10)\n\n  5     >>   40 END_FOR\n\n  8          42 LOAD_FAST                1 (n)\n             44 RETURN_VALUE"
+ },
+ "python:c03-exctable": {
+  "hash": "c56a4be65a4aa85b",
+  "out": "  3           0 RESUME                   0\n\n  4           2 NOP\n\n  5           4 LOAD_FAST                0 (a)\n              6 LOAD_FAST                1 (b)\n              8 BINARY_OP               11 (/)\n             12 RETURN_VALUE\n        >>   14 PUSH_EXC_INFO\n\n  6          16 LOAD_GLOBAL              0 (ZeroDivisionError)\n             26 CHECK_EXC_MATCH\n             28 POP_JUMP_IF_FALSE        3 (to 36)\n             30 POP_TOP\n\n  7          32 POP_EXCEPT\n             34 RETURN_CONST             0 (None)\n\n  6     >>   36 RERAISE                  0\n        >>   38 COPY                     3\n             40 POP_EXCEPT\n             42 RERAISE                  1\nExceptionTable:\n  4 to 10 -> 14 [0]\n  14 to 30 -> 38 [1] lasti\n  36 to 36 -> 38 [1] lasti"
+ },
+ "python:c03-folding": {
+  "hash": "7654e39dfffc3c1b",
+  "out": "(None, 86400, 'ababab', (1, 2, 3), frozenset({1, 2, 3}))\n[]"
+ },
+ "python:c03-frames": {
+  "hash": "e6ba312d09054b95",
+  "out": "['inner:7', 'middle:12', 'outer:15', '<module>:17']\n1000"
+ },
+ "python:c03-stages": {
+  "hash": "8b353b8d07033e44",
+  "out": "['NAME', 'OP', 'NAME', 'OP', 'NUMBER']\nAssign(targets=[Name(id='total', ctx=Store())], value=BinOp(left=Name(id='price', ctx=Load()), op=Mult(), right=Constant(value=3)))\ncode ('price', 'total') (3, None)"
+ },
+ "python:c04-c-classes": {
+  "hash": "cbe45866d9436371",
+  "out": "len  0: request  33 bytes -> block  48\nlen 14: request  47 bytes -> block  48\nlen 15: request  48 bytes -> block  48\nlen 16: request  49 bytes -> block  64\nlen 30: request  63 bytes -> block  64\nlen 31: request  64 bytes -> block  64\nlen 32: request  65 bytes -> block  80\nsmall-object limit: 512 bytes; classes: 32"
+ },
+ "python:c04-c-gcreport": {
+  "hash": "58859fba8f72a07f",
+  "out": "collections per generation: {0: 25, 1: 3, 2: 0}, objects collected: 19569"
+ },
+ "python:c04-c-lruweak": {
+  "hash": "04b997b7e8d1e957",
+  "out": "['held', 'c']"
+ },
+ "python:c04-c-topalloc": {
+  "hash": "215f6b0f27948558",
+  "out": "15 True 2"
+ },
+ "python:c04-cycle": {
+  "hash": "6f319ed936777cc6",
+  "out": "alive after del: True\ncollected: True\nalive after collect: False"
+ },
+ "python:c04-d-bug-cache": {
+  "hash": "dc16766299933434",
+  "out": "1000\n0"
+ },
+ "python:c04-d-bug-del": {
+  "hash": "ea1ab729104da3b8",
+  "out": "False"
+ },
+ "python:c04-d-bug-tree": {
+  "hash": "4a3e170e507fd11c",
+  "out": "freed without gc: False"
+ },
+ "python:c04-d-cycle": {
+  "hash": "b70dadb39b0f3ec7",
+  "out": "False\nTrue"
+ },
+ "python:c04-d-order": {
+  "hash": "ec9fe861951bca76",
+  "out": "end of f\ndel 1\ndel 2\ndel 4\ndel 3\ndone"
+ },
+ "python:c04-d-resurrect": {
+  "hash": "08d532e520b9cf02",
+  "out": "__del__ runs\n1\ncleared"
+ },
+ "python:c04-d-weakdict": {
+  "hash": "0898efd0c7b71be5",
+  "out": "['second']"
+ },
+ "python:c04-del-exc": {
+  "hash": "56ed3a8eccecc8b6",
+  "out": "Exception ignored in: <function Bad.__del__ at 0x…>\nTraceback (most recent call last):\n  File \"main.py\", line 3, in __del__\n    raise RuntimeError(\"boom in __del__\")\nRuntimeError: boom in __del__\nprogram continues"
+ },
+ "python:c04-del-timing": {
+  "hash": "e0d0fcf68358fc04",
+  "out": "returning\nfreed local\nafter call\nfreed global\nafter rebinding"
+ },
+ "python:c04-generations": {
+  "hash": "b15b98b9fb61453a",
+  "out": "(700, 10, 10)\n(0, 0, 0)\nTrue\nTrue"
+ },
+ "python:c04-refcount": {
+  "hash": "8f61fcea8170098f",
+  "out": "2\n5\n2"
+ },
+ "python:c04-tracemalloc": {
+  "hash": "c77e79b2d78aa50d",
+  "out": "about 61 bytes per item\n5 True"
+ },
+ "python:c04-tracked": {
+  "hash": "395869a89fe941ca",
+  "out": "False False\nTrue False False True\nTrue False True"
+ },
+ "python:c04-weakref": {
+  "hash": "53042ab61777f82c",
+  "out": "['logo']\n[]\n['finalized tmp']\nTypeError: cannot create weak reference to 'int' object"
+ },
+ "python:c05-badhash": {
+  "hash": "6a8f940f0c68e47a",
+  "out": "GoodKey fast\nBadKey slow"
+ },
+ "python:c05-c-lru": {
+  "hash": "8cc6eeb74f6d4ecc",
+  "out": "1\n-1 3 [1, 3]"
+ },
+ "python:c05-c-probemap": {
+  "hash": "a925bea7346a21b8",
+  "out": "50 51 512\nKeyError 'k50'"
+ },
+ "python:c05-c-slidingmax": {
+  "hash": "35d01e74f3f26be6",
+  "out": "[1, 3, 3, 3, 5, 5, 6, 7]"
+ },
+ "python:c05-c-topk": {
+  "hash": "786530fbb1347635",
+  "out": "['the', 'and', 'cat']"
+ },
+ "python:c05-d-bug-bfs": {
+  "hash": "29a10d5334b50c48",
+  "out": "True"
+ },
+ "python:c05-d-bug-dataclass": {
+  "hash": "d50e14347929f3d7",
+  "out": "FrozenInstanceError\nstart"
+ },
+ "python:c05-d-intersection": {
+  "hash": "f0ce65cb5e473753",
+  "out": "2 2 True\nFalse True"
+ },
+ "python:c05-d-key-mutation": {
+  "hash": "1d456593e74414ae",
+  "out": "False False False 1"
+ },
+ "python:c05-d-mutate-iter": {
+  "hash": "837aada426f6f5e4",
+  "out": "RuntimeError: dictionary changed size during iteration\n[1, 3]"
+ },
+ "python:c05-d-order": {
+  "hash": "240363d425da1a6f",
+  "out": "[('b', 20), ('c', 3), ('a', 1)]"
+ },
+ "python:c05-d-sizes": {
+  "hash": "fe6c3663fb407951",
+  "out": "136 184 136"
+ },
+ "python:c05-deque": {
+  "hash": "4466516f3a19ae66",
+  "out": "deque([-1, 1, 2, 3, 4], maxlen=5)\ndeque([3, 4, -1, 1, 2], maxlen=5) 3 2"
+ },
+ "python:c05-dict-resize": {
+  "hash": "644ff384251b0b79",
+  "out": "0 64\n1 224\n6 352\n11 632\n22 1168\n43 2264"
+ },
+ "python:c05-dict-shrink": {
+  "hash": "f6696cfb5bde884e",
+  "out": "True 10\nTrue"
+ },
+ "python:c05-growth": {
+  "hash": "2dad70d8e8a735fe",
+  "out": "[0, 4, 8, 16, 24, 32, 40, 52, 64, 76, 92]"
+ },
+ "python:c05-hash": {
+  "hash": "ab91dcf774c1192c",
+  "out": "1 1 1\n-2 -2\n0 1\n314159 1152921504606846976"
+ },
+ "python:c05-heap": {
+  "hash": "831f4d914abf614e",
+  "out": "['plan', 'test', 'write']\n[9, 5]\n2 3"
+ },
+ "python:c05-popfront": {
+  "hash": "191d07ee818f16e6",
+  "out": "list.pop(0) at least 5x slower: True"
+ },
+ "python:c05-set-order": {
+  "hash": "1b3a4ce39ceb39a1",
+  "out": "{1, 2, 3}\n{64, 33, 100, 1}\n['b', 'a'] [3, 1, 2]"
+ },
+ "python:c05-stable": {
+  "hash": "5452d8033b995009",
+  "out": "[('amy', 1), ('dan', 1), ('bob', 2), ('cat', 2)]\nTrue"
+ },
+ "python:c05-tuple-hash": {
+  "hash": "a4aafab4b2ea9d6d",
+  "out": "(1, [2, 3, 4])\nTypeError: unhashable type: 'list'\nTrue"
+ },
+ "python:c05-tuple-size": {
+  "hash": "9f284183d2b28096",
+  "out": "64 88\n40 48\nTrue True"
+ },
+ "python:c06-bytes": {
+  "hash": "0e9e11f0a4ae4fdb",
+  "out": "10 12 b'na\\xc3\\xafve' 195\nnaïve café naÃ¯ve cafÃ©\nbytearray(b'Hello world!') bytearray(b'HELLO WORLD!')\nbytearray(b'Hello WORLD!') 5 True"
+ },
+ "python:c06-c-builder": {
+  "hash": "52b49779362c81ca",
+  "out": "100000 012345678901 True 24"
+ },
+ "python:c06-c-lines": {
+  "hash": "26207ba5f1fe1559",
+  "out": "[b'GET / HTTP/1.1', b'Host: example.com', b'Accept: */*']\nb'PUT / HTTP/1.1' True"
+ },
+ "python:c06-c-truncate": {
+  "hash": "6f46fc2178943f13",
+  "out": "3 'Gr' 2\n5 'Grü' 4\n7 'Grüße' 7\n9 'Grüße ' 8\n11 'Grüße ' 8"
+ },
+ "python:c06-c-utf8count": {
+  "hash": "bb25177cc1d13e4c",
+  "out": "hello 5 5 True\nnaïve café 12 10 True\n€100 6 4 True\n😀👍 8 2 True\n日本語 9 3 True"
+ },
+ "python:c06-case": {
+  "hash": "da4d0e356cd4aa51",
+  "out": "straße strasse STRASSE\nTrue\n2 FI\nTrue False True 4"
+ },
+ "python:c06-d-bug-report": {
+  "hash": "8f54d38f085865d7",
+  "out": "True\nlist + join much faster: True"
+ },
+ "python:c06-d-bug-username": {
+  "hash": "706f0ad09ef28078",
+  "out": "False\nTrue"
+ },
+ "python:c06-d-bytes-index": {
+  "hash": "632b6bd833051529",
+  "out": "97 b'a' [97, 98, 99] b'ab'\nTrue True 616263"
+ },
+ "python:c06-d-decode": {
+  "hash": "2e6ff2eb724b2fe8",
+  "out": "7\nGrÃ¼Ãe\nGrüße"
+ },
+ "python:c06-d-sizes": {
+  "hash": "224dc6bfae0031c7",
+  "out": "1041 2060 1058"
+ },
+ "python:c06-d-split": {
+  "hash": "de2b6737f4d09ab7",
+  "out": "['a', 'b', '', 'c'] ['a', 'b'] ['', 'a', 'b', '']\n[''] []\n['a-b', 'c'] ['a', 'b', 'c']"
+ },
+ "python:c06-encodings": {
+  "hash": "3ab5bcd01fa68f77",
+  "out": "A 0x41 1 b'A'\né 0xe9 2 b'\\xc3\\xa9'\n€ 0x20ac 3 b'\\xe2\\x82\\xac'\n😀 0x1f600 4 b'\\xf0\\x9f\\x98\\x80'\nb'\\xac ' 4\nUnicodeEncodeError: ordinal not in range(128)\nb'?' b'&#8364;'\n��"
+ },
+ "python:c06-fstrings": {
+  "hash": "56a7e735150b74f3",
+  "out": "Ada scored 91.2%\n[left    ] [   right] [00101010]\nx = 3, x * 2 = 6"
+ },
+ "python:c06-graphemes": {
+  "hash": "482b1a45418deb56",
+  "out": "👨‍👩‍👧 5 18\n['U+1F468', 'U+200D', 'U+1F469', 'U+200D', 'U+1F467']\nFalse 2"
+ },
+ "python:c06-immutable": {
+  "hash": "c3029c2f3d665a44",
+  "out": "TypeError: 'str' object does not support item assignment\nhello Hello False\nTrue"
+ },
+ "python:c06-kinds": {
+  "hash": "b3c3f68aec9e4d37",
+  "out": "    ascii: len 100, 141 bytes\n  latin-1: len 100, 157 bytes\n    ucs-2: len 100, 258 bytes\n    ucs-4: len 100, 460 bytes\none emoji: len 100, 460 bytes"
+ },
+ "python:c06-memoryview": {
+  "hash": "bdfd264feae41052",
+  "out": "view slicing 100x faster: True\n9999999 True"
+ },
+ "python:c06-normalise": {
+  "hash": "50024aec08bc0daf",
+  "out": "False 4 5\nTrue 4\nCOMBINING ACUTE ACCENT"
+ },
+ "python:c06-plus-equals": {
+  "hash": "8e0acd52181ba206",
+  "out": "shared += is 10x slower: True\njoin within 3x of fast +=: True"
+ },
+ "python:c07-bool": {
+  "hash": "91c81684fa5a1506",
+  "out": "False True False True False True\nTypeError: __bool__ should return bool, returned int"
+ },
+ "python:c07-c-frozen": {
+  "hash": "84e8a027cc7ea1f2",
+  "out": "1 2\nAttributeError: Point is frozen\nAttributeError: Point is frozen"
+ },
+ "python:c07-c-matrix": {
+  "hash": "2cfa4f5614ced59d",
+  "out": "Matrix([[2, 1], [4, 3]]) 3 [1, 2] True"
+ },
+ "python:c07-c-span": {
+  "hash": "ef651b8eb0f52177",
+  "out": "10 True False 19 Span(12, 15) [12, 13, 14]"
+ },
+ "python:c07-c-tally": {
+  "hash": "f6036e4bc41ce27c",
+  "out": "Tally({'a': 3, 'b': 1, 'c': 1}) Tally({'a': 3, 'b': 1, 'c': 2, 'd': 1}) True 4 False"
+ },
+ "python:c07-compare": {
+  "hash": "6326126f0046d8f7",
+  "out": "[1.2, 1.9.1, 1.10] 1.10 False\nFalse False"
+ },
+ "python:c07-d-bug-eq": {
+  "hash": "ac525fdd2fda9a47",
+  "out": "True False True\nAttributeError: 'NoneType' object has no attribute 'x'"
+ },
+ "python:c07-d-bug-vector": {
+  "hash": "709176eabd9702c2",
+  "out": "Vec(3, 6) Vec(3, 6) Vec(3, 6)"
+ },
+ "python:c07-d-eq": {
+  "hash": "4a74036353a021cd",
+  "out": "A.__eq__\nB.__eq__\nFalse\nA.__eq__\nB.__eq__\nTrue"
+ },
+ "python:c07-d-iadd": {
+  "hash": "4b0f819b9ccc4730",
+  "out": "True [1] [1, 2] False"
+ },
+ "python:c07-d-radd": {
+  "hash": "77bc8c89bb49a78c",
+  "out": "V(3) V(6)\nTypeError: unsupported operand type(s) for +: 'int' and 'V'"
+ },
+ "python:c07-d-slots-inherit": {
+  "hash": "3291c3e63e7897c7",
+  "out": "True False\nAttributeError: 'D' object has no attribute 'anything'"
+ },
+ "python:c07-d-truth": {
+  "hash": "d108490accff1f4b",
+  "out": "empty True True"
+ },
+ "python:c07-getattr-bypass": {
+  "hash": "663c633883c8bc45",
+  "out": "1 3\nTypeError: object of type 'Proxy' has no len()"
+ },
+ "python:c07-getitem-protocol": {
+  "hash": "ca0cbd5b58f235ca",
+  "out": "[0, 1, 4, 9, 16] True False\n<iterator object at 0x…>"
+ },
+ "python:c07-radd": {
+  "hash": "390d637d29db00be",
+  "out": "Money(12) Money(8) Money(8)\nMoney(3)\nTypeError: unsupported operand type(s) for +: 'Money' and 'str'"
+ },
+ "python:c07-repr": {
+  "hash": "3a587e00d700d6c7",
+  "out": "21.5°C Temp(21.5) [Temp(21.5)]\n70.7°F |   21.5°C | 02 Jan"
+ },
+ "python:c07-slots": {
+  "hash": "4a55ae76af3b00f4",
+  "out": "bytes per object: 120 87\nmember_descriptor False\nAttributeError: 'Slotted' object has no attribute 'z'"
+ },
+ "python:c07-subclass-first": {
+  "hash": "8bc6cfb6e8e0add5",
+  "out": "Derived.__radd__\nBase.__add__"
+ },
+ "python:c07-type-lookup": {
+  "hash": "0dfa729029899c60",
+  "out": "3 99\n7"
+ },
+ "python:c08-bound": {
+  "hash": "02200eeb7f839238",
+  "out": "function method\nhello Ada from Greeter True True\nTrue False True"
+ },
+ "python:c08-c-attrdict": {
+  "hash": "36eb29a76e09ddd3",
+  "out": "localhost 8080 False False\ndict_keys(['host', 'port']) {'host': 'localhost', 'port': 8080}"
+ },
+ "python:c08-c-bounded": {
+  "hash": "13dd40d0064388c1",
+  "out": "255 200 {'r': 255, 'g': 200}\nValueError: g=300 not in [0, 255]"
+ },
+ "python:c08-c-c3": {
+  "hash": "2a0db1a586bb513d",
+  "out": "['D', 'A', 'B', 'O', 'object'] True\n['F', 'D', 'A', 'E', 'B', 'C', 'O', 'object'] True"
+ },
+ "python:c08-c-myproperty": {
+  "hash": "ef795fc97f5ecd8d",
+  "out": "50 Current balance.\nAttributeError: property 'balance' has no deleter"
+ },
+ "python:c08-cached": {
+  "hash": "f512efa812a2c05b",
+  "out": "499500 499500 1 True\n499500 2"
+ },
+ "python:c08-d-bug-coop": {
+  "hash": "c07749eef2524233",
+  "out": "deploy 42 ['Event', 'Named', 'Timestamped', 'Base', 'object']"
+ },
+ "python:c08-d-bug-proxy": {
+  "hash": "bb18056a8c243193",
+  "out": "1 2"
+ },
+ "python:c08-d-classattr": {
+  "hash": "407a49eaef5429cf",
+  "out": "1 1 0 [1, 2] True"
+ },
+ "python:c08-d-mro": {
+  "hash": "47fee3955235920e",
+  "out": "DCBA BA"
+ },
+ "python:c08-d-shadow": {
+  "hash": "7484535f91708395",
+  "out": "instance property method"
+ },
+ "python:c08-d-staticclass": {
+  "hash": "0c2cc55c619753e5",
+  "out": "Square with 4 sides Square with 4 sides cm Shape with 0 sides"
+ },
+ "python:c08-descriptor": {
+  "hash": "ea8621f7453c8ebd",
+  "out": "28.5 {'_qty': 3, '_price': 9.5}\nTypeError: qty must be int, got str\n<__main__.Typed object at 0x…>"
+ },
+ "python:c08-getattr": {
+  "hash": "f108b6ad7ad45c35",
+  "out": "<config loaded> <config loaded> ['config']\nget x\nget x\n2"
+ },
+ "python:c08-mro": {
+  "hash": "751a60885bccfd19",
+  "out": "['D', 'B', 'C', 'A', 'object'] B\nTypeError: Cannot create a consistent method resolution\norder (MRO) for bases X, Y"
+ },
+ "python:c08-property": {
+  "hash": "1bbd6adf44a0f607",
+  "out": "100.0 212.0 False\nAttributeError: property 'fahrenheit' of 'Celsius' object has no setter\n212.0"
+ },
+ "python:c08-super": {
+  "hash": "dd5f3569c9cd8557",
+  "out": "Service -> Logging -> Caching -> Base\n['Service', 'Logging', 'Caching', 'Base', 'object']\nLogging -> Base"
+ },
+ "python:c09-abc": {
+  "hash": "3fb0840257dc484a",
+  "out": "TypeError: Can't instantiate abstract class Store without an implementation for abstract method 'get'\n0 frozenset({'get'})\nTrue False True"
+ },
+ "python:c09-c-autorepr": {
+  "hash": "8c2dd7a9475cb928",
+  "out": "Job(name='backup', retries=3) [Job(name='a', retries=1)]"
+ },
+ "python:c09-c-prepare": {
+  "hash": "fc8712033170a107",
+  "out": "('id', 'name', 'created')\nTypeError: duplicate definition of 'x'"
+ },
+ "python:c09-c-record": {
+  "hash": "cf7e971025748b45",
+  "out": "Point(x=1, y=0) True Point(x=3, y=4)\n(self, x, y=0)"
+ },
+ "python:c09-c-singleton": {
+  "hash": "5228b62e5aca8455",
+  "out": "connecting to postgres://prod\nconnecting to sqlite://\nTrue postgres://prod True False"
+ },
+ "python:c09-d-bug-abc": {
+  "hash": "93a7a7fb72fc30cc",
+  "out": "TypeError: Can't instantiate abstract class NoArea without an implementation for abstract method 'area'\n9"
+ },
+ "python:c09-d-bug-singleton": {
+  "hash": "f58017f5873631e1",
+  "out": "{'debug': True} True"
+ },
+ "python:c09-d-classvar": {
+  "hash": "bc6f018663ddbdec",
+  "out": "Team(name='a', members=['x']) [] 0 False"
+ },
+ "python:c09-d-enum": {
+  "hash": "de2c057a79fce4aa",
+  "out": "Status.OK ok False OK\nTrue 2 True"
+ },
+ "python:c09-d-new": {
+  "hash": "823e5df0e8b61897",
+  "out": "42 <class 'int'>\nnew\ninit"
+ },
+ "python:c09-d-order": {
+  "hash": "794bc2450520f895",
+  "out": "before\nbody\nset_name a\nset_name b\ninit_subclass Child\nafter"
+ },
+ "python:c09-dataclass": {
+  "hash": "bbf05e95dbacea02",
+  "out": "[Item(priority=1, name='a', tags=()), Item(priority=2, name='b', tags=())] True\n['priority', 'name', 'tags'] False True\n(self, priority: int, name: str, tags: tuple = ()) -> None\nFrozenInstanceError"
+ },
+ "python:c09-enum": {
+  "hash": "699c1fb4c2523eac",
+  "out": "[<Color.RED: 1>, <Color.GREEN: 2>] Color.RED Color.GREEN True\nFalse True True EnumType\nAttributeError: cannot reassign member 'RED'"
+ },
+ "python:c09-init-subclass": {
+  "hash": "957da6c9324b46ca",
+  "out": "TypeError: Broken must define run()\n{'csv': <class '__main__.Csv'>} parsing csv\nTypeError: metaclass conflict: the metaclass of a derived class must be"
+ },
+ "python:c09-meta-registry": {
+  "hash": "d08d85358aec4815",
+  "out": "dict_keys(['csv', 'json']) 2 ['csv', 'json']"
+ },
+ "python:c09-new": {
+  "hash": "59cdbd83cae0c369",
+  "out": "21.46°C 22.46 True\nabc abc ABC\ninit x\ninit x\nTrue"
+ },
+ "python:c09-steps": {
+  "hash": "21848ff718644db7",
+  "out": "1. __prepare__ Order {'flag': True}\n2. body runs\n3. Meta.__new__ ['qty']\n4a. __set_name__ qty\n4b. __init_subclass__ Order {'flag': True}\n5. Meta.__init__\n6. decorator"
+ },
+ "python:c09-type3": {
+  "hash": "aaa42ce07fc829d0",
+  "out": "hi, I am Ada Person (<class 'object'>,) <class 'type'>\nTrue True True"
+ },
+ "python:c10-asyncio": {
+  "hash": "21342cc5844bf99c",
+  "out": "start a\nstart b\nstart c\ndone b\ndone c\ndone a\n['A', 'B', 'C'] concurrent: True"
+ },
+ "python:c10-blocking": {
+  "hash": "c2a7028e9605ac31",
+  "out": "blocked ticks delayed: True | thread kept ticking: True"
+ },
+ "python:c10-c-chunked": {
+  "hash": "8181f6abcbb3c18f",
+  "out": "[[0, 1, 2], [3, 4, 5], [6]]\n[0, 1, 2, 3] [4, 5, 6, 7]"
+ },
+ "python:c10-c-loop": {
+  "hash": "b4bfb8660612c245",
+  "out": "[(0.2, 'fast'), (0.3, 'medium'), (0.5, 'slow')]"
+ },
+ "python:c10-c-queue": {
+  "hash": "2d2cec9f8d4047e5",
+  "out": "([0, 1, 2, 3, 4, 5], 2)"
+ },
+ "python:c10-c-scheduler": {
+  "hash": "0b2275e180a36799",
+  "out": "['A done', 'B done', 'C done']\n['A0', 'B0', 'C0', 'A1', 'C1', 'A2']"
+ },
+ "python:c10-close": {
+  "hash": "a67f8d9a9729cd17",
+  "out": "open resource\nline line\nclose resource\n--\nopen resource\nclose resource\nafter del"
+ },
+ "python:c10-coroutine-manual": {
+  "hash": "6e860877601e7c0b",
+  "out": "coroutine\nneed A\nneed B\nresult: 15"
+ },
+ "python:c10-d-bug-leak": {
+  "hash": "95ffb4c638525de9",
+  "out": "[True, True]"
+ },
+ "python:c10-d-bug-sequential": {
+  "hash": "799cb4860acd03e4",
+  "out": "crawl_slow 0.3\ncrawl 0.1"
+ },
+ "python:c10-d-lazy-eval": {
+  "hash": "c725e7cd99f0ce4f",
+  "out": "created\nfirst iterable\ngenexp created\ngen body starts\n1 [2]"
+ },
+ "python:c10-d-order": {
+  "hash": "13a290d5b305da59",
+  "out": "created\nB 0\nA 0\nB 1\nA 1\nB done A"
+ },
+ "python:c10-d-send": {
+  "hash": "5bde6f45febde8d7",
+  "out": "0 1 2\n['a', 'b']"
+ },
+ "python:c10-d-twice": {
+  "hash": "7ec1f94eb5b79f64",
+  "out": "3 0\n3 3\nTrue [0, 1, 2]"
+ },
+ "python:c10-gen-state": {
+  "hash": "450d6773f5941100",
+  "out": "GEN_CREATED\nstarted\n2 GEN_SUSPENDED {'n': 2}\n1\nfinished\nreturn value: liftoff\nGEN_CLOSED None"
+ },
+ "python:c10-lazy": {
+  "hash": "a96232c67d532b86",
+  "out": "True True\n[0, 9, 36, 81]"
+ },
+ "python:c10-pep479": {
+  "hash": "05c2cd950dc540e4",
+  "out": "RuntimeError: generator raised StopIteration"
+ },
+ "python:c10-protocol": {
+  "hash": "3ee3aea27d72f648",
+  "out": "True 10 20\nexhausted\n[] [10, 20]\nloop 10\nresumed: [20]"
+ },
+ "python:c10-send": {
+  "hash": "822a02c2b3e9c870",
+  "out": "10.0 15.0 30.0"
+ },
+ "python:c10-yield-from": {
+  "hash": "1a2e49d0e123cddd",
+  "out": "['a', 'b', 'c', 'd', 'e'] count = 5\n[1, 2, 3, 4, 5]"
+ },
+ "python:c11-append": {
+  "hash": "e6f8bc1490e2d668",
+  "out": "80000"
+ },
+ "python:c11-c-buffer": {
+  "hash": "4e02024cba00231a",
+  "out": "100 True"
+ },
+ "python:c11-c-download": {
+  "hash": "bdd49befcfb70d48",
+  "out": "20 0.21s for 20 x 50 ms with 5 workers"
+ },
+ "python:c11-c-pmap": {
+  "hash": "598f61da1aeee55d",
+  "out": "chunksize=1: 1.57s, correct=True\nchunksize=None: 0.04s, correct=True"
+ },
+ "python:c11-c-ratelimit": {
+  "hash": "7240ebecd73aba59",
+  "out": "15 calls with a burst of 5 at 50/s took 0.20s"
+ },
+ "python:c11-cpu-threads": {
+  "hash": "d5e4c94202c16dcf",
+  "out": "sequential 0.90s, two threads 1.18s\nthreads gave a 1.5x speed-up: False"
+ },
+ "python:c11-d-bug-deadlock": {
+  "hash": "fa7f4ff9c5bf059b",
+  "out": "100 100"
+ },
+ "python:c11-d-bug-lazy": {
+  "hash": "516111925ee14e82",
+  "out": "clients created: 1"
+ },
+ "python:c11-d-condition": {
+  "hash": "894aa1028747650b",
+  "out": "True [0, 1, 2]"
+ },
+ "python:c11-d-daemon": {
+  "hash": "2712edde471273f7",
+  "out": "main continues []\nafter join ['worker']"
+ },
+ "python:c11-d-executor": {
+  "hash": "571ccd197483fadd",
+  "out": "[0, 10, 'bad 2', 30]"
+ },
+ "python:c11-hashlib": {
+  "hash": "2591f755ebdf22d4",
+  "out": "sequential 0.33s, 4 threads 0.19s\nreal parallel speed-up: False"
+ },
+ "python:c11-processes": {
+  "hash": "2b22952214a48e95",
+  "out": "True sequential 1.95s, 4 processes 0.53s"
+ },
+ "python:c11-race": {
+  "hash": "8687fe0d2a6ac195",
+  "out": "['LOAD_GLOBAL', 'LOAD_CONST', 'BINARY_OP', 'STORE_GLOBAL', 'RETURN_CONST']\nunsafe lost updates: True | locked: 800"
+ },
+ "python:c11-rlock": {
+  "hash": "5b413296e4a96bc7",
+  "out": "Lock re-acquired: False\nRLock re-acquired: True"
+ },
+ "python:c11-switchinterval": {
+  "hash": "a16197e3948efd60",
+  "out": "0.005\n0.001"
+ },
+ "python:c12-c-alias": {
+  "hash": "844b1ff5820522ba",
+  "out": "connected open_db is deprecated; use connect_db\nAttributeError: module 'lib' has no attribute 'missing'"
+ },
+ "python:c12-c-frompath": {
+  "hash": "8de692d318cefc4d",
+  "out": "V2 True False"
+ },
+ "python:c12-c-graph": {
+  "hash": "c1b10ad8a717c7fa",
+  "out": "{'app': ['models'], 'db': ['models'], 'models': ['db'], 'util': []}\n['models', 'db', 'models']"
+ },
+ "python:c12-c-tracer": {
+  "hash": "c6d0491c91603862",
+  "out": "fractions\n  decimal\n    _decimal\n    numbers\nTrue"
+ },
+ "python:c12-circular": {
+  "hash": "cf025e73019f0825",
+  "out": "ImportError: cannot import name 'Order' from partially initialized module 'orders' (most likely due to a circular import) (/tmp/tmpXXXX/orders.py)\nCustomer Order"
+ },
+ "python:c12-d-bug-lazy": {
+  "hash": "44b4f86683410a74",
+  "out": "1.0 fast import: True\nanalysed"
+ },
+ "python:c12-d-bug-patch": {
+  "hash": "cae8161db8bfa9fc",
+  "out": "REAL /users\nFAKE"
+ },
+ "python:c12-d-cache": {
+  "hash": "2f87acffc1d487b7",
+  "out": "3\n3.14"
+ },
+ "python:c12-d-import-order": {
+  "hash": "1035b74ee401b186",
+  "out": "alpha start\nbeta start\nbeta sees alpha: False\nbeta end\nalpha end"
+ },
+ "python:c12-d-main": {
+  "hash": "488b5922e828f8a3",
+  "out": "__main__ True True\nTrue"
+ },
+ "python:c12-finder": {
+  "hash": "c7b5d1f8340374c7",
+  "out": "hello Ada from memory <memory>"
+ },
+ "python:c12-import-steps": {
+  "hash": "ddda84dc6adebf2b",
+  "out": "False\njson SourceFileLoader True\nTrue True\n['BuiltinImporter', 'FrozenImporter', 'PathFinder']"
+ },
+ "python:c12-main-twice": {
+  "hash": "1d2e70999b4f2e21",
+  "out": "app runs as __main__\napp runs as app\nhelper sees ['x']\nmain sees []"
+ },
+ "python:c12-module-getattr": {
+  "hash": "9f222b838c0a0b3d",
+  "out": "value value\nDeprecationWarning old_name is deprecated"
+ },
+ "python:c12-once": {
+  "hash": "a555b1ddec5cc9db",
+  "out": "settings loaded\n1 True\nsettings reloaded\n2 1"
+ },
+ "python:c12-packages": {
+  "hash": "72006703b9b8c7a2",
+  "out": "init shop\n$3.75 1.0 True\nshop.billing True"
+ },
+ "python:c12-pyc": {
+  "hash": "3286fcb5ac1b4f5e",
+  "out": "__pycache__/cached_mod.cpython-312.pyc\nTrue 0\ncode ('ANSWER',) (42, None)"
+ },
+ "python:c12-shadowing": {
+  "hash": "eb8d7b5ee06ecf1c",
+  "out": "this is my random.py, not the stdlib\nFalse\nTrue"
+ },
+ "python:c13-r2-asyncio": {
+  "hash": "2e016c5e79d5fa73",
+  "out": "['a1', 'b1', 'a2', 'b2', 'c1', 'c2']"
+ },
+ "python:c13-r2-closure": {
+  "hash": "b679d2e206870dc0",
+  "out": "[20, 20, 20]\n[0, 10, 20]"
+ },
+ "python:c13-r2-defaults": {
+  "hash": "913479c5e0e87034",
+  "out": "[1, 3] [2] [1, 3]"
+ },
+ "python:c13-r2-dict": {
+  "hash": "3b2a4ba5ed86ee1e",
+  "out": "{1: 'c'} int\n2 ['y']"
+ },
+ "python:c13-r2-gen": {
+  "hash": "cdd9b25fe66b76cc",
+  "out": "1\ncleanup\ncleanup\n[1, 2]"
+ },
+ "python:c13-r2-iadd": {
+  "hash": "69c30148c3debb73",
+  "out": "[1, 2, 3, 4] [1, 2, 3] [1, 2, 3] True"
+ },
+ "python:c13-r2-identity": {
+  "hash": "8a3024bfcd3c1288",
+  "out": "True False True\n([1],) 1"
+ },
+ "python:c13-r2-mro": {
+  "hash": "17b08811fe0a0421",
+  "out": "B>C>A ['D', 'B', 'C', 'A', 'object']"
+ },
+ "python:c13-r4-async": {
+  "hash": "9a0a4fe559183d02",
+  "out": "10 requests concurrently: True"
+ },
+ "python:c13-r4-classattr": {
+  "hash": "d484831e4d425e39",
+  "out": "{'x': 'value for x'}\n{}"
+ },
+ "python:c13-r4-except": {
+  "hash": "371db916e65dc9c5",
+  "out": "8080 None\nValueError: port out of range: 70000"
+ },
+ "python:c13-r4-hash": {
+  "hash": "816af25d736d78b6",
+  "out": "True"
+ },
+ "python:c13-r4-race": {
+  "hash": "93660de84c6d2f1c",
+  "out": "40000"
+ },
+ "python:c13-r4-registry": {
+  "hash": "1924ca1d51bbc7d2",
+  "out": "['a']"
+ },
+ "python:c13-r5-bounded": {
+  "hash": "df98741bfc7b55e0",
+  "out": "[0, 1, 4, 9, 16, 25, 36, 49, 64, 81] peak: 3\nfailed: ['job 4 failed']"
+ },
+ "python:c13-r5-retry": {
+  "hash": "a7a8a81cc4a104f0",
+  "out": "ok 3 flaky Fails twice, then works.\ngave up after 2 attempts: permanent"
+ },
+ "python:c13-r5-ttl": {
+  "hash": "79d037c3e820b842",
+  "out": "1 None 3 2\nNone 0"
+ },
+ "python:home-hero": {
+  "hash": "29f28fc995ae259a",
+  "out": "[1, 2, 3, 4] [1, 2, 3]"
+ }
+}

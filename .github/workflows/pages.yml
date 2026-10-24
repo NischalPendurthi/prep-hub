@@ -21,10 +21,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.3"
+          cache: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
       - run: pip install pyyaml
       - name: Atlas templates compile and pass their tests
         run: python atlas/tools/verify.py templates
+      - name: Language guides - every example runs and matches its recorded output
+        run: node langs/build.mjs --verify
       - name: Build site
         run: ./build.sh
       - uses: actions/upload-pages-artifact@v3

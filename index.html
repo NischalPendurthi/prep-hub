@@ -58,18 +58,21 @@ a { color: inherit; }
 .open { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: .9rem; color: var(--hub-accent); }
 
 .t-guide { --tint: #6b5bd2; }
+.t-langs { --tint: #b7410e; }
 .t-mcq { --tint: #2b8a3e; }
 .t-atlas { --tint: #3b5bdb; }
 .t-ladder { --tint: #c06400; }
 .t-counter { --tint: #0e8a8a; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .t-guide { --tint: #a99bff; }
+  :root:not([data-theme="light"]) .t-langs { --tint: #f08a5d; }
   :root:not([data-theme="light"]) .t-mcq { --tint: #51cf66; }
   :root:not([data-theme="light"]) .t-atlas { --tint: #8ea2ff; }
   :root:not([data-theme="light"]) .t-ladder { --tint: #ffa94d; }
   :root:not([data-theme="light"]) .t-counter { --tint: #4fd1cf; }
 }
 :root[data-theme="dark"] .t-guide { --tint: #a99bff; }
+:root[data-theme="dark"] .t-langs { --tint: #f08a5d; }
 :root[data-theme="dark"] .t-mcq { --tint: #51cf66; }
 :root[data-theme="dark"] .t-atlas { --tint: #8ea2ff; }
 :root[data-theme="dark"] .t-ladder { --tint: #ffa94d; }
@@ -90,7 +93,7 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
   <section class="hero">
     <div class="eyebrow">Placement &amp; interview prep</div>
     <h1>Prep Hub</h1>
-    <p>Everything for systems interviews and competitive programming in one place. Read the guide, drill MCQs, revise CP patterns and track what you've solved.</p>
+    <p>Everything for systems interviews and competitive programming in one place. Read the C++ and language-internals guides, drill MCQs, revise CP patterns and track what you've solved.</p>
     <a class="continue" id="continue" href="#" hidden></a>
   </section>
 
@@ -103,6 +106,16 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
       <p>C++ internals, operating systems and networking for interviews, with traps, drills and mock rounds.</p>
       <div class="chips"><span class="chip">C++</span><span class="chip">OS</span><span class="chip">Networks</span><span class="chip">Mock rounds</span></div>
       <span class="open">Open guide →</span>
+    </a>
+
+    <a class="card t-langs" href="langs/">
+      <div class="card-top">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg></span>
+        <div><h2>Language Internals</h2><div class="kind">Readers · Python now, Java, Go and Rust next</div></div>
+      </div>
+      <p>How CPython, the JVM, the Go runtime and the Rust compiler work underneath, with programs you can run and interview drills.</p>
+      <div class="chips"><span class="chip">Python</span><span class="chip">Java</span><span class="chip">Go</span><span class="chip">Rust</span></div>
+      <span class="open">Open guides →</span>
     </a>
 
     <a class="card t-mcq" href="mcq/">
@@ -201,7 +214,7 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
   } catch (e) {}
 
   try {
-    var NAMES = { guide: "C++ / OS Guide", mcq: "MCQ Prep", atlas: "CP Atlas", ladder: "Ladder", counter: "Practice Counter" };
+    var NAMES = { guide: "C++ / OS Guide", langs: "Language Internals", mcq: "MCQ Prep", atlas: "CP Atlas", ladder: "Ladder", counter: "Practice Counter" };
     var last = read("hub-last");
     if (last && NAMES[last.tool]) {
       var c = document.getElementById("continue");
