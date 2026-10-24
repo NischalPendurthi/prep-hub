@@ -1,0 +1,11 @@
+/* Prep Hub: map MCQ Prep's tokens onto the shared hub tokens (shared/hub.css).
+   :not(#_) lifts specificity above the tool's own light/dark :root rules. */
+:root:not(#_) {
+  --bg: var(--hub-bg); --surface: var(--hub-surface); --surface-2: var(--hub-surface-2); --border: var(--hub-line);
+  --text: var(--hub-ink); --text-2: var(--hub-ink-2);
+  --accent: var(--hub-accent); --accent-soft: var(--hub-accent-soft);
+  --good: var(--hub-good); --good-soft: var(--hub-good-soft); --bad: var(--hub-bad); --bad-soft: var(--hub-bad-soft); --warn: var(--hub-warn);
+  --easy: var(--hub-good); --medium: var(--hub-warn); --hard: var(--hub-bad);
+  --code-bg: var(--hub-code-bg); --shadow: var(--hub-shadow); --radius: var(--hub-radius);
+  --sans: var(--hub-sans); --mono: var(--hub-mono);
+}

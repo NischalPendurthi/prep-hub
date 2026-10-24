@@ -1,0 +1,13 @@
+/* Prep Hub: map the ladder pages' tokens onto the shared hub tokens (shared/hub.css).
+   Covers both variable sets (index/drill/segtree use --surface/--ink, pyq uses --card/--text).
+   :not(#_) lifts specificity above each page's own light/dark :root rules. */
+:root:not(#_) {
+  --bg: var(--hub-bg); --surface: var(--hub-surface); --card: var(--hub-surface); --line: var(--hub-line);
+  --ink: var(--hub-ink); --text: var(--hub-ink); --muted: var(--hub-ink-2);
+  --accent: var(--hub-accent); --accent-soft: var(--hub-accent-soft);
+  --tint: color-mix(in srgb, var(--hub-accent) 10%, transparent);
+  --done: var(--hub-good); --done-soft: var(--hub-good-soft); --warn: var(--hub-warn);
+  --code: var(--hub-code-bg);
+  --font-display: var(--hub-sans); --font-body: var(--hub-sans); --font-mono: var(--hub-mono);
+}
+body { font-family: var(--hub-sans); }

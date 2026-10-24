@@ -1,0 +1,28 @@
+# Curated standard problems. platform: CF | LC | CSES
+#   CF:   id = contest + index (e.g. 1132F), rating = CF rating
+#   LC:   id = slug from the URL, rating = Easy | Medium | Hard
+#   CSES: id = task number
+# Every entry is checked against the judge by `python tools/verify.py links`.
+
+# ---- monotonic-stack
+- {platform: LC, id: sum-of-subarray-minimums, title: Sum of Subarray Minimums, rating: Medium, variants: [monotonic-stack, contribution-technique]}
+- {platform: LC, id: daily-temperatures, title: Daily Temperatures, rating: Medium, variants: [monotonic-stack]}
+- {platform: LC, id: largest-rectangle-in-histogram, title: Largest Rectangle in Histogram, rating: Hard, variants: [monotonic-stack]}
+- {platform: LC, id: remove-k-digits, title: Remove K Digits, rating: Medium, variants: [monotonic-stack]}
+- {platform: CSES, id: 1645, title: Nearest Smaller Values, variants: [monotonic-stack]}
+- {platform: CF, id: 547B, title: Mike and Feet, rating: 1900, variants: [monotonic-stack]}
+- {platform: CF, id: 1313C2, title: Skyscrapers (hard version), rating: 1900, variants: [monotonic-stack]}
+
+# ---- bipartite-matching
+- {platform: CSES, id: 1696, title: School Dance, variants: [bipartite-matching]}
+- {platform: CF, id: 489B, title: BerSU Ball, rating: 1200, variants: [bipartite-matching]}
+- {platform: LC, id: maximum-students-taking-exam, title: Maximum Students Taking Exam, rating: Hard, variants: [bipartite-matching, bitmask-dp]}
+- {platform: CF, id: 1139E, title: Maximize Mex, rating: 2400, variants: [bipartite-matching]}
+
+# ---- interval-dp
+- {platform: CSES, id: 1097, title: Removal Game, variants: [interval-dp]}
+- {platform: LC, id: minimum-score-triangulation-of-polygon, title: Minimum Score Triangulation of Polygon, rating: Medium, variants: [interval-dp]}
+- {platform: LC, id: burst-balloons, title: Burst Balloons, rating: Hard, variants: [interval-dp]}
+- {platform: LC, id: strange-printer, title: Strange Printer, rating: Hard, variants: [interval-dp]}
+- {platform: CF, id: 1114D, title: Flood Fill, rating: 1900, variants: [interval-dp]}
+- {platform: CF, id: 1132F, title: Clear the String, rating: 2000, variants: [interval-dp]}

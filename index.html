@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="shared/hub.css">
+<script src="shared/hub.js" data-tool=""></script>
+<title>Prep Hub</title>
+<meta name="description" content="Interview and placement prep in one place: C++/OS guide, MCQ practice, CP pattern atlas, Codeforces ladder and a practice counter.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b5bdb'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--hub-bg); color: var(--hub-ink);
+  font: 16px/1.55 var(--hub-sans); -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+
+.hero { padding: 48px 0 28px; }
+.eyebrow { font-size: .78rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--hub-accent); }
+.hero h1 { margin: 6px 0 8px; font-size: clamp(2rem, 4.4vw, 2.75rem); line-height: 1.1; letter-spacing: -.025em; font-weight: 800; }
+.hero p { margin: 0; max-width: 60ch; color: var(--hub-ink-2); font-size: 1.05rem; }
+.continue {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: 20px;
+  padding: 8px 14px; border-radius: 999px; text-decoration: none; font-weight: 600; font-size: .92rem;
+  background: var(--hub-accent); color: var(--hub-accent-ink);
+}
+.continue:hover { filter: brightness(1.08); }
+.continue svg { width: 16px; height: 16px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; padding-bottom: 32px; }
+.card {
+  position: relative; display: flex; flex-direction: column; gap: 12px;
+  padding: 20px; border-radius: var(--hub-radius); text-decoration: none;
+  background: var(--hub-surface); border: 1px solid var(--hub-line); box-shadow: var(--hub-shadow);
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.card:hover { border-color: color-mix(in srgb, var(--tint) 55%, var(--hub-line)); box-shadow: var(--hub-shadow-lg); transform: translateY(-2px); }
+.card:focus-visible { outline: 2px solid var(--hub-accent); outline-offset: 2px; }
+.card-top { display: flex; align-items: center; gap: 12px; }
+.icon {
+  width: 42px; height: 42px; flex: none; border-radius: 10px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--tint) 14%, transparent); color: var(--tint);
+}
+.icon svg { width: 22px; height: 22px; }
+.card h2 { margin: 0; font-size: 1.12rem; letter-spacing: -.01em; }
+.card .kind { font-size: .8rem; color: var(--hub-ink-3); }
+.card p { margin: 0; color: var(--hub-ink-2); font-size: .94rem; flex: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: .76rem; padding: 2px 8px; border-radius: 999px; background: var(--hub-surface-2); color: var(--hub-ink-2); }
+.stat { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--hub-line); font-size: .86rem; color: var(--hub-ink-2); }
+.stat strong { color: var(--hub-ink); font-family: var(--hub-mono); font-weight: 600; }
+.bar { height: 6px; border-radius: 99px; background: var(--hub-surface-2); overflow: hidden; }
+.bar span { display: block; height: 100%; width: 0; background: var(--tint); border-radius: inherit; transition: width .4s ease; }
+.open { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: .9rem; color: var(--hub-accent); }
+
+.t-guide { --tint: #6b5bd2; }
+.t-mcq { --tint: #2b8a3e; }
+.t-atlas { --tint: #3b5bdb; }
+.t-ladder { --tint: #c06400; }
+.t-counter { --tint: #0e8a8a; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .t-guide { --tint: #a99bff; }
+  :root:not([data-theme="light"]) .t-mcq { --tint: #51cf66; }
+  :root:not([data-theme="light"]) .t-atlas { --tint: #8ea2ff; }
+  :root:not([data-theme="light"]) .t-ladder { --tint: #ffa94d; }
+  :root:not([data-theme="light"]) .t-counter { --tint: #4fd1cf; }
+}
+:root[data-theme="dark"] .t-guide { --tint: #a99bff; }
+:root[data-theme="dark"] .t-mcq { --tint: #51cf66; }
+:root[data-theme="dark"] .t-atlas { --tint: #8ea2ff; }
+:root[data-theme="dark"] .t-ladder { --tint: #ffa94d; }
+:root[data-theme="dark"] .t-counter { --tint: #4fd1cf; }
+
+footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var(--hub-ink-3); font-size: .84rem; }
+@media (max-width: 520px) {
+  .hero { padding: 32px 0 20px; }
+  .grid { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<nav class="hubbar" id="hubbar"></nav>
+
+<main class="wrap">
+  <section class="hero">
+    <div class="eyebrow">Placement &amp; interview prep</div>
+    <h1>Prep Hub</h1>
+    <p>Everything for systems interviews and competitive programming in one place. Read the guide, drill MCQs, revise CP patterns and track what you've solved.</p>
+    <a class="continue" id="continue" href="#" hidden></a>
+  </section>
+
+  <section class="grid" aria-label="Tools">
+    <a class="card t-guide" href="guide/">
+      <div class="card-top">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg></span>
+        <div><h2>C++ / OS Guide</h2><div class="kind">Reader · 26 chapters</div></div>
+      </div>
+      <p>C++ internals, operating systems and networking for interviews, with traps, drills and mock rounds.</p>
+      <div class="chips"><span class="chip">C++</span><span class="chip">OS</span><span class="chip">Networks</span><span class="chip">Mock rounds</span></div>
+      <span class="open">Open guide →</span>
+    </a>
+
+    <a class="card t-mcq" href="mcq/">
+      <div class="card-top">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+        <div><h2>MCQ Prep</h2><div class="kind">Quiz · 2,363 questions</div></div>
+      </div>
+      <p>Practice by subject and difficulty, review mistakes, and take timed mock tests with full explanations.</p>
+      <div class="chips"><span class="chip">Networks</span><span class="chip">OS</span><span class="chip">SQL</span><span class="chip">Python</span><span class="chip">Finance</span></div>
+      <div class="stat" data-stat="mcq" hidden></div>
+      <span class="open">Start practising →</span>
+    </a>
+
+    <a class="card t-atlas" href="atlas/">
+      <div class="card-top">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg></span>
+        <div><h2>CP Atlas</h2><div class="kind">Pattern map · spaced repetition</div></div>
+      </div>
+      <p>Data structure → algorithm → variant, with recognition signals, tested templates and a review queue for solved problems.</p>
+      <div class="chips"><span class="chip">Templates</span><span class="chip">Problem log</span><span class="chip">Revise</span></div>
+      <div class="stat" data-stat="atlas" hidden></div>
+      <span class="open">Open atlas →</span>
+    </a>
+
+    <a class="card t-ladder" href="ladder/">
+      <div class="card-top">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v20M17 2v20M7 7h10M7 12h10M7 17h10"/></svg></span>
+        <div><h2>Ladder</h2><div class="kind">Problem sheets · 257 problems</div></div>
+      </div>
+      <p>Codeforces 2000–2400 ladder, the hard DP/trees/graphs drill, segment tree &amp; BIT practice and a PYQ tracker.</p>
+      <div class="chips"><span class="chip">2000–2400</span><span class="chip">Hard drill</span><span class="chip">Seg tree &amp; BIT</span><span class="chip">PYQ</span></div>
+      <div class="stat" data-stat="ladder" hidden></div>
+      <span class="open">Open ladder →</span>
+    </a>
+
+    <a class="card t-counter" href="counter/">
+      <div class="card-top">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg></span>
+        <div><h2>Practice Counter</h2><div class="kind">Tracker · Gist sync</div></div>
+      </div>
+      <p>Count problems solved on LeetCode, Codeforces, AtCoder and CSES, synced to a private GitHub Gist.</p>
+      <div class="chips"><span class="chip">LeetCode</span><span class="chip">Codeforces</span><span class="chip">AtCoder</span><span class="chip">CSES</span></div>
+      <div class="stat" data-stat="counter" hidden></div>
+      <span class="open">Open counter →</span>
+    </a>
+  </section>
+</main>
+
+<footer><div class="wrap">Progress is saved in this browser. Nothing leaves your device except the counter's optional Gist sync.</div></footer>
+
+<script>
+(function () {
+  "use strict";
+  function read(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (e) { return null; } }
+  function size(o) { return o && typeof o === "object" ? Object.keys(o).length : 0; }
+  function fmt(n) { return Number(n).toLocaleString(); }
+  function show(id, html, pct) {
+    var el = document.querySelector('[data-stat="' + id + '"]');
+    if (!el) return;
+    el.innerHTML = '<div>' + html + "</div>" + (pct == null ? "" : '<div class="bar"><span></span></div>');
+    el.hidden = false;
+    if (pct != null) requestAnimationFrame(function () { el.querySelector(".bar span").style.width = Math.min(100, pct) + "%"; });
+  }
+
+  try {
+    var mcq = read("mcqprep.v1");
+    var stats = mcq && mcq.stats ? mcq.stats : {};
+    var ids = Object.keys(stats);
+    if (ids.length) {
+      var wrong = ids.filter(function (k) { return stats[k] && stats[k].last === 0; }).length;
+      show("mcq", "<strong>" + fmt(ids.length) + "</strong> of 2,363 answered" +
+        (wrong ? " · <strong>" + wrong + "</strong> to review" : ""), ids.length / 2363 * 100);
+    }
+  } catch (e) {}
+
+  try {
+    var review = read("atlas-review") || {};
+    var today = new Date().toISOString().slice(0, 10);
+    var keys = Object.keys(review);
+    var due = keys.filter(function (k) { return review[k] && review[k].due && review[k].due <= today; }).length;
+    if (keys.length) show("atlas", "<strong>" + keys.length + "</strong> in review · <strong>" + due + "</strong> due today");
+  } catch (e) {}
+
+  try {
+    var solved = size(read("ladder.progress.v1")) + size(read("ladder.drill.v1")) + size(read("ladder.segtree.v1"));
+    if (solved) show("ladder", "<strong>" + solved + "</strong> of 257 solved", solved / 257 * 100);
+  } catch (e) {}
+
+  try {
+    var counts = read("cp_counter_counts_v2");
+    if (counts) {
+      var total = 0;
+      Object.keys(counts).forEach(function (k) { var v = Number(counts[k]); if (isFinite(v)) total += v; });
+      if (total) show("counter", "<strong>" + fmt(total) + "</strong> problems solved");
+    }
+  } catch (e) {}
+
+  try {
+    var NAMES = { guide: "C++ / OS Guide", mcq: "MCQ Prep", atlas: "CP Atlas", ladder: "Ladder", counter: "Practice Counter" };
+    var last = read("hub-last");
+    if (last && NAMES[last.tool]) {
+      var c = document.getElementById("continue");
+      c.href = last.tool + "/";
+      c.innerHTML = "Continue: " + NAMES[last.tool] +
+        ' <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+      c.hidden = false;
+    }
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>

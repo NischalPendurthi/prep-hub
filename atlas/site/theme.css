@@ -1,0 +1,10 @@
+/* Prep Hub: map CP Atlas's tokens onto the shared hub tokens (shared/hub.css).
+   :not(#_) lifts specificity above the tool's own light/dark :root rules. */
+:root:not(#_) {
+  --bg: var(--hub-bg); --panel: var(--hub-surface); --line: var(--hub-line);
+  --ink: var(--hub-ink); --muted: var(--hub-ink-2); --faint: var(--hub-ink-3);
+  --accent: var(--hub-accent); --accent-ink: var(--hub-accent-ink); --accent-soft: var(--hub-accent-soft);
+  --code-bg: var(--hub-code-bg); --warn-bg: var(--hub-warn-soft);
+  --good: var(--hub-good); --bad: var(--hub-bad);
+  --radius: var(--hub-radius); --sans: var(--hub-sans); --mono: var(--hub-mono);
+}

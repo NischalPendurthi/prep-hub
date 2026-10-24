@@ -1,0 +1,96 @@
+/* Prep Hub shared look: tokens every tool maps onto, plus the hub bar.
+   Tools keep their own variable names; each tool's theme.css points them at these. */
+:root {
+  --hub-bg: #f6f7f9;
+  --hub-surface: #ffffff;
+  --hub-surface-2: #eef1f5;
+  --hub-line: #dde1e7;
+  --hub-ink: #1c2330;
+  --hub-ink-2: #586274;
+  --hub-ink-3: #8a93a3;
+  --hub-accent: #3b5bdb;
+  --hub-accent-ink: #ffffff;
+  --hub-accent-soft: #e7ecfd;
+  --hub-good: #2b8a3e;
+  --hub-good-soft: #e3f6e8;
+  --hub-bad: #c92a2a;
+  --hub-bad-soft: #fde8e8;
+  --hub-warn: #b35c00;
+  --hub-warn-soft: #fff1de;
+  --hub-code-bg: #f1f3f7;
+  --hub-shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+  --hub-shadow-lg: 0 10px 30px rgba(16, 24, 40, .12);
+  --hub-radius: 12px;
+  --hub-radius-sm: 8px;
+  --hub-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --hub-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --hub-bar-h: 42px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --hub-bg: #0f1218; --hub-surface: #171b23; --hub-surface-2: #1f2430; --hub-line: #2c3341;
+    --hub-ink: #e6e9ef; --hub-ink-2: #9aa3b2; --hub-ink-3: #6f7889;
+    --hub-accent: #8ea2ff; --hub-accent-ink: #10131a; --hub-accent-soft: #232c4a;
+    --hub-good: #51cf66; --hub-good-soft: #15301d; --hub-bad: #ff6b6b; --hub-bad-soft: #3a1a1c;
+    --hub-warn: #ffa94d; --hub-warn-soft: #33260f; --hub-code-bg: #12161d;
+    --hub-shadow: 0 1px 2px rgba(0, 0, 0, .4); --hub-shadow-lg: 0 10px 30px rgba(0, 0, 0, .45);
+  }
+}
+:root[data-theme="dark"] {
+  --hub-bg: #0f1218; --hub-surface: #171b23; --hub-surface-2: #1f2430; --hub-line: #2c3341;
+  --hub-ink: #e6e9ef; --hub-ink-2: #9aa3b2; --hub-ink-3: #6f7889;
+  --hub-accent: #8ea2ff; --hub-accent-ink: #10131a; --hub-accent-soft: #232c4a;
+  --hub-good: #51cf66; --hub-good-soft: #15301d; --hub-bad: #ff6b6b; --hub-bad-soft: #3a1a1c;
+  --hub-warn: #ffa94d; --hub-warn-soft: #33260f; --hub-code-bg: #12161d;
+  --hub-shadow: 0 1px 2px rgba(0, 0, 0, .4); --hub-shadow-lg: 0 10px 30px rgba(0, 0, 0, .45);
+}
+
+/* ---------- hub bar ---------- */
+.hubbar {
+  position: relative; z-index: 100;
+  display: flex; align-items: center; gap: 4px;
+  height: var(--hub-bar-h); padding: 0 12px;
+  background: var(--hub-surface); border-bottom: 1px solid var(--hub-line);
+  font: 500 13.5px/1 var(--hub-sans); color: var(--hub-ink-2);
+  -webkit-font-smoothing: antialiased;
+}
+.hubbar * { box-sizing: border-box; }
+.hubbar a { color: inherit; text-decoration: none; }
+.hubbar .hub-brand {
+  display: inline-flex; align-items: center; gap: 8px; margin-right: 10px;
+  font-weight: 700; color: var(--hub-ink); white-space: nowrap;
+}
+.hubbar .hub-mark {
+  width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center;
+  background: var(--hub-accent); color: var(--hub-accent-ink);
+}
+.hubbar .hub-links { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.hubbar .hub-links a {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 7px; white-space: nowrap;
+  transition: background-color .12s ease, color .12s ease;
+}
+.hubbar .hub-links a:hover { background: var(--hub-surface-2); color: var(--hub-ink); }
+.hubbar .hub-links a[aria-current="page"] { background: var(--hub-accent-soft); color: var(--hub-accent); font-weight: 600; }
+.hubbar .hub-spacer { flex: 1; }
+.hubbar button {
+  display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--hub-line); border-radius: 7px; background: transparent;
+  color: var(--hub-ink-2); cursor: pointer; font: inherit;
+}
+.hubbar button:hover { background: var(--hub-surface-2); color: var(--hub-ink); }
+.hubbar button:focus-visible, .hubbar a:focus-visible { outline: 2px solid var(--hub-accent); outline-offset: 1px; }
+.hubbar .hub-menu-btn { display: none; margin-right: 6px; }
+.hubbar svg { width: 16px; height: 16px; }
+
+@media (max-width: 720px) {
+  .hubbar .hub-menu-btn { display: inline-grid; }
+  .hubbar .hub-links {
+    display: none; position: absolute; top: calc(var(--hub-bar-h) - 1px); left: 0; right: 0;
+    flex-direction: column; align-items: stretch; gap: 2px; padding: 8px 12px 12px;
+    background: var(--hub-surface); border-bottom: 1px solid var(--hub-line); box-shadow: var(--hub-shadow-lg);
+  }
+  .hubbar.open .hub-links { display: flex; }
+  .hubbar .hub-links a { padding: 10px 12px; font-size: 15px; }
+}
+@media print { .hubbar { display: none; } }

@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="../shared/hub.css">
+<script src="../shared/hub.js" data-tool="ladder"></script>
+<meta name="description" content="50 Codeforces problems rated 2000-2400 for placement prep, with a solved tracker.">
+<title>2000–2400 Ladder</title>
+<style>
+[hidden]{display:none!important}
+body{margin:0}
+img{max-width:100%}
+/* Layout: one narrow working column. Summary (progress + next up) on top, topic tiles that double as filters, then five rating stages of rows. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --ink: #141922;
+  --muted: #5a6475;
+  --line: #dde2ea;
+  --accent: #2c56c9;
+  --done: #1d8556;
+  --r-cm: #9b2db3;   /* Candidate Master violet, 2000–2099 */
+  --r-m: #c06400;    /* Master / IM orange, 2100–2399 */
+  --r-gm: #cc2f2b;   /* Grandmaster red, 2400+ */
+  --tint: rgba(44, 86, 201, .08);
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --surface: #161a21; --ink: #e6e9ef; --muted: #97a0b1; --line: #29303b;
+    --accent: #85a2ff; --done: #4fc58c; --r-cm: #d483e6; --r-m: #ffa54a; --r-gm: #ff6e68;
+    --tint: rgba(133, 162, 255, .12); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1116; --surface: #161a21; --ink: #e6e9ef; --muted: #97a0b1; --line: #29303b;
+  --accent: #85a2ff; --done: #4fc58c; --r-cm: #d483e6; --r-m: #ffa54a; --r-gm: #ff6e68;
+  --tint: rgba(133, 162, 255, .12); color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+}
+.wrap {
+  max-width: 860px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 64px;
+  display: grid; gap: 28px;
+}
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+/* Header */
+header { display: grid; gap: 18px; }
+.eyebrow {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+}
+h1 {
+  font-family: var(--font-display); font-stretch: 112%; font-weight: 800;
+  font-size: clamp(32px, 6vw, 48px); line-height: 1.02; letter-spacing: -.01em; margin: 0;
+  text-wrap: balance;
+}
+h1 .lo { color: var(--r-cm); } h1 .hi { color: var(--r-gm); }
+.lede { margin: 0; color: var(--muted); max-width: 62ch; }
+
+.summary {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 18px 20px; display: grid; gap: 14px;
+}
+.sum-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 20px; }
+.count { font-family: var(--font-display); font-stretch: 100%; font-weight: 700; font-size: 28px; font-variant-numeric: tabular-nums; }
+.count small { font-size: 15px; font-weight: 500; color: var(--muted); }
+.next { color: var(--muted); font-size: 14px; min-width: 0; }
+.next a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.next a:hover { text-decoration: underline; }
+.bar { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; display: flex; }
+.bar span { display: block; height: 100%; transition: width .3s ease; }
+.bar .seg-cm { background: var(--r-cm); } .bar .seg-m { background: var(--r-m); } .bar .seg-gm { background: var(--r-gm); }
+.status { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.status[data-s="account"]::before { background: var(--done); }
+.status[data-s="error"]::before { background: var(--r-gm); }
+
+/* Topic tiles (also filters) */
+.topics { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.tile {
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; display: grid; gap: 6px;
+}
+.tile:hover { border-color: var(--muted); }
+.tile[aria-pressed="true"] { border-color: var(--accent); background: var(--tint); }
+.tile .t-name { font-weight: 600; font-size: 14px; }
+.tile .t-num { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tile .row1 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.tile .bar { height: 4px; }
+.tile .bar span { background: var(--done); }
+
+/* Controls */
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); flex-wrap: wrap; }
+.seg button {
+  font: 500 13px/1 var(--font-mono); color: var(--muted); background: transparent; border: 0; cursor: pointer;
+  padding: 9px 11px; border-right: 1px solid var(--line);
+}
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--tint); color: var(--ink); }
+.seg button[data-band="cm"][aria-pressed="true"] { color: var(--r-cm); }
+.seg button[data-band="m"][aria-pressed="true"] { color: var(--r-m); }
+.seg button[data-band="gm"][aria-pressed="true"] { color: var(--r-gm); }
+.switch { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; user-select: none; }
+.switch input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+
+/* Stages */
+.stages { display: grid; gap: 26px; }
+.stage { display: grid; gap: 10px; }
+.stage-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.stage-head h2 {
+  margin: 0; font-family: var(--font-display); font-stretch: 100%; font-weight: 700; font-size: 19px; letter-spacing: .005em;
+}
+.stage-head .band { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+.stage-head .s-count { margin-left: auto; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+ol.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.row {
+  display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px;
+}
+.row input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; margin: 0; cursor: pointer;
+  width: 22px; height: 22px; border: 2px solid var(--line); border-radius: 6px; background: var(--bg);
+  display: grid; place-items: center; transition: background .15s, border-color .15s;
+}
+.row input[type="checkbox"]:hover { border-color: var(--muted); }
+.row input[type="checkbox"]::after {
+  content: ""; width: 6px; height: 11px; border: solid var(--surface); border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg) translate(-1px, -1px); opacity: 0;
+}
+.row input[type="checkbox"]:checked { background: var(--done); border-color: var(--done); }
+.row input[type="checkbox"]:checked::after { opacity: 1; }
+.main { min-width: 0; display: grid; gap: 3px; }
+.main a { font-weight: 600; text-decoration: none; overflow-wrap: anywhere; }
+.main a:hover { color: var(--accent); text-decoration: underline; }
+.sub { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.pid { font-family: var(--font-mono); font-weight: 500; }
+.chip { border: 1px solid var(--line); border-radius: 99px; padding: 0 8px; line-height: 19px; }
+.tech { font-style: italic; }
+.rate { font-family: var(--font-mono); font-weight: 600; font-size: 13px; font-variant-numeric: tabular-nums; }
+.r-cm { color: var(--r-cm); } .r-m { color: var(--r-m); } .r-gm { color: var(--r-gm); }
+.row.done .main a { color: var(--muted); }
+.row.done { background: transparent; }
+.row.next-up { border-color: var(--accent); }
+
+.empty { text-align: center; color: var(--muted); padding: 28px 12px; border: 1px dashed var(--line); border-radius: 10px; }
+footer { color: var(--muted); font-size: 13px; }
+footer p { margin: 0; max-width: 65ch; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (max-width: 480px) {
+  .summary { padding: 16px; }
+  .row { padding: 10px 12px; gap: 10px; }
+}
+
+.tabsnav { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); padding-bottom: 0; }
+.tabsnav a { font: 600 13.5px/1 var(--font-body, system-ui, sans-serif); color: var(--muted); text-decoration: none;
+  padding: 10px 12px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabsnav a:hover { color: var(--ink, var(--text)); }
+.tabsnav a[aria-current="page"] { color: var(--ink, var(--text)); border-bottom-color: var(--accent); }
+</style>
+
+<link rel="stylesheet" href="theme.css">
+</head>
+<body>
+<nav class="hubbar" id="hubbar"></nav>
+<div class="wrap">
+  <nav class="tabsnav" aria-label="Sheets"><a href="index.html" aria-current="page">2000–2400 Ladder</a><a href="drill.html">Hard drill</a><a href="segtree.html">Segment tree & BIT</a><a href="pyq.html">PYQ tracker</a></nav>
+  <header>
+    <div class="eyebrow">Codeforces · placement prep · 50 problems</div>
+    <h1><span class="lo">2000</span>–<span class="hi">2400</span> Ladder</h1>
+    <p class="lede">Five stages ordered by rating, with topics mixed inside each stage. It covers greedy and heaps, DP variants, binary search on the answer, trees, graphs, and the data structures they need. Every rating was checked against the Codeforces API on 19 Oct 2026.</p>
+
+    <section class="summary" aria-label="Progress">
+      <div class="sum-top">
+        <div class="count" id="count">0 <small>/ 50 solved</small></div>
+        <div class="next" id="next"></div>
+      </div>
+      <div class="bar" id="mainbar" aria-hidden="true">
+        <span class="seg-cm"></span><span class="seg-m"></span><span class="seg-gm"></span>
+      </div>
+      <div class="status" id="status" data-s="local">Saving in this browser</div>
+    </section>
+  </header>
+
+  <nav aria-label="Filter by topic" class="topics" id="topics"></nav>
+
+  <div class="controls">
+    <div class="seg" id="stageSeg" role="group" aria-label="Filter by rating"></div>
+    <label class="switch"><input type="checkbox" id="optUnsolved"> Unsolved only</label>
+    <label class="switch"><input type="checkbox" id="optHints"> Show techniques</label>
+  </div>
+
+  <main class="stages" id="stages"></main>
+  <div class="empty" id="empty" hidden>Everything in this filter is solved. Clear a filter to see the rest.</div>
+
+  <footer><p>Techniques are hidden by default. Try a problem cold first, and turn them on when you're stuck. Problem names link to the Codeforces problemset.</p></footer>
+</div>
+
+<script>
+const P = [
+  // [stage, id, name, topic, technique]
+  [2000,"1294F","Three Paths on a Tree","tree","tree diameter + BFS"],
+  [2000,"1288D","Minimax Problem","bs","binary search on answer + bitmasks"],
+  [2000,"380C","Sereja and Brackets","ds","segment tree with merge"],
+  [2000,"1385E","Directing Edges","graph","topological sort"],
+  [2000,"1363E","Tree Shuffling","greedy","greedy on tree, push min cost down"],
+  [2000,"1370D","Odd-Even Subsequence","bs","binary search on answer + greedy check"],
+  [2000,"842D","Vitya and Strange Lesson","ds","binary trie + global XOR"],
+  [2000,"1349C","Orac and Game of Life","graph","multi-source BFS"],
+  [2000,"1304E","1-Trees and Queries","tree","LCA distances + parity"],
+  [2000,"1379C","Choosing flowers","bs","sort + binary search + prefix sums"],
+  [2000,"242E","XOR on Segment","ds","lazy segment tree per bit"],
+  [2000,"776D","The Door Problem","graph","DSU with parity / 2-SAT"],
+  [2000,"1200E","Compress Words","ds","KMP / string hashing"],
+  [2100,"1187E","Tree Painting","tree","rerooting DP"],
+  [2100,"1312E","Array Shrinking","dp","interval DP"],
+  [2100,"1271D","Portals","greedy","greedy + min-heap"],
+  [2100,"1486D","Max Median","bs","binary search on median + prefix sums"],
+  [2100,"703D","Mishka and Interesting sum","ds","offline queries + Fenwick tree"],
+  [2100,"1000E","We Need More Bosses","graph","bridges + bridge tree diameter"],
+  [2100,"1077F2","Pictures with Kittens (hard version)","dp","DP + monotonic deque"],
+  [2100,"609E","Minimum spanning tree for each edge","tree","MST + LCA path max"],
+  [2100,"1265E","Beautiful Mirrors","dp","expected value DP, modular inverse"],
+  [2100,"343D","Water Tree","tree","Euler tour + segment tree"],
+  [2100,"1025D","Recovering BST","dp","interval DP with gcd edges"],
+  [2100,"620E","New Year Tree","tree","Euler tour + bitmask segment tree"],
+  [2100,"319C","Kalila and Dimna in the Logging Industry","dp","convex hull trick"],
+  [2200,"1428E","Carrots for Rabbits","greedy","heap of marginal gains"],
+  [2200,"1407D","Discrete Centrifugal Jumps","ds","monotonic stacks + DP"],
+  [2200,"1215E","Marbles","dp","bitmask DP over colors"],
+  [2200,"1196F","K-th Path","graph","keep k lightest edges + Floyd"],
+  [2200,"52C","Circular RMQ","ds","lazy segment tree, range add/min"],
+  [2200,"1238F","The Maximum Subtree","tree","tree DP, longest caterpillar"],
+  [2200,"165E","Compatible Numbers","dp","SOS DP over submasks"],
+  [2200,"1335F","Robots on a Grid","graph","functional graph cycles"],
+  [2200,"1179C","Serge and Dining Room","ds","segment tree descent"],
+  [2200,"833B","The Bakery","dp","DP + lazy segment tree"],
+  [2200,"723E","One-Way Reform","graph","Euler circuit with dummy vertex"],
+  [2200,"86D","Powerful array","ds","Mo's algorithm"],
+  [2300,"1132D","Stressful Training","bs","binary search + greedy simulation"],
+  [2300,"600E","Lomsat gelral","tree","small-to-large (DSU on tree)"],
+  [2300,"1073E","Segment Sum","dp","digit DP with digit mask"],
+  [2300,"715B","Complete The Graph","graph","Dijkstra + edge weight fixing"],
+  [2300,"1009F","Dominant Indices","tree","small-to-large depth arrays"],
+  [2300,"1342E","Placing Rooks","math","inclusion-exclusion counting"],
+  [2400,"865D","Buy Low Sell High","greedy","regret greedy with min-heap"],
+  [2400,"342E","Xenia and Tree","tree","centroid decomposition"],
+  [2400,"1107E","Vasya and Binary String","dp","interval DP with carried count"],
+  [2400,"1473E","Minimum Path","graph","Dijkstra on layered states"],
+  [2400,"1369E","DeadLee","greedy","reverse-order greedy"],
+  [2400,"1187D","Subarray Sorting","greedy","greedy + segment tree min"]
+];
+const TOPICS = { greedy: "Greedy & heaps", dp: "Dynamic programming", bs: "Binary search", tree: "Trees", graph: "Graphs", ds: "Data structures", math: "Math" };
+const STAGES = [
+  { r: 2000, band: "cm", name: "Stage 1" },
+  { r: 2100, band: "m", name: "Stage 2" },
+  { r: 2200, band: "m", name: "Stage 3" },
+  { r: 2300, band: "m", name: "Stage 4" },
+  { r: 2400, band: "gm", name: "Stage 5" }
+];
+const bandOf = r => r >= 2400 ? "gm" : r >= 2100 ? "m" : "cm";
+const urlOf = id => { const m = id.match(/^(\d+)(.+)$/); return `https://codeforces.com/problemset/problem/${m[1]}/${m[2]}`; };
+
+const LS_P = "ladder.progress.v1", LS_V = "ladder.view.v1";
+function lsGet(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+
+let solved = lsGet(LS_P) || {};
+let view = Object.assign({ topic: null, stage: null, unsolved: false, hints: false }, lsGet(LS_V) || {});
+const $ = id => document.getElementById(id);
+const rowEls = {}, stageEls = {}, tileEls = {}, stageBtns = {};
+
+/* ---------- build once ---------- */
+function build() {
+  const topicsNav = $("topics");
+  for (const [key, label] of Object.entries(TOPICS)) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "tile"; b.id = "tile-" + key;
+    b.innerHTML = `<span class="row1"><span class="t-name"></span><span class="t-num"></span></span><span class="bar"><span></span></span>`;
+    b.querySelector(".t-name").textContent = label;
+    b.addEventListener("click", () => { view.topic = view.topic === key ? null : key; saveView(); apply(); });
+    topicsNav.appendChild(b); tileEls[key] = b;
+  }
+
+  const seg = $("stageSeg");
+  const mk = (label, val, band) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = label; b.id = "seg-" + (val || "all");
+    if (band) b.dataset.band = band;
+    b.addEventListener("click", () => { view.stage = val; saveView(); apply(); });
+    seg.appendChild(b); stageBtns[val || "all"] = b;
+  };
+  mk("All", null);
+  STAGES.forEach(s => mk(String(s.r), s.r, s.band));
+
+  const main = $("stages");
+  STAGES.forEach(s => {
+    const sec = document.createElement("section");
+    sec.className = "stage";
+    sec.innerHTML = `<div class="stage-head"><h2></h2><span class="band r-${s.band}">${s.r}</span><span class="s-count"></span></div><ol class="rows"></ol>`;
+    sec.querySelector("h2").textContent = s.name;
+    const ol = sec.querySelector("ol");
+    P.filter(p => p[0] === s.r).forEach(([r, id, name, topic, tech]) => {
+      const li = document.createElement("li");
+      li.className = "row";
+      li.innerHTML = `<input type="checkbox" id="c-${id}"><div class="main"><a target="_blank" rel="noopener"></a><div class="sub"><span class="pid"></span><span class="chip"></span><span class="tech"></span></div></div><span class="rate r-${bandOf(r)}">${r}</span>`;
+      const cb = li.querySelector("input");
+      cb.setAttribute("aria-label", `Mark ${id} ${name} as solved`);
+      cb.addEventListener("change", () => toggle(id, cb.checked));
+      const a = li.querySelector("a"); a.href = urlOf(id); a.textContent = name;
+      li.querySelector(".pid").textContent = id;
+      li.querySelector(".chip").textContent = TOPICS[topic];
+      li.querySelector(".tech").textContent = tech;
+      ol.appendChild(li);
+      rowEls[id] = { li, cb, tech: li.querySelector(".tech"), topic, stage: r };
+    });
+    main.appendChild(sec);
+    stageEls[s.r] = { sec, count: sec.querySelector(".s-count") };
+  });
+
+  $("optUnsolved").addEventListener("change", e => { view.unsolved = e.target.checked; saveView(); apply(); });
+  $("optHints").addEventListener("change", e => { view.hints = e.target.checked; saveView(); apply(); });
+}
+
+function saveView() { lsSet(LS_V, view); }
+
+/* ---------- render state ---------- */
+function apply() {
+  const done = id => !!solved[id];
+  const total = P.filter(p => done(p[1])).length;
+  $("count").innerHTML = `${total} <small>/ ${P.length} solved</small>`;
+
+  const segs = $("mainbar").children;
+  ["cm", "m", "gm"].forEach((b, i) => {
+    segs[i].style.width = (P.filter(p => bandOf(p[0]) === b && done(p[1])).length / P.length * 100) + "%";
+  });
+
+  const nextP = P.find(p => !done(p[1]));
+  const nx = $("next");
+  nx.textContent = "";
+  if (nextP) {
+    nx.append("Next up: ");
+    const a = document.createElement("a"); a.href = urlOf(nextP[1]); a.target = "_blank"; a.rel = "noopener";
+    a.textContent = `${nextP[1]} ${nextP[2]}`;
+    nx.append(a, ` · ${nextP[0]}`);
+  } else nx.textContent = "All 50 solved.";
+
+  for (const key of Object.keys(TOPICS)) {
+    const all = P.filter(p => p[3] === key), d = all.filter(p => done(p[1])).length;
+    const t = tileEls[key];
+    t.querySelector(".t-num").textContent = `${d}/${all.length}`;
+    t.querySelector(".bar span").style.width = (d / all.length * 100) + "%";
+    t.setAttribute("aria-pressed", String(view.topic === key));
+  }
+  for (const [k, b] of Object.entries(stageBtns)) b.setAttribute("aria-pressed", String(String(view.stage || "all") === k));
+  $("optUnsolved").checked = view.unsolved;
+  $("optHints").checked = view.hints;
+
+  let anyVisible = false;
+  for (const s of STAGES) {
+    let vis = 0, d = 0, n = 0;
+    for (const p of P) {
+      if (p[0] !== s.r) continue;
+      const r = rowEls[p[1]], isDone = done(p[1]);
+      n++; if (isDone) d++;
+      r.cb.checked = isDone;
+      r.li.classList.toggle("done", isDone);
+      r.li.classList.toggle("next-up", nextP && nextP[1] === p[1]);
+      r.tech.hidden = !view.hints;
+      const show = (!view.topic || r.topic === view.topic) && (!view.stage || view.stage === s.r) && (!view.unsolved || !isDone);
+      r.li.hidden = !show; if (show) vis++;
+    }
+    stageEls[s.r].count.textContent = `${d}/${n} solved`;
+    stageEls[s.r].sec.hidden = vis === 0;
+    if (vis) anyVisible = true;
+  }
+  $("empty").hidden = anyVisible;
+}
+
+function toggle(id, on) {
+  if (on) solved[id] = Date.now(); else delete solved[id];
+  lsSet(LS_P, solved);
+  apply();
+  queueWrite();
+}
+
+/* ---------- account sync (private per viewer) ---------- */
+let docRef = null, timer = null, writing = null, dirty = false;
+function setStatus(s) {
+  const el = $("status"); el.dataset.s = s;
+  el.textContent = s === "account" ? "Progress saved to your account"
+    : s === "error" ? "Couldn't reach your account. Progress is kept in this browser for now."
+    : "Saving in this browser";
+}
+async function initSync() {
+  if (!window.claude || typeof window.claude.use !== "function") return setStatus("local");
+  try {
+    const [db, user] = await Promise.all([claude.use("db"), claude.use("user")]);
+    const uid = user ? await user.id() : null;
+    if (!db || !uid) return setStatus("local");
+    docRef = db.doc("data/users/" + uid + "/progress");
+    let first = true;
+    docRef.onSnapshot(snap => {
+      if (dirty) return;
+      if (snap.exists) {
+        const remote = (snap.data() || {}).solved || {};
+        solved = Object.assign({}, remote);
+        lsSet(LS_P, solved); apply();
+      } else if (first && Object.keys(solved).length) {
+        queueWrite();
+      }
+      first = false;
+      setStatus("account");
+    }, () => { docRef = null; setStatus("error"); });
+  } catch (e) { setStatus("local"); }
+}
+function queueWrite() {
+  if (!docRef) return;
+  dirty = true;
+  clearTimeout(timer);
+  timer = setTimeout(flush, 500);
+}
+async function flush() {
+  timer = null;
+  if (writing) await writing;
+  if (!docRef) return;
+  writing = docRef.set({ solved: Object.assign({}, solved), updatedAt: Date.now() })
+    .then(() => setStatus("account"))
+    .catch(e => { if (e && e.code === "invalid_argument") docRef = null; setStatus("error"); })
+    .finally(() => { writing = null; if (!timer) dirty = false; });
+  await writing;
+}
+
+build();
+apply();
+initSync();
+</script>
+
+</body>
+</html>

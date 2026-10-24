@@ -1,0 +1,303 @@
+# Navigation tree: category -> concept -> variant.
+# Variant ids are global and unique. A variant becomes "ready" once
+# content/variants/<category>/<id>.md exists; until then it shows as planned.
+
+- id: techniques
+  title: Techniques
+  concepts:
+    - id: prefix-sums
+      title: Prefix Sums
+      variants:
+        - {id: prefix-sum-1d, title: 1D Prefix Sum}
+        - {id: prefix-sum-2d, title: 2D Prefix Sum}
+        - {id: difference-array, title: Difference Array}
+        - {id: prefix-xor, title: Prefix XOR}
+        - {id: prefix-hashmap-count, title: Prefix + Hashmap Counting}
+    - id: two-pointers
+      title: Two Pointers
+      variants:
+        - {id: two-pointers-opposite, title: Opposite Ends}
+        - {id: two-pointers-same-dir, title: Same Direction}
+    - id: sliding-window
+      title: Sliding Window
+      variants:
+        - {id: window-fixed, title: Fixed-Size Window}
+        - {id: window-variable, title: Variable-Size Window}
+        - {id: window-at-most-k, title: "Exactly K = AtMost(K) − AtMost(K−1)"}
+    - id: binary-search
+      title: Binary Search
+      variants:
+        - {id: bs-bounds, title: Lower / Upper Bound}
+        - {id: bs-on-answer, title: Binary Search on Answer}
+        - {id: bs-on-reals, title: Binary Search on Reals}
+    - id: sweep
+      title: Sorting & Sweep
+      variants:
+        - {id: sweep-line-events, title: Sweep Line over Events}
+        - {id: coordinate-compression, title: Coordinate Compression}
+        - {id: interval-merge, title: Interval Merging}
+    - id: bits
+      title: Bit Manipulation
+      variants:
+        - {id: bit-tricks, title: Bit Tricks & XOR Properties}
+        - {id: submask-enumeration, title: Submask Enumeration}
+        - {id: bitwise-greedy, title: Bit-by-Bit Greedy}
+    - id: meet-in-middle
+      title: Meet in the Middle
+      variants:
+        - {id: meet-in-the-middle, title: Meet in the Middle}
+    - id: contribution
+      title: Contribution Technique
+      variants:
+        - {id: contribution-technique, title: Count Each Element's Contribution}
+
+- id: ds
+  title: Data Structures
+  concepts:
+    - id: stack
+      title: Stack
+      variants:
+        - {id: stack-simulation, title: Stack Simulation & Matching}
+        - {id: monotonic-stack, title: Monotonic Stack}
+    - id: deque
+      title: Deque
+      variants:
+        - {id: monotonic-deque, title: Monotonic Deque (Window Max/Min)}
+    - id: heap
+      title: Heap / Priority Queue
+      variants:
+        - {id: heap-top-k, title: Top-K with a Heap}
+        - {id: two-heaps-median, title: Two Heaps (Running Median)}
+        - {id: k-way-merge, title: K-Way Merge}
+        - {id: heap-scheduling, title: Heap-Driven Scheduling Simulation}
+    - id: ordered-set
+      title: Ordered Set / Multiset
+      variants:
+        - {id: multiset-budget, title: "Two Multisets: K Smallest under a Budget"}
+        - {id: pbds-order-statistics, title: Order Statistics (PBDS)}
+    - id: dsu
+      title: Disjoint Set Union
+      variants:
+        - {id: dsu-basic, title: DSU with Size / Components}
+        - {id: dsu-offline-reverse, title: Offline DSU (Reverse Deletions)}
+        - {id: dsu-parity, title: DSU with Parity / Weights}
+    - id: fenwick
+      title: Fenwick Tree
+      variants:
+        - {id: fenwick-point-range, title: Point Update, Range Sum}
+        - {id: fenwick-range-point, title: Range Update, Point Query}
+        - {id: fenwick-inversions, title: Counting Inversions}
+        - {id: fenwick-kth, title: K-th Element by Binary Lifting}
+    - id: segtree
+      title: Segment Tree
+      variants:
+        - {id: segtree-basic, title: Point Update, Range Query}
+        - {id: segtree-lazy, title: Lazy Propagation}
+        - {id: segtree-descent, title: Descent (First Index with Property)}
+        - {id: segtree-custom-merge, title: Custom Node Merge}
+    - id: sparse-table
+      title: Sparse Table
+      variants:
+        - {id: sparse-table-rmq, title: Static Range Min/Max}
+    - id: trie
+      title: Trie
+      variants:
+        - {id: trie-strings, title: String Trie}
+        - {id: binary-trie-xor, title: Binary Trie (Max XOR)}
+    - id: sqrt
+      title: Sqrt Decomposition
+      variants:
+        - {id: sqrt-decomposition, title: Sqrt Decomposition}
+
+- id: dp
+  title: Dynamic Programming
+  concepts:
+    - id: dp-basic
+      title: Linear & Grid
+      variants:
+        - {id: dp-linear, title: 1D Linear DP}
+        - {id: dp-grid, title: Grid DP}
+    - id: knapsack
+      title: Knapsack
+      variants:
+        - {id: knapsack-01, title: 0/1 Knapsack}
+        - {id: knapsack-unbounded, title: Unbounded Knapsack / Coin Change}
+        - {id: knapsack-bounded, title: Bounded Knapsack}
+        - {id: subset-sum-bitset, title: Subset Sum with Bitset}
+    - id: dp-sequences
+      title: Sequences
+      variants:
+        - {id: lis, title: Longest Increasing Subsequence}
+        - {id: lcs-edit-distance, title: LCS / Edit Distance}
+    - id: dp-intervals
+      title: Intervals & Partitions
+      variants:
+        - {id: interval-dp, title: Interval DP}
+        - {id: partition-dp, title: Partition DP}
+    - id: dp-bitmask
+      title: Bitmask
+      variants:
+        - {id: bitmask-dp, title: Bitmask DP}
+        - {id: sos-dp, title: SOS (Sum over Subsets) DP}
+    - id: dp-digit
+      title: Digit DP
+      variants:
+        - {id: digit-dp, title: Digit DP}
+    - id: dp-trees
+      title: Trees
+      variants:
+        - {id: tree-dp, title: Tree DP}
+        - {id: rerooting, title: Rerooting}
+    - id: dp-graphs
+      title: DAGs
+      variants:
+        - {id: dag-dp, title: DP on DAG / Path Counting}
+    - id: dp-state
+      title: State Machine
+      variants:
+        - {id: state-machine-dp, title: State-Machine DP}
+    - id: dp-prob
+      title: Probability
+      variants:
+        - {id: expected-value-dp, title: Probability / Expected Value DP}
+    - id: dp-opt
+      title: Optimisations
+      variants:
+        - {id: dp-prefix-opt, title: Prefix-Sum Optimisation}
+        - {id: dp-monotonic-queue, title: Monotonic-Queue Optimisation}
+
+- id: graphs
+  title: Graphs
+  concepts:
+    - id: traversal
+      title: Traversal
+      variants:
+        - {id: bfs, title: BFS Shortest Path}
+        - {id: multi-source-bfs, title: Multi-Source BFS}
+        - {id: zero-one-bfs, title: 0-1 BFS}
+        - {id: grid-flood-fill, title: Grid Flood Fill}
+        - {id: cycle-detection, title: Cycle Detection}
+    - id: dag
+      title: DAG
+      variants:
+        - {id: topo-sort, title: Topological Sort}
+    - id: shortest-paths
+      title: Shortest Paths
+      variants:
+        - {id: dijkstra, title: Dijkstra}
+        - {id: bellman-ford, title: Bellman-Ford / Negative Cycles}
+        - {id: floyd-warshall, title: Floyd-Warshall}
+    - id: mst
+      title: Minimum Spanning Tree
+      variants:
+        - {id: mst-kruskal, title: Kruskal}
+        - {id: mst-prim, title: Prim}
+    - id: connectivity
+      title: Connectivity
+      variants:
+        - {id: bipartite-check, title: Bipartite Check (2-Colouring)}
+        - {id: scc, title: Strongly Connected Components}
+        - {id: bridges-articulation, title: Bridges & Articulation Points}
+        - {id: euler-path, title: Euler Path / Circuit}
+    - id: matching-flow
+      title: Matching & Flow
+      variants:
+        - {id: bipartite-matching, title: Bipartite Matching (Kuhn)}
+        - {id: min-path-cover, title: Minimum Path Cover in a DAG}
+        - {id: max-flow-dinic, title: Max Flow (Dinic)}
+    - id: functional
+      title: Functional Graphs
+      variants:
+        - {id: functional-graph, title: Successor Graph + Binary Lifting}
+
+- id: trees
+  title: Trees
+  concepts:
+    - id: tree-basics
+      title: Basics
+      variants:
+        - {id: subtree-euler-tour, title: Subtree Sizes & Euler Tour}
+        - {id: tree-diameter, title: Tree Diameter}
+    - id: lca
+      title: LCA
+      variants:
+        - {id: lca-binary-lifting, title: LCA by Binary Lifting}
+        - {id: tree-distance-queries, title: Distance Queries}
+    - id: tree-merge
+      title: Merging
+      variants:
+        - {id: small-to-large, title: Small-to-Large Merging}
+
+- id: strings
+  title: Strings
+  concepts:
+    - id: string-hashing
+      title: Counting & Hashing
+      variants:
+        - {id: anagram-counting, title: Frequency Counting / Anagrams}
+        - {id: rolling-hash, title: Rolling Hash}
+    - id: prefix-function
+      title: Pattern Matching
+      variants:
+        - {id: kmp, title: KMP / Prefix Function}
+        - {id: z-function, title: Z-Function}
+    - id: palindromes
+      title: Palindromes
+      variants:
+        - {id: manacher, title: Manacher}
+        - {id: palindrome-dp, title: Palindrome DP}
+
+- id: math
+  title: Math
+  concepts:
+    - id: modular
+      title: Modular Arithmetic
+      variants:
+        - {id: binpow-modinv, title: Binary Power & Modular Inverse}
+        - {id: ncr-factorials, title: nCr with Factorials}
+    - id: number-theory
+      title: Number Theory
+      variants:
+        - {id: sieve-spf, title: Sieve & Smallest Prime Factor}
+        - {id: divisors, title: Divisors}
+        - {id: gcd-ext-euclid, title: GCD & Extended Euclid}
+    - id: combinatorics
+      title: Combinatorics
+      variants:
+        - {id: inclusion-exclusion, title: Inclusion–Exclusion}
+    - id: matrices
+      title: Matrices
+      variants:
+        - {id: matrix-exponentiation, title: Matrix Exponentiation}
+    - id: games
+      title: Game Theory
+      variants:
+        - {id: nim-grundy, title: Nim & Grundy Numbers}
+    - id: geometry
+      title: Geometry
+      variants:
+        - {id: geometry-basics, title: Cross Product & Orientation}
+
+- id: greedy
+  title: Greedy & Constructive
+  concepts:
+    - id: greedy-core
+      title: Greedy
+      variants:
+        - {id: exchange-argument, title: Exchange Argument / Sort by Key}
+        - {id: interval-greedy, title: Interval Greedy}
+        - {id: heap-regret-greedy, title: Greedy with Regret (Heap)}
+    - id: constructive
+      title: Constructive
+      variants:
+        - {id: constructive, title: Constructive Patterns}
+
+- id: oa
+  title: OA Simulation
+  concepts:
+    - id: simulation
+      title: Simulation & Implementation
+      variants:
+        - {id: matrix-traversal, title: Matrix Traversal}
+        - {id: scheduling-simulation, title: Scheduling Simulation}
+        - {id: aggregation-formatting, title: Aggregation & Exact Formatting}

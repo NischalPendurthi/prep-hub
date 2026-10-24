@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../shared/hub.css">
+<script src="../shared/hub.js" data-tool="mcq" data-toggle="#themeToggle"></script>
+  <title>Placement MCQ Prep</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232b8a3e'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/styles.css">
+  <script>
+    /* Apply the saved theme before first paint to avoid a flash. */
+    try {
+      var s = JSON.parse(localStorage.getItem("mcqprep.v1") || "{}");
+      if (s.theme) document.documentElement.setAttribute("data-theme", s.theme);
+    } catch (e) {}
+  </script>
+<link rel="stylesheet" href="css/theme.css">
+</head>
+<body>
+  <nav class="hubbar" id="hubbar"></nav>
+<header class="topbar">
+    <a class="brand" href="#/" title="Home">
+      <span class="brand-mark" aria-hidden="true">✓</span>
+      <span class="brand-text">MCQ Prep</span>
+    </a>
+    <form class="search" id="searchForm" role="search">
+      <input id="searchInput" type="search" placeholder="Search questions…" aria-label="Search questions" autocomplete="off">
+    </form>
+    <button class="icon-btn" id="themeToggle" type="button" aria-label="Toggle dark mode" title="Toggle dark / light mode">◐</button>
+  </header>
+
+  <nav class="breadcrumb" id="breadcrumb" aria-label="Breadcrumb"></nav>
+
+  <main id="app" tabindex="-1"></main>
+
+  <dialog id="confirmDialog">
+    <form method="dialog" class="dialog-body">
+      <h2 id="confirmTitle">Are you sure?</h2>
+      <p id="confirmText"></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn">Cancel</button>
+        <button value="ok" class="btn btn-danger" id="confirmOk">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Question bank: each file pushes onto window.QUESTIONS (works on file://, no fetch) -->
+  <script src="data/catalog.js"></script>
+  <!-- Computer Networks -->
+  <script src="data/networks/models.js"></script>
+  <script src="data/networks/datalink.js"></script>
+  <script src="data/networks/error.js"></script>
+  <script src="data/networks/flow.js"></script>
+  <script src="data/networks/ip.js"></script>
+  <script src="data/networks/netlayer.js"></script>
+  <script src="data/networks/routing.js"></script>
+  <script src="data/networks/transport.js"></script>
+  <script src="data/networks/congestion.js"></script>
+  <script src="data/networks/http.js"></script>
+  <script src="data/networks/appproto.js"></script>
+  <script src="data/networks/security.js"></script>
+  <script src="data/networks/perf.js"></script>
+  <script src="data/networks/infra.js"></script>
+  <!-- Operating Systems -->
+  <script src="data/os/basics.js"></script>
+  <script src="data/os/proc.js"></script>
+  <script src="data/os/ipc.js"></script>
+  <script src="data/os/threads.js"></script>
+  <script src="data/os/sched.js"></script>
+  <script src="data/os/sync.js"></script>
+  <script src="data/os/deadlock.js"></script>
+  <script src="data/os/mem.js"></script>
+  <script src="data/os/vm.js"></script>
+  <script src="data/os/fs.js"></script>
+  <script src="data/os/disk.js"></script>
+  <script src="data/os/virt.js"></script>
+  <!-- SQL / DBMS -->
+  <script src="data/sql/fund.js"></script>
+  <script src="data/sql/basics.js"></script>
+  <script src="data/sql/agg.js"></script>
+  <script src="data/sql/joins.js"></script>
+  <script src="data/sql/subq.js"></script>
+  <script src="data/sql/window.js"></script>
+  <script src="data/sql/classic.js"></script>
+  <script src="data/sql/adv.js"></script>
+  <script src="data/sql/index.js"></script>
+  <script src="data/sql/norm.js"></script>
+  <script src="data/sql/txn.js"></script>
+  <script src="data/sql/nosql.js"></script>
+  <!-- Python -->
+  <script src="data/python/types.js"></script>
+  <script src="data/python/strings.js"></script>
+  <script src="data/python/containers.js"></script>
+  <script src="data/python/comp.js"></script>
+  <script src="data/python/control.js"></script>
+  <script src="data/python/func.js"></script>
+  <script src="data/python/iter.js"></script>
+  <script src="data/python/deco.js"></script>
+  <script src="data/python/oop.js"></script>
+  <script src="data/python/oopadv.js"></script>
+  <script src="data/python/exc.js"></script>
+  <script src="data/python/modules.js"></script>
+  <script src="data/python/memory.js"></script>
+  <script src="data/python/stdlib.js"></script>
+  <!-- Finance -->
+  <script src="data/finance/tvm.js"></script>
+  <script src="data/finance/acct.js"></script>
+  <script src="data/finance/ratios.js"></script>
+  <script src="data/finance/capbud.js"></script>
+  <script src="data/finance/wacc.js"></script>
+  <script src="data/finance/valuation.js"></script>
+  <script src="data/finance/bonds.js"></script>
+  <script src="data/finance/equity.js"></script>
+  <script src="data/finance/technical.js"></script>
+  <script src="data/finance/risk.js"></script>
+  <script src="data/finance/prob.js"></script>
+  <script src="data/finance/stoch.js"></script>
+  <script src="data/finance/timeseries.js"></script>
+  <script src="data/finance/volmodels.js"></script>
+  <script src="data/finance/futures.js"></script>
+  <script src="data/finance/swaps.js"></script>
+  <script src="data/finance/options.js"></script>
+  <script src="data/finance/optpricing.js"></script>
+  <script src="data/finance/greeks.js"></script>
+  <script src="data/finance/macro.js"></script>
+  <script src="data/finance/ma.js"></script>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
