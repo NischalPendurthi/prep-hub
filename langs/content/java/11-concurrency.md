@@ -368,7 +368,7 @@ public class CowIteration {
 :::drill bug
 A service runs blocking database calls in `CompletableFuture.supplyAsync` without an executor, and under load all parallel streams in the application stall. Fix it.
 
-```java run=c11-d-bug-commonpool
+```java run=c11-d-bug-commonpool nondet
 import java.util.*;
 import java.util.concurrent.*;
 
