@@ -30,7 +30,8 @@ const LANGS = {
   java: {
     name: "Java", hl: "java",
     file: (code) => ((code.match(/public\s+(?:final\s+)?class\s+(\w+)/) || code.match(/class\s+(\w+)/) || [])[1] || "Main") + ".java",
-    cmd: (file) => `java ${file}`,
+    // compile quietly (errors still show), then run; javap examples can reuse the .class files
+    cmd: (file) => `javac -d . -nowarn -XDsuppressNotes -XDignore.symbol.file ${file} && java -cp . ${file.replace(/\.java$/, "")}`,
   },
   go: { name: "Go", hl: "go", file: () => "main.go", cmd: () => "go run main.go" },
   rust: { name: "Rust", hl: "rust", file: () => "main.rs", cmd: () => "rustc --edition 2024 --color never -A warnings -O -o main main.rs && ./main" },
@@ -220,11 +221,12 @@ function runOne(job) {
     fs.writeFileSync(path.join(dir, job.file), job.block.code + "\n");
     const env = { ...RUN_ENV };
     if (job.block.attrs.env) for (const kv of String(job.block.attrs.env).split(/\s+/)) { const [k, ...v] = kv.split("="); env[k] = v.join("="); }
-    const child = spawn("bash", ["-c", `(${job.cmd}) 2>&1`], { cwd: dir, env });
+    const child = spawn("bash", ["-c", `(${job.cmd}) 2>&1`], { cwd: dir, env, detached: true });   // own process group
+    const killAll = () => { try { process.kill(-child.pid, "SIGKILL"); } catch {} };
     let out = "";
-    child.stdout.on("data", (d) => { out += d; if (out.length > 2e6) child.kill("SIGKILL"); });
-    const timer = setTimeout(() => { out += "\n[timed out]"; child.kill("SIGKILL"); }, Number(job.block.attrs.timeout || 30) * 1000);
-    child.on("close", (code) => { clearTimeout(timer); resolve({ code: code ?? -1, out: normalise(out, dir, job.block.attrs.head) }); });
+    child.stdout.on("data", (d) => { out += d; if (out.length > 2e6) killAll(); });
+    const timer = setTimeout(() => { out += "\n[timed out]"; killAll(); }, Number(job.block.attrs.timeout || 30) * 1000);
+    child.on("close", (code) => { clearTimeout(timer); killAll(); resolve({ code: code ?? -1, out: normalise(out, dir, job.block.attrs.head) }); });
   });
 }
 

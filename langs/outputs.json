@@ -1,4 +1,756 @@
 {
+ "java:c01-c-overflow": {
+  "hash": "1452ca92d7911352",
+  "out": "46341 * 46341 overflows: true (multiplyExact agrees: true)\n46340 * 46340 overflows: false (multiplyExact agrees: true)\n-1 * -2147483648 overflows: true (multiplyExact agrees: true)\n2147483647 * -1 overflows: false (multiplyExact agrees: true)\n65536 * 32768 overflows: true (multiplyExact agrees: true)\n7 * -3 overflows: false (multiplyExact agrees: true)"
+ },
+ "java:c01-c-reader": {
+  "hash": "9b33d4772067e92c",
+  "out": "Reader extends java/lang/Object [<init>()V, sample()V, other(I)I, main([Ljava/lang/String;)V, skipMembers(Ljava/io/DataInputStream;[Ljava/lang/Object;Ljava/util/List;)V]"
+ },
+ "java:c01-c-switch": {
+  "hash": "5cf0aa39cb883385",
+  "out": "  static int dense(int);\n       1: tableswitch   { // 1 to 4\n  static int sparse(int);\n       1: lookupswitch  { // 3"
+ },
+ "java:c01-d-bug-loop": {
+  "hash": "0bb73600c1d20601",
+  "out": "iterations: 1000\nfixed: 200"
+ },
+ "java:c01-d-bug-nsme": {
+  "hash": "8e4d5a2216c141ed",
+  "out": "log hello"
+ },
+ "java:c01-d-chars": {
+  "hash": "751a02325044ed21",
+  "out": "66\nB\nA1\n195c"
+ },
+ "java:c01-d-intdiv": {
+  "hash": "b7f215afdfdfeb9a",
+  "out": "3 3.5 -3 -1\nInfinity NaN\nArithmeticException: / by zero"
+ },
+ "java:c01-d-overflow": {
+  "hash": "fd127f415b887c68",
+  "out": "-2 4294967294 -1294967296\n-2147483648 -56"
+ },
+ "java:c01-d-ternary": {
+  "hash": "9c564f5b7ec52d80",
+  "out": "1 1.0\nNullPointerException"
+ },
+ "java:c01-header": {
+  "hash": "14ecf57dce01418f",
+  "out": "magic CAFEBABE\nversion 65.0\nconstant pool entries 102\nclass file bytes 1726"
+ },
+ "java:c01-invoke": {
+  "hash": "4addc544dae75204",
+  "out": "       1: invokespecial #1                  // Method java/lang/Object.\"<init>\":()V\n       2: invokestatic  #7                  // Method java/lang/Math.max:(II)I\n       9: invokevirtual #15                 // Method java/util/ArrayList.add:(Ljava/lang/Object;)Z\n      16: invokeinterface #23,  2           // InterfaceMethod java/util/List.add:(Ljava/lang/Object;)Z\n      23: invokevirtual #26                 // Method helper:()V\n      26: invokedynamic #31,  0             // InvokeDynamic #0:get:()Ljava/util/function/Supplier;"
+ },
+ "java:c01-javap": {
+  "hash": "a4d59e81c4f5cd53",
+  "out": "Compiled from \"Calc.java\"\npublic class Calc {\n  public Calc();\n    Code:\n       0: aload_0\n       1: invokespecial #1                  // Method java/lang/Object.\"<init>\":()V\n       4: return\n\n  static int add(int, int);\n    Code:\n       0: iload_0\n       1: iload_1\n       2: iadd\n       3: ireturn\n\n  int scaled(int);\n    Code:\n       0: iconst_3\n       1: istore_2\n       2: iload_1\n       3: iload_2\n       4: imul\n       5: iconst_1\n       6: iadd\n       7: ireturn\n\n  static long widen(int, long);\n    Code:\n       0: iload_0\n       1: i2l\n       2: lload_1\n       3: ladd\n       4: lreturn\n}"
+ },
+ "java:c01-stackoverflow": {
+  "hash": "0b680440207a6ce3",
+  "out": "two longs: depth 12427\nno params: depth 19856"
+ },
+ "java:c01-verbose": {
+  "hash": "e567de2867cf2910",
+  "out": "  public Sizes();\n      stack=1, locals=1, args_size=1\n  static int sum3(int, int, int);\n      stack=2, locals=3, args_size=3\n  static double area(double, double);\n      stack=4, locals=4, args_size=2"
+ },
+ "java:c02-c-classvalue": {
+  "hash": "f339083a31d43e56",
+  "out": "Point has 2 fields; computed 2 times"
+ },
+ "java:c02-c-forname": {
+  "hash": "58eee0e46441fbfb",
+  "out": "loaded Plugin\nPlugin static init\nsame class: true"
+ },
+ "java:c02-c-memloader": {
+  "hash": "d99c442afe81d83c",
+  "out": "true compiled at run time via memory"
+ },
+ "java:c02-ctor-virtual": {
+  "hash": "a2416292e1475bcf",
+  "out": "Base ctor calls describe(): null/0\nDerived ctor: DERIVED/3"
+ },
+ "java:c02-d-bug-ncdfe": {
+  "hash": "61a914135bdf84d0",
+  "out": "app.port must be a number, got '8080x'\napp.port must be a number, got '8080x'"
+ },
+ "java:c02-d-bug-template": {
+  "hash": "d534e92fecc3293e",
+  "out": "User [id, email]"
+ },
+ "java:c02-d-order": {
+  "hash": "1eca257cdb220054",
+  "out": "As Bs Ai Ac Bi Bc\nAi Ac Bi Bc"
+ },
+ "java:c02-d-self-ref": {
+  "hash": "753aff8e3d0069a7",
+  "out": "0 10 10"
+ },
+ "java:c02-d-static-ref": {
+  "hash": "b39b66ed4766246c",
+  "out": "Base init\nbase"
+ },
+ "java:c02-hierarchy": {
+  "hash": "c1fc5a508b09e96d",
+  "out": "app -> platform -> null\nnull\nplatform\ntrue"
+ },
+ "java:c02-holder": {
+  "hash": "c897ad20c556beb4",
+  "out": "start\nConfig created\none instance: true"
+ },
+ "java:c02-init-failure": {
+  "hash": "64c262d77bfcf40d",
+  "out": "ExceptionInInitializerError: java.lang.NumberFormatException: For input string: \"not a number\"\nNoClassDefFoundError: Could not initialize class InitFailure$Broken"
+ },
+ "java:c02-lazy": {
+  "hash": "afe9971fa8028809",
+  "out": "main starts\ngot Heavy\narray of 3\nHeavy initialised\nHeavy.use()\nHeavy.use()"
+ },
+ "java:c02-static-order": {
+  "hash": "1d53c4a7f59018f9",
+  "out": "initA sees b=0\nstatic block: a=0 b=5 c=5\n0 5 5"
+ },
+ "java:c02-triggers": {
+  "hash": "0d25a0f4b3efa2e3",
+  "out": "42\nParent init\n10\n--\nChild init\n7"
+ },
+ "java:c02-two-loaders": {
+  "hash": "32a79826b592452d",
+  "out": "true false false\nhi from loaderA\nClassCastException: class TwoLoaders$Plugin cannot be cast to class TwoLoaders$Plugin (TwoLoaders$Plugin is in unnamed module of loader 'loaderA'; TwoLoaders$Plugin is in unnamed module of loader 'app')"
+ },
+ "java:c03-areas": {
+  "hash": "673cac3d497f768c",
+  "out": "max heap 3920 MB, processors 16\nnative CodeHeap 'non-nmethods'        used   2391 KB\nnative Metaspace                      used    767 KB\nnative CodeHeap 'profiled nmethods'   used    348 KB\nnative Compressed Class Space         used     66 KB\nheap   G1 Eden Space                  used   2048 KB\nheap   G1 Old Gen                     used   1078 KB\nheap   G1 Survivor Space              used      0 KB\nnative CodeHeap 'non-profiled nmethods' used     91 KB"
+ },
+ "java:c03-boxing": {
+  "hash": "e8e63f425afc1317",
+  "out": "true false true true\ntrue true false\n1 [3]\n       2: invokestatic  #7                  // Method java/lang/Integer.valueOf:(I)Ljava/lang/Integer;\n       8: invokestatic  #7                  // Method java/lang/Integer.valueOf:(I)Ljava/lang/Integer;\n      15: invokestatic  #7                  // Method java/lang/Integer.valueOf:(I)Ljava/lang/Integer;\n      22: invokestatic  #7                  // Method java/lang/Integer.valueOf:(I)Ljava/lang/Integer;\n      58: invokevirtual #23                 // Method java/lang/Integer.intValue:()I\n      63: invokevirtual #23                 // Method java/lang/Integer.intValue:()I\n      85: invokestatic  #39                 // Method java/lang/Long.valueOf:(J)Ljava/lang/Long;\n      93: invokestatic  #39                 // Method java/lang/Long.valueOf:(J)Ljava/lang/Long;\n     100: invokestatic  #44                 // Method java/lang/Character.valueOf:(C)Ljava/lang/Character;\n     107: invokestatic  #44                 // Method java/lang/Character.valueOf:(C)Ljava/lang/Character;\n     113: invokestatic  #49                 // Method java/lang/Double.valueOf:(D)Ljava/lang/Double;\n     119: invokestatic  #49                 // Method java/lang/Double.valueOf:(D)Ljava/lang/Double;\n     176: invokestatic  #7                  // Method java/lang/Integer.valueOf:(I)Ljava/lang/Integer;\n     180: invokestatic  #7                  // Method java/lang/Integer.valueOf:(I)Ljava/lang/Integer;\n     184: invokestatic  #7                  // Method java/lang/Integer.valueOf:(I)Ljava/lang/Integer;\n     206: invokevirtual #23                 // Method java/lang/Integer.intValue:()I\n     214: invokestatic  #7                  // Method java/lang/Integer.valueOf:(I)Ljava/lang/Integer;\n     239: invokestatic  #77                 // Method java/lang/String.valueOf:(Ljava/lang/Object;)Ljava/lang/String;"
+ },
+ "java:c03-c-cachemax": {
+  "hash": "02af50f2dd7c290b",
+  "out": "127=true 128=false 1000=false 1001=false\n127=true 128=true 1000=true 1001=false"
+ },
+ "java:c03-c-intlist": {
+  "hash": "84576ee51ceb77b6",
+  "out": "true\nIntList 8.4 bytes/value (including growth copies), ArrayList<Integer> 30.6"
+ },
+ "java:c03-c-shallow": {
+  "hash": "936919e9efe8bc90",
+  "out": "A: computed 16, measured 16\nB: computed 24, measured 24\nC: computed 32, measured 32"
+ },
+ "java:c03-d-bug-boxed": {
+  "hash": "b796f166b008e9d1",
+  "out": "List<Double>: 28 bytes/value, double[]: 8 bytes/value"
+ },
+ "java:c03-d-bug-key": {
+  "hash": "96f0783643263578",
+  "out": "null Ada"
+ },
+ "java:c03-d-equals": {
+  "hash": "dca4f6ecb3a6264d",
+  "out": "false true true true\nInteger false"
+ },
+ "java:c03-d-npe": {
+  "hash": "9ae52044ebbb5151",
+  "out": "3 0\nNPE: Cannot invoke \"java.lang.Integer.intValue()\" because the return value of \"java.util.Map.get(Object)\" is null"
+ },
+ "java:c03-d-remove": {
+  "hash": "86fa1275cddfa578",
+  "out": "[10, 30, 1]\n[10, 30]\n5"
+ },
+ "java:c03-offsets": {
+  "hash": "2aa670ade0e4c862",
+  "out": "Point: x@12 y@16\nMixed: b@24 l@16 i@12 o@28 z@25\nChild: z@20 x@12 y@16\nint[] data starts at 16, Object[] slot size 4"
+ },
+ "java:c03-sizes": {
+  "hash": "83895c8d256a7b27",
+  "out": "new Object()      16\nInteger (1000+)   16\nrecord Pair(int,int) 24\none long field    24\none boolean field 16\nint[0] 16, int[3] 32, int[10] 56\nlong[1] 24, Object[4] 32"
+ },
+ "java:c03-tlab": {
+  "hash": "1b68d5358837c279",
+  "out": "round 0: 19.5 ns per allocation\nround 1: 18.2 ns per allocation\nround 2: 9.5 ns per allocation"
+ },
+ "java:c04-c-collide": {
+  "hash": "18f55b6d05702ee6",
+  "out": "[AaAaAa, BBAaAa, AaBBAa, BBBBAa, AaAaBB, BBAaBB, AaBBBB, BBBBBB] distinct hashes=1 set size=8 all found=true"
+ },
+ "java:c04-c-interner": {
+  "hash": "ed3384288e71ff17",
+  "out": "true true false size=2"
+ },
+ "java:c04-c-reverse": {
+  "hash": "bade71b7440b1a6a",
+  "out": "true\ntrue 5"
+ },
+ "java:c04-compact": {
+  "hash": "a0e82370d4afb632",
+  "out": "byte[]\n100 Latin-1 chars: 360 bytes allocated (incl. a temporary char[])\n100 Greek chars:   576 bytes allocated (incl. a temporary char[])\n100 chars, one non-Latin-1 char makes the whole string UTF-16: 576"
+ },
+ "java:c04-d-bug-log": {
+  "hash": "d21d35a323819b48",
+  "out": "true 48890"
+ },
+ "java:c04-d-bug-truncate": {
+  "hash": "3180539179bca23f",
+  "out": "4 true\nAna😀 4"
+ },
+ "java:c04-d-identity": {
+  "hash": "9c9f19c4ca26d9d9",
+  "out": "false true true false true"
+ },
+ "java:c04-d-plus": {
+  "hash": "9793a7ceec8fe372",
+  "out": "3345\nnullc1.0true\nchars: hi 2\nvalue=null"
+ },
+ "java:c04-d-split": {
+  "hash": "248648ddcad65b6c",
+  "out": "[a, b, , c]\n[a, b, , c, , ]\n[] [1, 2, 3]\n1 3 1"
+ },
+ "java:c04-d-switch": {
+  "hash": "713f670efabd4225",
+  "out": "first second other true"
+ },
+ "java:c04-hash": {
+  "hash": "c73081b6d1468f43",
+  "out": "2112 2112 2031744 2031744 2031744\n96354 96354\n0 -2147483648"
+ },
+ "java:c04-indy": {
+  "hash": "cd5f89aea28b9dc6",
+  "out": "       2: invokedynamic #7,  0              // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;I)Ljava/lang/String;\n      12: invokedynamic #13,  0             // InvokeDynamic #1:makeConcatWithConstants:(Ljava/lang/String;I)Ljava/lang/String;\n      13: invokedynamic #31,  0             // InvokeDynamic #2:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;\ncart has 3 items | 01234"
+ },
+ "java:c04-loop": {
+  "hash": "35cf89b2d21a68e6",
+  "out": "+= 225.2 ms, StringBuilder 3.18 ms, same=true\n+= 58.2 ms, StringBuilder 1.78 ms, same=true"
+ },
+ "java:c04-pool": {
+  "hash": "42579e33f1955074",
+  "out": "true false true false\ntrue true true"
+ },
+ "java:c04-utf16": {
+  "hash": "4dd4d7cdc62735ff",
+  "out": "4 3\nd83d true\nLATIN SMALL LETTER A; GRINNING FACE; LATIN SMALL LETTER E WITH ACUTE;\n7 UTF-8 bytes, 8 UTF-16 bytes\né😀a 128512\nfalse true"
+ },
+ "java:c05-c-cleaner": {
+  "hash": "bc457a096569bf99",
+  "out": "open=0 leaks=[handle 2 was not closed]"
+ },
+ "java:c05-c-lifetime": {
+  "hash": "7ad876a6a50d324d",
+  "out": "short-lived: 11 GCs, 32 ms\nlong-lived:  4 GCs, 272 ms (5000000 objects kept)"
+ },
+ "java:c05-c-marksweep": {
+  "hash": "1479327b2b7fcbef",
+  "out": "freed [3, 4, 5], live [0, 1, 2, 6]"
+ },
+ "java:c05-collectors": {
+  "hash": "eb65df217fdb1195",
+  "out": "Copy, MarkSweepCompact\nPS MarkSweep, PS Scavenge\nG1 Young Generation, G1 Concurrent GC, G1 Old Generation\nZGC Cycles, ZGC Pauses"
+ },
+ "java:c05-d-bug-soft": {
+  "hash": "8f2d75fb0207050f",
+  "out": "100 entries, oldest key 9900"
+ },
+ "java:c05-d-bug-threadlocal": {
+  "hash": "42aa4100acad15d0",
+  "out": "served alice\nserved null"
+ },
+ "java:c05-d-eligible": {
+  "hash": "8d2b1f27527f30e3",
+  "out": "in static list: false\nremoved from local map: true"
+ },
+ "java:c05-d-local": {
+  "hash": "8589ba024dfcadd1",
+  "out": "collected after nulling: true\nstill alive while the local is in use: true 4"
+ },
+ "java:c05-d-weak": {
+  "hash": "60e44b99ec82e08b",
+  "out": "true true null\nnull"
+ },
+ "java:c05-g1-init": {
+  "hash": "98602a9248017933",
+  "out": "Compressed Oops: Enabled (32-bit)\nHeap Region Size: 1M\nHeap Max Capacity: 256M"
+ },
+ "java:c05-leak": {
+  "hash": "3e123d69ff80b195",
+  "out": "screen leaked via listener: true\nafter removing listener, collected: true"
+ },
+ "java:c05-reachability": {
+  "hash": "43e2913b0f151f3e",
+  "out": "cycle collected: true\nreachable from a static: true"
+ },
+ "java:c05-refs": {
+  "hash": "e2d282d10816888b",
+  "out": "before: 1\nafter:  0\n[cleaned socket]"
+ },
+ "java:c05-young": {
+  "hash": "51bcb9b2425be499",
+  "out": "[0.121s][info][gc] GC(0) Pause Young (Normal) (G1 Evacuation Pause) 24M->1M(248M) 4.009ms\n[0.273s][info][gc] GC(1) Pause Young (Normal) (G1 Evacuation Pause) 117M->1M(248M) 3.656ms\n[0.384s][info][gc] GC(2) Pause Young (Normal) (G1 Evacuation Pause) 147M->1M(248M) 9.602ms\n[0.457s][info][gc] GC(3) Pause Young (Normal) (G1 Evacuation Pause) 147M->1M(248M) 4.715ms\ndone true"
+ },
+ "java:c06-c-escape-field": {
+  "hash": "d22ddb4f643c5dbd",
+  "out": "local: 0 bytes/iter, escaping: 24 bytes/iter"
+ },
+ "java:c06-c-harness": {
+  "hash": "56abb61784ae92e1",
+  "out": "String.format  median   564.2 ns/op\nStringBuilder  median   326.8 ns/op\nformat slower: true"
+ },
+ "java:c06-c-phases": {
+  "hash": "b27632046cbd0900",
+  "out": "warm-up, Inc only          2.86 ns per call (0)\nsteady, Inc only           1.21 ns per call (0)\nInc + Dbl (bimorphic)      1.60 ns per call (0)\nInc + Dbl + Neg (megamorphic) 8.26 ns per call (0)"
+ },
+ "java:c06-d-bug-bench": {
+  "hash": "9e7ba43d744cc12b",
+  "out": "0.064 ns per sqrt (wrong: the result is unused)\n4.190 ns per sqrt with the result used (true)"
+ },
+ "java:c06-d-bug-cli": {
+  "hash": "638d9db39d1256fe",
+  "out": "6 words"
+ },
+ "java:c06-d-flags": {
+  "hash": "26e6eada605dbce1",
+  "out": "defaults -> mixed mode, sharing\n-XX:TieredStopAtLevel=1 -> mixed mode, emulated-client, sharing\n-Xint -> interpreted mode, sharing"
+ },
+ "java:c06-d-semantics": {
+  "hash": "b0230be9a32f9963",
+  "out": "49999 100005"
+ },
+ "java:c06-deopt": {
+  "hash": "c288445aebdc6897",
+  "out": "     56    7       3       Deopt::describe (10 bytes)\n     56    8       4       Deopt::describe (10 bytes)\n     57    7       3       Deopt::describe (10 bytes)   made not entrant\n     60    9 %     3       Deopt::run @ 5 (27 bytes)\n     60   10       3       Deopt::run (27 bytes)\n     61   11 %     4       Deopt::run @ 5 (27 bytes)\n     68    9 %     3       Deopt::run @ 5 (27 bytes)   made not entrant\n     68   11 %     4       Deopt::run @ 5 (27 bytes)   made not entrant\nphase 1: dogs only 12000000\n    103   10       3       Deopt::run (27 bytes)   made not entrant\n    106    8       4       Deopt::describe (10 bytes)   made not entrant\n    107   81       4       Deopt::describe (10 bytes)"
+ },
+ "java:c06-escape": {
+  "hash": "89642b6561ddecbd",
+  "out": "default: 0 bytes per iteration\nno escape analysis: 96 bytes per iteration\ninterpreter only: 96 bytes per iteration"
+ },
+ "java:c06-morphism": {
+  "hash": "afea18cc80f02946",
+  "out": "monomorphic 77.5 ms, megamorphic 252.0 ms"
+ },
+ "java:c06-printcompilation": {
+  "hash": "2ac086d6499d73eb",
+  "out": "     58    5       3       Hot::square (4 bytes)\n     58    6       4       Hot::square (4 bytes)\n     58    5       3       Hot::square (4 bytes)   made not entrant\ndone true"
+ },
+ "java:c06-warmup": {
+  "hash": "4f216da88327e85d",
+  "out": "batch 0: 1857.9 µs (total 26143)\nbatch 1:  395.4 µs (total 26143)\nbatch 2:  357.0 µs (total 26143)\nbatch 3:  416.5 µs (total 26143)\nbatch 4:  205.1 µs (total 26143)\nbatch 5:  157.3 µs (total 26143)\nbatch 6:  152.2 µs (total 26143)\nbatch 7:  151.1 µs (total 26143)"
+ },
+ "java:c07-arrays": {
+  "hash": "f23ccec8d2252def",
+  "out": "ArrayStoreException: java.lang.String\n0 Integer[]"
+ },
+ "java:c07-bridge": {
+  "hash": "9689b295bd3a24ec",
+  "out": "Object bridge=true\nVersion bridge=false\nClassCastException from the bridge's cast\n  public int compareTo(Bridge$Version);\n  public int compareTo(java.lang.Object);"
+ },
+ "java:c07-c-favorites": {
+  "hash": "47b9f386d0a42559",
+  "out": "Java cafe\nrejected at insertion"
+ },
+ "java:c07-c-minmax": {
+  "hash": "cce0db2ad9fa19bc",
+  "out": "Pair[first=apple, second=pear] Pair[first=one, second=1]\n1000 3000"
+ },
+ "java:c07-c-typeref": {
+  "hash": "2d975ac6ff3b764a",
+  "out": "Integer Long java.util.Map<java.lang.String, java.util.List<java.lang.Integer>>"
+ },
+ "java:c07-d-bug-pecs": {
+  "hash": "2253254d301213c3",
+  "out": "3.5"
+ },
+ "java:c07-d-bug-unchecked": {
+  "hash": "ef62c0644b6be7f3",
+  "out": "true\nport is String, expected Integer"
+ },
+ "java:c07-d-overload": {
+  "hash": "69c04a35864f8358",
+  "out": "collection list object collection"
+ },
+ "java:c07-d-static": {
+  "hash": "8f533ee3f14892b9",
+  "out": "3 true"
+ },
+ "java:c07-d-varargs": {
+  "hash": "1e487a960fd2136f",
+  "out": "[a, b] Double\n2 String[]"
+ },
+ "java:c07-erasure": {
+  "hash": "dd2bfeb407b2193b",
+  "out": "true\nADA 1.0\n       2: invokeinterface #7,  2            // InterfaceMethod java/util/List.get:(I)Ljava/lang/Object;\n       7: checkcast     #13                 // class java/lang/Number\n      32: invokeinterface #42,  1           // InterfaceMethod java/util/List.getClass:()Ljava/lang/Class;\n      38: invokeinterface #46,  1           // InterfaceMethod java/util/List.getClass:()Ljava/lang/Class;\n      56: invokeinterface #7,  2            // InterfaceMethod java/util/List.get:(I)Ljava/lang/Object;\n      61: checkcast     #53                 // class java/lang/String"
+ },
+ "java:c07-forbidden": {
+  "hash": "a57a20e6eb9ff887",
+  "out": "3 String[]\ntrue"
+ },
+ "java:c07-pecs": {
+  "hash": "3cccbe2bd8d43b67",
+  "out": "6.0 4.0\n[0, 1, 2] [0, 1] 3 pear"
+ },
+ "java:c07-pollution": {
+  "hash": "a31f46c7e24569b8",
+  "out": "2 [ada, 42]\n3\nClassCastException: class java.lang.Integer cannot be cast to class java.lang.String\ncheckedList caught it at insertion time"
+ },
+ "java:c07-signatures": {
+  "hash": "cf7f82812086e078",
+  "out": "tags: java.util.List<java.lang.String>\nscores: java.util.Map<java.lang.String, java.util.List<java.lang.Integer>>\njava.util.Map<java.lang.String, java.lang.Integer>"
+ },
+ "java:c08-arraylist": {
+  "hash": "ae3114997eb62d83",
+  "out": "[0, 10, 15, 22, 33, 49, 73, 109]\n10 10"
+ },
+ "java:c08-c-hashmap": {
+  "hash": "3c6e2fbfb445f40c",
+  "out": "501 999 null -1 capacity=2048"
+ },
+ "java:c08-c-lru": {
+  "hash": "ed0f2d8749442ba9",
+  "out": "null one [1, 3]"
+ },
+ "java:c08-c-money": {
+  "hash": "d7e07220f57576ce",
+  "out": "false false true\n2"
+ },
+ "java:c08-cme": {
+  "hash": "ce971e7fedfc9b7e",
+  "out": "ConcurrentModificationException\n[1, 3, 4, 5, 6]\n[1, 3, 5]\n[b]"
+ },
+ "java:c08-contract": {
+  "hash": "ebe8f77fddf12b56",
+  "out": "true false\ntrue 120 120"
+ },
+ "java:c08-d-aslist": {
+  "hash": "cc96fe540124c6e3",
+  "out": "[a, b, c]\nUnsupportedOperationException\n1 3"
+ },
+ "java:c08-d-bug-cme": {
+  "hash": "1434ba45df0fc8a4",
+  "out": "{b=50, d=70}"
+ },
+ "java:c08-d-bug-hash": {
+  "hash": "c672fc788dd52a71",
+  "out": "1"
+ },
+ "java:c08-d-iteration": {
+  "hash": "bfe1b3245135c95a",
+  "out": "{pear=99, apple=5, fig=3} {apple=5, fig=3, pear=4}\n[1, 2, 3]"
+ },
+ "java:c08-d-nullkey": {
+  "hash": "770d3cfe10095cf3",
+  "out": "2 1 true\nTreeMap: NPE\nMap.of: NPE"
+ },
+ "java:c08-lru": {
+  "hash": "b97bd21680a2292d",
+  "out": "[c, a, d]"
+ },
+ "java:c08-mutable-key": {
+  "hash": "9bde0e92fb2b8409",
+  "out": "null null 1 true"
+ },
+ "java:c08-resize": {
+  "hash": "5d77619434e781bd",
+  "out": "before first put: table = null\nsize 1 -> 16 bins (threshold 12)\nsize 13 -> 32 bins (threshold 24)\nsize 25 -> 64 bins (threshold 48)\nsize 49 -> 128 bins (threshold 96)\nsize 97 -> 256 bins (threshold 192)\nnewHashMap(100) starts with 256 bins"
+ },
+ "java:c08-treeify": {
+  "hash": "cc87a62492f3cb0a",
+  "out": "1:Node 2:Node 3:Node 4:Node 5:Node 6:Node 7:Node 8:Node 9:TreeNode 10:TreeNode\n7 10"
+ },
+ "java:c08-treemap": {
+  "hash": "f27e0ae4504c3b90",
+  "out": "[Apple, banana] 4\n80=B {70=C, 80=B} 70"
+ },
+ "java:c09-c-latch": {
+  "hash": "41262ba74084d9a4",
+  "out": "[10, 10, 10, 10, 10, 10, 10, 10]"
+ },
+ "java:c09-c-lazy": {
+  "hash": "6a29081610ea8caa",
+  "out": "supplier ran 1 time, all callers got the value: true"
+ },
+ "java:c09-c-sync": {
+  "hash": "b9810383358d3fa5",
+  "out": "synchronized: 1000000, unsynchronized: 994473 (expected 1000000)"
+ },
+ "java:c09-d-atomic": {
+  "hash": "672da5e20e421549",
+  "out": "5 7 true false 10\n20 20"
+ },
+ "java:c09-d-bug-counter": {
+  "hash": "e5ff15669ac7f792",
+  "out": "1000000"
+ },
+ "java:c09-d-bug-publish": {
+  "hash": "b35db1fe19781f67",
+  "out": "2500 {mode=b}"
+ },
+ "java:c09-d-join": {
+  "hash": "716efadf88f669b6",
+  "out": "42"
+ },
+ "java:c09-d-sync-visibility": {
+  "hash": "f6a29ee42b706709",
+  "out": "saw 7"
+ },
+ "java:c09-dcl": {
+  "hash": "22d3e4394f3af463",
+  "out": "constructed 1 time(s), every reader saw a full table: true"
+ },
+ "java:c09-final": {
+  "hash": "509e9dbe6e9cb8ff",
+  "out": "reader sees x=3 y=4 (guaranteed for final fields)"
+ },
+ "java:c09-reordering": {
+  "hash": "33f790f79925dce2",
+  "out": "outcomes with r1 == 0 and r2 == 0: 0"
+ },
+ "java:c09-visibility": {
+  "hash": "99bd974faaa1eb00",
+  "out": "plain flag: worker still running after 1 s = true\nvolatile flag: worker still running after 1 s = false"
+ },
+ "java:c09-volatile-increment": {
+  "hash": "fcf83e6ebaa1ece1",
+  "out": "volatile int: 296980, AtomicInteger: 400000 (expected 400000)"
+ },
+ "java:c10-aqs": {
+  "hash": "dec4f0197c40b099",
+  "out": "counter=400000 waiting=0"
+ },
+ "java:c10-bytecode": {
+  "hash": "55e7fd0c114b7395",
+  "out": "  void block();\n         6: monitorenter\n        18: monitorexit\n        24: monitorexit\n             7    19    22   any\n            22    25    22   any\n  synchronized void method();\n    flags: (0x0020) ACC_SYNCHRONIZED"
+ },
+ "java:c10-c-rwlock": {
+  "hash": "74e70dea5f774eb3",
+  "out": "readers overlapped: true, writer ever saw a reader: false"
+ },
+ "java:c10-c-transfer": {
+  "hash": "353f62cee19c271f",
+  "out": "1000 1000 total 2000"
+ },
+ "java:c10-c-treiber": {
+  "hash": "5bcf12f068efa018",
+  "out": "40000 distinct items popped"
+ },
+ "java:c10-cas": {
+  "hash": "8f63afb7995d0f92",
+  "out": "max=399999\nplain value looks unchanged: true, stamped CAS succeeds: false"
+ },
+ "java:c10-d-bug-notify": {
+  "hash": "53217d8e4179036b",
+  "out": "taken 2000"
+ },
+ "java:c10-d-bug-unlock": {
+  "hash": "28536fba1cbccc8a",
+  "out": "rejected\ntrue false"
+ },
+ "java:c10-d-interrupt": {
+  "hash": "b7853651580f73c6",
+  "out": "interrupted, flag now false"
+ },
+ "java:c10-d-reentrant": {
+  "hash": "969a4ae3092b75e9",
+  "out": "outer inner class-lock static"
+ },
+ "java:c10-deadlock": {
+  "hash": "632e18b386ff6f14",
+  "out": "worker-1 is BLOCKED, waiting for a lock held by worker-2\nworker-2 is BLOCKED, waiting for a lock held by worker-1"
+ },
+ "java:c10-longadder": {
+  "hash": "eff8f86892812c65",
+  "out": "AtomicLong 685 ms, LongAdder 108 ms, totals 17600000 17600000"
+ },
+ "java:c10-trylock": {
+  "hash": "91bad484d70a0f0a",
+  "out": "tryLock while held: false after ~100 ms, queued=false\nhold count 2, locked=true"
+ },
+ "java:c10-wait-notify": {
+  "hash": "dd101611133689dc",
+  "out": "[0, 1, 2, 3, 4, 5]\nIllegalMonitorStateException: current thread is not owner"
+ },
+ "java:c11-c-anyof": {
+  "hash": "7e8cc663a4f830d4",
+  "out": "replica-1\ndefault (TimeoutException)"
+ },
+ "java:c11-c-pool": {
+  "hash": "748f9d14f149966a",
+  "out": "caught task failed\nrejected after shutdown\nsum of squares 385"
+ },
+ "java:c11-c-semaphore": {
+  "hash": "6bc769877ce998f6",
+  "out": "100 pages, first HTTPS://EXAMPLE.COM/0, peak concurrency 10"
+ },
+ "java:c11-cf": {
+  "hash": "c287b03af28a07d7",
+  "out": "72.0 EUR in 131 ms (two 50 ms calls in parallel)\nfallback after CompletionException: no stock"
+ },
+ "java:c11-chm": {
+  "hash": "984bd8ac5b11cb85",
+  "out": "racy total correct: false, merge total correct: true"
+ },
+ "java:c11-d-bug-commonpool": {
+  "hash": "78539d8a2e27a01e",
+  "out": "row63 via dedicated pool; common pool parallelism 15"
+ },
+ "java:c11-d-bug-load": {
+  "hash": "2dd4c0d206aaab3c",
+  "out": "profile:u1 loaded 1 time"
+ },
+ "java:c11-d-cf-order": {
+  "hash": "a9c9977c8c605c62",
+  "out": "21 true\nhandled java.lang.RuntimeException: boom\nCompletionException caused by IllegalStateException"
+ },
+ "java:c11-d-cow": {
+  "hash": "b2fa300360f4a3af",
+  "out": "[a, b, A, B]\ntrue"
+ },
+ "java:c11-forkjoin": {
+  "hash": "4765c90a62a39b0b",
+  "out": "12500002500000 true true"
+ },
+ "java:c11-pinning": {
+  "hash": "d9fbb863adfe6afb",
+  "out": "VirtualThread[#N]/runnable@ForkJoinPool-1-worker-N reason:MONITOR\n    Pinning.lambda$main$0(Pinning.java:9) <== monitors:1\ndone"
+ },
+ "java:c11-tpe": {
+  "hash": "bdabf29d79abcf69",
+  "out": "task 1: threads=1 queued=0\ntask 2: threads=2 queued=0\ntask 3: threads=2 queued=1\ntask 4: threads=2 queued=2\ntask 5: threads=2 queued=3\ntask 6: threads=3 queued=3\ntask 7: threads=4 queued=3\ntask 8: rejected\ntask 9: rejected\nterminated: true, rejected 2"
+ },
+ "java:c11-virtual": {
+  "hash": "fc5d8ab289eb3082",
+  "out": "10,000 sleeping tasks on virtual threads: 224 ms\n2,000 sleeping tasks on 100 platform threads: 2059 ms\ntrue true"
+ },
+ "java:c12-c-callsite": {
+  "hash": "ef0ea790a38ddef6",
+  "out": "hello Ada\nbonjour Ada\nBONJOUR ADA"
+ },
+ "java:c12-c-identity": {
+  "hash": "e4d51f3356fe2d9d",
+  "out": "calls=2 square()==square(): true plus(1)==plus(1): false text::length twice: false"
+ },
+ "java:c12-c-result": {
+  "hash": "9bb8362324992c75",
+  "out": "21 -> ok 42\nx -> error: For input string: \"x\"\n100000000000 -> error: For input string: \"100000000000\""
+ },
+ "java:c12-capture": {
+  "hash": "c29bf24cc1557ab2",
+  "out": "lambda this: outer\nanonymous this: anonymous\nnon-capturing reused: true, capturing reused: false\ncounter 2"
+ },
+ "java:c12-cost": {
+  "hash": "bad55f8cacd5b65b",
+  "out": "new exception at depth 50: 13078 ns, preallocated without trace: 4623 ns"
+ },
+ "java:c12-d-bug-close": {
+  "hash": "68341cc9ac94c8fe",
+  "out": "finally version reports: close failed\ntry-with-resources reports: read failed, suppressed: close failed"
+ },
+ "java:c12-d-bug-flow": {
+  "hash": "f0f73d04c573963a",
+  "out": "[42, invalid, invalid, invalid, 7]"
+ },
+ "java:c12-d-catch-order": {
+  "hash": "b17f721c4bc09cc8",
+  "out": "IAE runtime checked"
+ },
+ "java:c12-d-finally-order": {
+  "hash": "475ec384f50ed890",
+  "out": "try catch finally -> 1"
+ },
+ "java:c12-d-lambda-loop": {
+  "hash": "b18b5ceb84bc1bbc",
+  "out": "0 10 20 | 5 1"
+ },
+ "java:c12-fastthrow": {
+  "hash": "f32f3138e0aa9f50",
+  "out": "default:\n  with stack trace: true, some without: true\n-XX:-OmitStackTraceInFastThrow:\n  with stack trace: true, some without: false"
+ },
+ "java:c12-finally": {
+  "hash": "fd2126a37e890a21",
+  "out": "2 | no exception reaches the caller | 10"
+ },
+ "java:c12-lambda-bytecode": {
+  "hash": "9ef9dc0805011170",
+  "out": "       4: invokedynamic #7,  0              // InvokeDynamic #0:applyAsInt:(I)Ljava/util/function/IntUnaryOperator;\n      10: invokedynamic #11,  0             // InvokeDynamic #1:get:()Ljava/util/function/Supplier;\n      16: invokedynamic #15,  0             // InvokeDynamic #2:apply:()Ljava/util/function/Function;\n      54: invokedynamic #48,  0             // InvokeDynamic #3:makeConcatWithConstants:(ILjava/lang/String;Ljava/lang/String;)Ljava/lang/String;\n  private static java.lang.String lambda$main$1();\n  private static int lambda$main$0(int, int);"
+ },
+ "java:c12-records": {
+  "hash": "0a9d6e690ab940d3",
+  "out": "3.14 9.0 10.0 Rect[w=2.0, h=5.0]\n      11: invokedynamic// InvokeDynamic #0:typeSwitch:(Ljava/lang/Object;I)I\n     123: invokedynamic// InvokeDynamic #1:typeSwitch:(Ljava/lang/Object;I)I\n     177: invokedynamic// InvokeDynamic #2:typeSwitch:(Ljava/lang/Object;I)I"
+ },
+ "java:c12-sneaky": {
+  "hash": "d78e238e955f55a7",
+  "out": "java.io.IOException: disk not found"
+ },
+ "java:c12-table": {
+  "hash": "1d5c3523c05c0830",
+  "out": "  static int parse(java.lang.String);\n    Code:\n       0: aload_0\n       1: invokestatic  #7                  // Method java/lang/Integer.parseInt:(Ljava/lang/String;)I\n       4: istore_1\n       5: getstatic     #13                 // Field java/lang/System.out:Ljava/io/PrintStream;\n       8: ldc           #19                 // String finally\n      10: invokevirtual #21                 // Method java/io/PrintStream.println:(Ljava/lang/String;)V\n      13: iload_1\n      14: ireturn\n      15: astore_1\n      16: iconst_m1\n      17: istore_2\n      18: getstatic     #13                 // Field java/lang/System.out:Ljava/io/PrintStream;\n      21: ldc           #19                 // String finally\n      23: invokevirtual #21                 // Method java/io/PrintStream.println:(Ljava/lang/String;)V\n      26: iload_2\n      27: ireturn\n      28: astore_3\n      29: getstatic     #13                 // Field java/lang/System.out:Ljava/io/PrintStream;\n      32: ldc           #19                 // String finally\n      34: invokevirtual #21                 // Method java/io/PrintStream.println:(Ljava/lang/String;)V\n      37: aload_3\n      38: athrow\n    Exception table:\n       from    to  target type\n           0     5    15   Class java/lang/NumberFormatException\n           0     5    28   any\n          15    18    28   any\n}"
+ },
+ "java:c12-twr": {
+  "hash": "737277939f61d9d5",
+  "out": "open a\nopen b\nclose b\nclose a\ncaught: body failed\n  suppressed: close failed: b"
+ },
+ "java:c13-r2-boxing": {
+  "hash": "a92863d83c38ac70",
+  "out": "true false [7]"
+ },
+ "java:c13-r2-finally": {
+  "hash": "209fb9a806504992",
+  "out": "1 11"
+ },
+ "java:c13-r2-generics": {
+  "hash": "dc671967f21500d1",
+  "out": "true list object"
+ },
+ "java:c13-r2-hash": {
+  "hash": "92f829a11a208453",
+  "out": "1 2 false"
+ },
+ "java:c13-r2-init": {
+  "hash": "8a6c1b73175b9cc8",
+  "out": "A B.show x=0 B x=5"
+ },
+ "java:c13-r2-lambda": {
+  "hash": "1e123238000f6a9f",
+  "out": "5 false"
+ },
+ "java:c13-r2-strings": {
+  "hash": "5b7971bc0ccb7a22",
+  "out": "true false true 123"
+ },
+ "java:c13-r4-bench": {
+  "hash": "13c0f35d987039a8",
+  "out": "282 ns per match (matches=600000)"
+ },
+ "java:c13-r4-leak": {
+  "hash": "c93d4166cddf6315",
+  "out": "listeners left: 0, last session collected: true"
+ },
+ "java:c13-r4-mutable": {
+  "hash": "814ec2ce7091b7b2",
+  "out": "start 1"
+ },
+ "java:c13-r4-parallel": {
+  "hash": "2b215f691cca60b0",
+  "out": "sum 39800 computed on virtual threads, common pool untouched"
+ },
+ "java:c13-r4-sdf": {
+  "hash": "eb53e9979e9a6261",
+  "out": "all formatted correctly: true"
+ },
+ "java:c13-r5-json": {
+  "hash": "af4a59dbe64da1cf",
+  "out": "{\n  \"name\": \"Ada \\\"Countess\\\" Lovelace\",\n  \"born\": 1815,\n  \"ratio\": 0.5,\n  \"languages\": [\n    \"Analytical Engine\",\n    null\n  ],\n  \"active\": false,\n  \"tags\": []\n}"
+ },
+ "java:c13-r5-queue": {
+  "hash": "e6e5ebb521cf9be9",
+  "out": "true false"
+ },
+ "java:c13-r5-ttl": {
+  "hash": "8f5b55eb276153c6",
+  "out": "USER loads=1\nUSER loads=2"
+ },
+ "java:home-hero": {
+  "hash": "a4fc0cb4311c4a8b",
+  "out": "true false true"
+ },
  "python:c01-alias": {
   "hash": "a14b6423cfa971f4",
   "out": "[1, 2, 3, 4] True\nabc abcd False"
