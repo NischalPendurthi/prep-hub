@@ -12,6 +12,7 @@
   var TOOLS = [
     { id: "guide", name: "C++ / OS Guide", href: "guide/" },
     { id: "langs", name: "Languages", href: "langs/" },
+    { id: "topics", name: "Topics", href: "topics/" },
     { id: "mcq", name: "MCQ Prep", href: "mcq/" },
     { id: "atlas", name: "CP Atlas", href: "atlas/" },
     { id: "ladder", name: "Ladder", href: "ladder/" },

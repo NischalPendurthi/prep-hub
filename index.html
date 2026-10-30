@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="shared/hub.css">
 <script src="shared/hub.js" data-tool=""></script>
 <title>Prep Hub</title>
-<meta name="description" content="Interview and placement prep in one place: C++/OS guide, MCQ practice, CP pattern atlas, Codeforces ladder and a practice counter.">
+<meta name="description" content="Interview and placement prep in one place: C++/OS guide, role roadmaps, MCQ practice, CP pattern atlas, Codeforces ladder and a practice counter.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b5bdb'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
 * { box-sizing: border-box; }
@@ -59,6 +59,7 @@ a { color: inherit; }
 
 .t-guide { --tint: #6b5bd2; }
 .t-langs { --tint: #b7410e; }
+.t-topics { --tint: #a8327a; }
 .t-mcq { --tint: #2b8a3e; }
 .t-atlas { --tint: #3b5bdb; }
 .t-ladder { --tint: #c06400; }
@@ -66,6 +67,7 @@ a { color: inherit; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .t-guide { --tint: #a99bff; }
   :root:not([data-theme="light"]) .t-langs { --tint: #f08a5d; }
+  :root:not([data-theme="light"]) .t-topics { --tint: #ee82c0; }
   :root:not([data-theme="light"]) .t-mcq { --tint: #51cf66; }
   :root:not([data-theme="light"]) .t-atlas { --tint: #8ea2ff; }
   :root:not([data-theme="light"]) .t-ladder { --tint: #ffa94d; }
@@ -73,6 +75,7 @@ a { color: inherit; }
 }
 :root[data-theme="dark"] .t-guide { --tint: #a99bff; }
 :root[data-theme="dark"] .t-langs { --tint: #f08a5d; }
+:root[data-theme="dark"] .t-topics { --tint: #ee82c0; }
 :root[data-theme="dark"] .t-mcq { --tint: #51cf66; }
 :root[data-theme="dark"] .t-atlas { --tint: #8ea2ff; }
 :root[data-theme="dark"] .t-ladder { --tint: #ffa94d; }
@@ -116,6 +119,17 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
       <p>How CPython, the JVM, the Go runtime and the Rust compiler work underneath, with programs you can run and interview drills.</p>
       <div class="chips"><span class="chip">Python</span><span class="chip">Java</span><span class="chip">Go</span><span class="chip">Rust</span></div>
       <span class="open">Open guides →</span>
+    </a>
+
+    <a class="card t-topics" href="topics/">
+      <div class="card-top">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M9 6h6a3 3 0 0 1 3 3v6"/></svg></span>
+        <div><h2>Topics</h2><div class="kind">Role roadmaps · topic guides</div></div>
+      </div>
+      <p>Concept checklists by role type, with new guides on embedded Linux, computer architecture, compilers, ML, system design and more.</p>
+      <div class="chips"><span class="chip">Embedded</span><span class="chip">Compilers</span><span class="chip">AI/ML</span><span class="chip">SDE</span><span class="chip">Data</span></div>
+      <div class="stat" data-stat="topics" hidden></div>
+      <span class="open">Open roadmaps →</span>
     </a>
 
     <a class="card t-mcq" href="mcq/">
@@ -205,6 +219,11 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
   } catch (e) {}
 
   try {
+    var topics = size(read("topics.progress.v1"));
+    if (topics) show("topics", "<strong>" + topics + "</strong> roadmap concepts ticked");
+  } catch (e) {}
+
+  try {
     var counts = read("cp_counter_counts_v2");
     if (counts) {
       var total = 0;
@@ -214,7 +233,7 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
   } catch (e) {}
 
   try {
-    var NAMES = { guide: "C++ / OS Guide", langs: "Language Internals", mcq: "MCQ Prep", atlas: "CP Atlas", ladder: "Ladder", counter: "Practice Counter" };
+    var NAMES = { guide: "C++ / OS Guide", langs: "Language Internals", topics: "Topics", mcq: "MCQ Prep", atlas: "CP Atlas", ladder: "Ladder", counter: "Practice Counter" };
     var last = read("hub-last");
     if (last && NAMES[last.tool]) {
       var c = document.getElementById("continue");

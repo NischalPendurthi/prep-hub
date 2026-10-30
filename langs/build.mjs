@@ -4,6 +4,7 @@
 // usage: node langs/build.mjs            build; run only examples whose code changed since outputs.json
 //        node langs/build.mjs --verify   re-run every example and fail if any recorded output differs
 //        node langs/build.mjs --only python   limit to one language (repeatable)
+//        node langs/build.mjs --root topics   build another guide set; <root>/site.mjs sets its guides and landing page
 //
 // Chapter format: see langs/README.md.
 import { createHash } from "node:crypto";
@@ -15,15 +16,16 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CONTENT = path.join(HERE, "content");
-const DIST = path.join(HERE, "dist");
-const WORK = path.join(HERE, ".work");
-const OUTPUTS = path.join(HERE, "outputs.json");
-const hljs = createRequire(import.meta.url)(path.join(HERE, "..", "atlas", "site", "vendor", "highlight.min.js"));
-
 const args = process.argv.slice(2);
 const VERIFY = args.includes("--verify");
 const ONLY = args.flatMap((a, i) => (a === "--only" ? [args[i + 1]] : []));
+const ROOT = args.includes("--root") ? path.resolve(HERE, "..", args[args.indexOf("--root") + 1]) : HERE;
+const SITE = ROOT === HERE ? null : (await import(path.join(ROOT, "site.mjs"))).default;   // { tool, guides, landing(built, helpers) }
+const CONTENT = path.join(ROOT, "content");
+const DIST = path.join(ROOT, "dist");
+const WORK = path.join(ROOT, ".work");
+const OUTPUTS = path.join(ROOT, "outputs.json");
+const hljs = createRequire(import.meta.url)(path.join(HERE, "..", "atlas", "site", "vendor", "highlight.min.js"));
 
 const LANGS = {
   python: { name: "Python", hl: "python", file: () => "main.py", cmd: () => "python3 -I main.py" },
@@ -35,6 +37,9 @@ const LANGS = {
   },
   go: { name: "Go", hl: "go", file: () => "main.go", cmd: () => "go run main.go" },
   rust: { name: "Rust", hl: "rust", file: () => "main.rs", cmd: () => "rustc --edition 2024 --color never -A warnings -O -o main main.rs && ./main" },
+  c: { name: "C", hl: "c", file: () => "main.c", cmd: () => "gcc -std=c17 -O1 -Wall -pthread -o main main.c -lm && ./main" },
+  cpp: { name: "C++", hl: "cpp", file: () => "main.cpp", cmd: () => "g++ -std=c++20 -O1 -Wall -pthread -o main main.cpp && ./main" },
+  bash: { name: "Bash", hl: "bash", file: () => "main.sh", cmd: () => "bash main.sh" },
 };
 const PLAIN = new Set(["text", "txt", "console", "output", "plain"]);
 const HL_ALIAS = { shell: "bash", sh: "bash", asm: "x86asm" };
@@ -284,7 +289,7 @@ function renderCode(b, ctx) {
   let html = `<pre${b.attrs.run ? ` data-run="${esc(b.attrs.run)}"` : ""}><code class="language-${esc(lang)} hljs">${highlight(b.code, lang)}</code></pre>`;
   if (b.attrs.run) {
     if (!LANGS[lang]) fail(ctx.where, `run= on unsupported language ${lang}`);
-    if (lang !== ctx.lang) fail(ctx.where, `run= block in ${lang} inside the ${ctx.lang} guide`);
+    if (!SITE && lang !== ctx.lang) fail(ctx.where, `run= block in ${lang} inside the ${ctx.lang} guide`);
     registerRun(lang, b, ctx.where, ctx.seen);
     const out = `<pre class="out" data-out="${esc(b.attrs.run)}">@@OUT:${lang}:${b.attrs.run}@@</pre>`;
     // in a drill question the output is the answer, so it moves into the hidden answer
@@ -477,7 +482,7 @@ function page(L, body, routing) {
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <link rel="stylesheet" href="../../shared/hub.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..600&display=swap">
-<script src="../../shared/hub.js" data-tool="langs" data-toggle="#theme"></script>
+<script src="../../shared/hub.js" data-tool="${SITE ? SITE.tool : "langs"}" data-toggle="#theme"></script>
 <title>${esc(m.name)}</title>
 <meta name="description" content="${esc(m.lede.replace(/`/g, ""))}">
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='#3b5bdb'/><text x='16' y='21.5' font-size='13' font-family='monospace' font-weight='700' text-anchor='middle' fill='white'>${m.icon || m.short.slice(0, 2)}</text></svg>`)}">
@@ -610,7 +615,8 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
 
 // ---------------------------------------------------------------- main
 async function main() {
-  const langs = fs.readdirSync(CONTENT).filter((d) => LANGS[d] && fs.existsSync(path.join(CONTENT, d, "00-overview.md"))).filter((d) => !ONLY.length || ONLY.includes(d)).sort((a, b) => Object.keys(LANGS).indexOf(a) - Object.keys(LANGS).indexOf(b));
+  const order = SITE ? SITE.guides : Object.keys(LANGS);
+  const langs = fs.readdirSync(CONTENT).filter((d) => order.includes(d) && fs.existsSync(path.join(CONTENT, d, "00-overview.md"))).filter((d) => !ONLY.length || ONLY.includes(d)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
   const loaded = langs.map(loadLang);
   const built = loaded.map((L) => {
     const before = jobs.size;
@@ -639,7 +645,7 @@ async function main() {
     fs.writeFileSync(path.join(DIST, L.lang, "index.html"), filled);
     console.log(`${L.lang}: ${L.chapters.length} chapters, ${L.stats.drills} drills, ${L.stats.examples} examples`);
   }
-  fs.writeFileSync(path.join(DIST, "index.html"), landing(built.map((b) => b.L)));
+  fs.writeFileSync(path.join(DIST, "index.html"), (SITE ? SITE.landing(built.map((b) => b.L), { esc, inline }) : landing(built.map((b) => b.L))));
   console.log(`built ${path.relative(process.cwd(), DIST) || DIST}/`);
 }
 

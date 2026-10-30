@@ -36,11 +36,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.99.1"
-      - run: pip install pyyaml
+      - run: pip install pyyaml numpy==1.26.4
       - name: Atlas templates compile and pass their tests
         run: python atlas/tools/verify.py templates
       - name: Language guides - every example runs and matches its recorded output
         run: node langs/build.mjs --verify
+      - name: Topic guides - every example runs and matches its recorded output
+        run: node langs/build.mjs --root topics --verify
       - name: Build site
         run: ./build.sh
       - uses: actions/upload-pages-artifact@v3

@@ -1,0 +1,1002 @@
+{
+ "bash:ca-c03-asm": {
+  "hash": "5678df4de028f71e",
+  "out": "x86_64\nload_relaxed: movl\tx(%rip), %eax\nload_acquire: movl\tx(%rip), %eax\nload_seq_cst: movl\tx(%rip), %eax\nstore_relaxed: movl\t%edi, x(%rip)\nstore_release: movl\t%edi, x(%rip)\nstore_seq_cst: xchgl\tx(%rip), %edi\nadd_relaxed: movl\t%edi, %eax\nadd_relaxed: lock xaddl\t%eax, x(%rip)\nfence_seq_cst: lock orq\t$0, (%rsp)"
+ },
+ "bash:ca-c04-autovec": {
+  "hash": "3d15ffc3e3a7156a",
+  "out": "gcc 13.3.0\nadd, restrict                      yes\nadd, may alias (run-time check)    yes\na[i] = a[i-1] + 1                  no\na[i] = a[i+1] + 1                  yes\nint sum                            yes\nfloat sum                          yes\nfloat sum, -ffast-math             yes\nopaque call in body                no\nearly exit                         no\naddps (4 additions at once) in float sum: 0\naddps with -ffast-math: 3"
+ },
+ "bash:cc-c05-cosim": {
+  "hash": "f3d6b8be451bbdd1",
+  "out": "correct build: 5000 vectors, 0 mismatches\nplanted bug: 5000 vectors, 2316 mismatches line 2: a=-89 b=-124 ref=106 sim=105"
+ },
+ "bash:ec-c02-weak": {
+  "hash": "1390d9b4feadc153",
+  "out": "Default_Handler\nmy UART handler"
+ },
+ "bash:el-c02-sysfs": {
+  "hash": "1f308e7b11b06400",
+  "out": "1:3\n  1 mem\ntype=character special file major=1 minor=3"
+ },
+ "bash:el-c05-addr2line": {
+  "hash": "996dc7be1cf3e21c",
+  "out": "buggy\nt.c:4"
+ },
+ "bash:el-c06-inspect": {
+  "hash": "1935e94b76728d4a",
+  "out": "x86_64-linux-gnu\n  Class:                             ELF64\n 0x… (NEEDED)             Shared library: [libc.so.6]\ninterpreter: /lib64/ld-linux-x86-64.so.2"
+ },
+ "bash:el-c06-ns-list": {
+  "hash": "07e98c74d9b09b6f",
+  "out": "cgroup ipc mnt net pid pid_for_children time time_for_children user uts\ncgroup filesystem: cgroup2fs"
+ },
+ "bash:el-c06-patch": {
+  "hash": "0dd6d1d50527d1bc",
+  "out": "From 477f4cee16e9961ed0d96e82cc12aa8633bf9110 Mon Sep 17 00:00:00 2001\nFrom: A Developer <dev@example.org>\nDate: Mon, 15 Jan 2024 12:00:00 +0000\nSubject: [PATCH] foo: fix default sample rate\n\nThe default of 100 Hz undersamples the sensor, which needs at least\n1 kHz to avoid aliasing. Raise the default to 1000.\n\nFixes: 10e81b022f8f (\"foo: add driver\")\nSigned-off-by: A Developer <dev@example.org>\n---\n foo.c | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\ndiff --git a/foo.c b/foo.c\nindex 77a5e9344931..ae3169718e0c 100644\n--- a/foo.c\n+++ b/foo.c\n@@ -1 +1 @@\n-static int rate = 100;\n+static int rate = 1000;"
+ },
+ "bash:el-c06-repro": {
+  "hash": "d11351e09153459c",
+  "out": "plain -g: differ\nwith -ffile-prefix-map: identical"
+ },
+ "bash:el-c06-sysroot": {
+  "hash": "fbad2a4263cfe55c",
+  "out": "int rev = 7;\nstdio.h: No such file or directory"
+ },
+ "c:ca-c01-d-select": {
+  "hash": "dd66db9098ff5d90",
+  "out": "7 9 -1"
+ },
+ "c:ca-c02-d-layout": {
+  "hash": "a3976edbca84f009",
+  "out": "24 16\n375000 250000"
+ },
+ "c:ca-c04-d-fp": {
+  "hash": "caaba99a0076c588",
+  "out": "14.3574 14.3927"
+ },
+ "c:ca-c04-sse": {
+  "hash": "4a1bb52f71c75323",
+  "out": "55 4"
+ },
+ "c:cc-c05-c-requant": {
+  "hash": "d0c2686398f738ab",
+  "out": "8 -> 1\n12 -> 2\n20 -> 3\n-4 -> -1\n-12 -> -2\n-20 -> -3\n1000 -> 125\n-2000 -> -128\n2147483647 -> 127"
+ },
+ "c:ec-c01-bits": {
+  "hash": "d44d299b9a5df907",
+  "out": "09\n81 1\nD1 5"
+ },
+ "c:ec-c01-c-field": {
+  "hash": "4ff50fb1bceb8d6f",
+  "out": "12 ABCD1234\nABCDFF34\n00000000"
+ },
+ "c:ec-c01-c-tricks": {
+  "hash": "4d4d9d82af68492c",
+  "out": "1 0 0\n8 8\n80 2D"
+ },
+ "c:ec-c01-cv-error": {
+  "hash": "ee657dc39fdbf7e8",
+  "out": "assignment of read-only location"
+ },
+ "c:ec-c01-d-bug-prec": {
+  "hash": "c3dfa6efddd0a6ee",
+  "out": "[-Wparentheses]\nset"
+ },
+ "c:ec-c01-d-bug-shift": {
+  "hash": "548dec498e533084",
+  "out": "left shift of 255 by 24 places cannot be represented in type 'int'"
+ },
+ "c:ec-c01-d-char": {
+  "hash": "db66d13ab7545fc4",
+  "out": "0 -1"
+ },
+ "c:ec-c01-d-float": {
+  "hash": "6299d3d0ee1cba95",
+  "out": "0 1"
+ },
+ "c:ec-c01-d-macro": {
+  "hash": "84ea46d518b98900",
+  "out": "5 8\n6 7"
+ },
+ "c:ec-c01-d-sext": {
+  "hash": "de433ae34898c1af",
+  "out": "255 FFFFFFFF\n255 -4"
+ },
+ "c:ec-c01-d-shift8": {
+  "hash": "af44186c76c41b8c",
+  "out": "256 0\n0 1"
+ },
+ "c:ec-c01-d-signcmp": {
+  "hash": "1f1a1e14d7e5e624",
+  "out": "0\n0\n1"
+ },
+ "c:ec-c01-d-sizeof": {
+  "hash": "1aa861845a41fedc",
+  "out": "8 3 4 5 4"
+ },
+ "c:ec-c01-d-structs": {
+  "hash": "0ed8c7d2d882151b",
+  "out": "12 6 16"
+ },
+ "c:ec-c01-d-wrap": {
+  "hash": "fe526bd971350dec",
+  "out": "8 0 1\n32 0 0\n528 1 1"
+ },
+ "c:ec-c01-endian": {
+  "hash": "adba798f666a71be",
+  "out": "44 33 22 11"
+ },
+ "c:ec-c01-padding": {
+  "hash": "306564ded558ea2a",
+  "out": "bad  12, b at 4, c at 8\ngood 8\nwire 6, b at 1"
+ },
+ "c:ec-c01-promotion": {
+  "hash": "800f9cd3d4a93913",
+  "out": "300 44\n-16 1\n1 4\n1 0"
+ },
+ "c:ec-c01-ubsan": {
+  "hash": "edf6314a2d6d0868",
+  "out": "signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'\nshift exponent 32 is too large for 32-bit type 'int'\nsigned integer overflow: 65535 * 65535 cannot be represented in type 'int'\nleft shift of 1 by 31 places cannot be represented in type 'int'"
+ },
+ "c:ec-c01-volatile-counts": {
+  "hash": "cf3780799c17ee9a",
+  "out": "plain: 1 read, 1 write\nvolatile: 2 reads, 2 writes"
+ },
+ "c:ec-c01-wire": {
+  "hash": "3fa460d098e10ff8",
+  "out": "11223344 44332211"
+ },
+ "c:ec-c02-c-crc": {
+  "hash": "4fd227704a54a150",
+  "out": "CBF43926\nboth valid: slot 1\nb corrupt:  slot 0\nnone valid: slot -1"
+ },
+ "c:ec-c02-c-hilo": {
+  "hash": "3b67ab86948e4da8",
+  "out": "naive 0000000000000000\nsafe  0000000100000003"
+ },
+ "c:ec-c02-d-flash": {
+  "hash": "9152928d1fc4b3e5",
+  "out": "F0\n00"
+ },
+ "c:ec-c02-d-nm": {
+  "hash": "f7764c2d7521d5bd",
+  "out": "B buf\nD msg\nR table\nD text"
+ },
+ "c:ec-c02-d-reserved": {
+  "hash": "73100d8528e30f23",
+  "out": "16 20 24"
+ },
+ "c:ec-c02-d-w1c": {
+  "hash": "b66664968214a111",
+  "out": "0E\n08\n00"
+ },
+ "c:ec-c02-nm": {
+  "hash": "a58136b5dbb54e0a",
+  "out": "b counter\nB explicit_zero\nd file_local\nT func\nD initialised\nR konst\nB zeroed"
+ },
+ "c:ec-c02-regstruct": {
+  "hash": "d82c9434af36662d",
+  "out": "BAUD=417 CR=1 DR=K\nactual baud=115107"
+ },
+ "c:ec-c02-rmw": {
+  "hash": "e039d25077ca2f80",
+  "out": "after RMW on W1C:    00\nafter direct write:  02\nafter interrupted RMW: 01"
+ },
+ "c:ec-c02-size": {
+  "hash": "d5de67de4f4694d2",
+  "out": "16 400"
+ },
+ "c:ec-c03-c-spsc": {
+  "hash": "d487decf39ee7338",
+  "out": "sum=5000050000 in_order=1"
+ },
+ "c:ec-c03-c-wdt": {
+  "hash": "e737311c60135a2c",
+  "out": "healthy: kicks=3\nhung: kicks=3, 3 ticks since the last kick"
+ },
+ "c:ec-c03-d-coalesce": {
+  "hash": "6653d02382d5dc2d",
+  "out": "while blocked: 0\nafter unblock: 1"
+ },
+ "c:ec-c03-lost-update": {
+  "hash": "b7c258ca0605876c",
+  "out": "unprotected: 1\nprotected:   2"
+ },
+ "c:ec-c03-nested-cs": {
+  "hash": "26c971813f7fbf23",
+  "out": "after bad helper:  irq_on=1 (still inside the outer section)\nafter good helper: irq_on=0"
+ },
+ "c:ec-c03-ring": {
+  "hash": "0a51d4ae8a081fb6",
+  "out": "dropped 2, used 4\nabcd\nx head=5 tail=5"
+ },
+ "c:ec-c04-c-debounce": {
+  "hash": "64cd721ebc4d2918",
+  "out": "tick 10: state=0\ntick 18: state=1"
+ },
+ "c:ec-c04-c-i2c": {
+  "hash": "70b4dc0a13021ac6",
+  "out": "write: ACKs 1 1 1 1, mem[2]=AB mem[3]=CD\nread:  ACKs 1 1 1, got AB CD\nwrong address: ACK 0"
+ },
+ "c:ec-c04-d-parity": {
+  "hash": "17266301fa0b317b",
+  "out": "0 1 0"
+ },
+ "c:ec-c04-spi": {
+  "hash": "1b9f7503209ed96b",
+  "out": "controller=3C device=A5"
+ },
+ "c:ec-home-hero": {
+  "hash": "36c1fb26b27ce57d",
+  "out": "not equal\n-16"
+ },
+ "c:el-c01-c-errata": {
+  "hash": "6edb69e7db329a3e",
+  "out": "410fd030 r0p0 affected\n410fd034 r0p4 affected\n410fd035 r0p5 ok\n411fd030 r1p0 ok\n410fd080 r0p0 ok"
+ },
+ "c:el-c01-c-overlap": {
+  "hash": "88e7e5e8f2633a61",
+  "out": "kernel overlaps dtb\nproblems: 1\nproblems: 0"
+ },
+ "c:el-c01-compat": {
+  "hash": "bebb008197f46abb",
+  "out": "acme,uart-v2 -> v2 driver\nacme,uart-generic -> generic driver\nno driver: device stays unbound"
+ },
+ "c:el-c02-c-container": {
+  "hash": "713adbe90877a6ac",
+  "out": "id=7 name=uart0 offset=4"
+ },
+ "c:el-c02-c-simpleread": {
+  "hash": "e3ce4e64db0c0182",
+  "out": "got 5: hello\ngot 5:  driv\ngot 2: er\nthen 0 at pos 12"
+ },
+ "c:el-c02-d-ioc": {
+  "hash": "8e2fc4e9d5ad6bde",
+  "out": "3 8\n4 8\n1"
+ },
+ "c:el-c02-fault": {
+  "hash": "cba95e2431c4f52b",
+  "out": "straddling: 10\nall bad: -1, Bad address"
+ },
+ "c:el-c02-ioctl": {
+  "hash": "abd7796d45fe8c8d",
+  "out": "GET_CFG: 80086b01 type=k nr=1 size=8 read=1\nRESET:   00006b02 size=0\nterminal ioctl on /dev/null: -1, Inappropriate ioctl for device"
+ },
+ "c:el-c02-memdevs": {
+  "hash": "440f2c8c5317c087",
+  "out": "/dev/null  char=1 major=1 minor=3\n/dev/zero  char=1 major=1 minor=5\n/dev/full  char=1 major=1 minor=7\nzero: read 4, buf[0]=0\nfull: write -1, No space left on device\nnull: read 0 (end of file)"
+ },
+ "c:el-c03-c-spsc": {
+  "hash": "246617fadf6be1d6",
+  "out": "received 2000000 items, out of order: 0"
+ },
+ "c:el-c03-d-bitops": {
+  "hash": "b207db33a2032f87",
+  "out": "0 8\n8 8\nfirst setter: 0"
+ },
+ "c:el-c03-falseshare": {
+  "hash": "8a3fe5b657758898",
+  "out": "same line 1.40s, separate lines 0.26s"
+ },
+ "c:el-c03-race": {
+  "hash": "1cc9f664827074bf",
+  "out": "expected 4000000\nvolatile 3920022\natomic   4000000\nspinlock 4000000"
+ },
+ "c:el-c03-sb": {
+  "hash": "54a01c3b8576963d",
+  "out": "no fence: both read 0 in 9131 of 300000 rounds\nfence   : both read 0 in 0 of 300000 rounds"
+ },
+ "c:el-c04-c-mask": {
+  "hash": "602cf659ee8bb54b",
+  "out": "0         1\n0-1       3\n2-3,6     4c\n0-3,8-11  f0f"
+ },
+ "c:el-c04-c-timespec": {
+  "hash": "bfeed0262b830600",
+  "out": "6.000500000\noverrun: 1\noverrun: 0"
+ },
+ "c:el-c04-faults": {
+  "hash": "8d4e46b5125e3d55",
+  "out": "first touch: at least 2000 faults: 1\nsecond touch: under 10 faults: 1"
+ },
+ "c:el-c04-mini": {
+  "hash": "2613296b538472bd",
+  "out": "loops 2000  min 15 us  avg 115 us  max 3688 us"
+ },
+ "c:el-c04-mlock": {
+  "hash": "45e26dea2b1e8302",
+  "out": "mlockall: ok\nready for the critical loop"
+ },
+ "c:el-c04-pi": {
+  "hash": "4a4b1bca23464f14",
+  "out": "default is PRIO_NONE: 1\nnow PRIO_INHERIT: 1\ninit returned 0"
+ },
+ "c:el-c04-setsched": {
+  "hash": "bc1be2ffbd24173f",
+  "out": "FIFO priorities: 1..99\nFIFO: EPERM\nDEADLINE: EPERM"
+ },
+ "c:el-c05-c-guard": {
+  "hash": "4bd1a060957c34c7",
+  "out": "100 bytes written fine\noverrun: 3 bytes past the end"
+ },
+ "c:el-c05-d-offset": {
+  "hash": "93a0992f0c2cf457",
+  "out": "0 8 c 10 18"
+ },
+ "c:el-c05-perf": {
+  "hash": "c7ef5ba022688e0a",
+  "out": "perf_event_open refused: EACCES"
+ },
+ "c:el-c05-segv": {
+  "hash": "15f00df5a72eef34",
+  "out": "offset of irq: 0x18\nfault address 0x18, no mapping"
+ },
+ "c:el-c06-c-throttle": {
+  "hash": "19e937197559dd2f",
+  "out": "work 30000 quota 50000 period 100000: wall 30000, throttled 0\nwork 50000 quota 50000 period 100000: wall 50000, throttled 0\nwork 120000 quota 50000 period 100000: wall 220000, throttled 2"
+ },
+ "c:el-c06-unshare": {
+  "hash": "280d7b770b4aaa51",
+  "out": "inside the namespace: sandbox\nparent's hostname unchanged: 1"
+ },
+ "c:el-home-hero": {
+  "hash": "431331585c865c20",
+  "out": "read returned -1: Bad address\nthe process is still alive"
+ },
+ "c:sh-c01-c-ma": {
+  "hash": "209d2dd00561b821",
+  "out": "4.00 6.00 6.00 5.00 6.50 7.00"
+ },
+ "c:sh-c02-c-pid": {
+  "hash": "0421e256fd5ca5b9",
+  "out": "t=0 y=0.000\nt=1 y=0.889\nt=2 y=0.988\nt=3 y=0.999\nt=4 y=1.000\nt=5 y=1.000"
+ },
+ "cpp:ca-c01-c-lb": {
+  "hash": "d079532ed0d900f3",
+  "out": "18000 checks, 0 disagreements"
+ },
+ "cpp:ca-c01-chains": {
+  "hash": "a2a87352d3832399",
+  "out": "same multiplies, one chain took 1.9x as long as two chains"
+ },
+ "cpp:ca-c01-d-minfix": {
+  "hash": "450492821ef8dcff",
+  "out": "-2 -2 3"
+ },
+ "cpp:ca-c01-sorted": {
+  "hash": "2d1192533ec54faf",
+  "out": "all four sums equal: yes\nbranch:     random data took 11.4x as long as sorted\nbranchless: random data took 1.0x as long as sorted\non random data, branch took 10.1x as long as branchless"
+ },
+ "cpp:ca-c02-c-block": {
+  "hash": "26eba8876960fdb8",
+  "out": "results equal: yes; naive took 7.2x as long as blocked"
+ },
+ "cpp:ca-c02-chase": {
+  "hash": "47476afcb56bb129",
+  "out": "    16 KB working set:   1.0x the 16 KB cost per load\n   256 KB working set:   3.0x the 16 KB cost per load\n  4096 KB working set:  44.6x the 16 KB cost per load\n 65536 KB working set:  75.2x the 16 KB cost per load"
+ },
+ "cpp:ca-c02-loop-real": {
+  "hash": "a55060d50e3b3d14",
+  "out": "column order took 9.3x as long as row order"
+ },
+ "cpp:ca-c02-soa": {
+  "hash": "105c8a54e912d9f3",
+  "out": "sizeof(Particle) = 64; array of structs took 6.7x as long as struct of arrays"
+ },
+ "cpp:ca-c03-c-spin": {
+  "hash": "b39ff9da9a871d3d",
+  "out": "400000"
+ },
+ "cpp:ca-c03-c-spsc": {
+  "hash": "039acc862436283f",
+  "out": "5000050000 5000050000"
+ },
+ "cpp:ca-c03-d-cas": {
+  "hash": "80e60a2d37344798",
+  "out": "0 5 5\n1 9 5"
+ },
+ "cpp:ca-c03-d-pad": {
+  "hash": "a29fcc6adc137018",
+  "out": "128 64 8 4"
+ },
+ "cpp:ca-c03-d-rmw": {
+  "hash": "56bf70d875f9cf15",
+  "out": "10 16 16 0"
+ },
+ "cpp:ca-c03-false-sharing": {
+  "hash": "12b43175d59516ba",
+  "out": "sizeof: 64 and 128; totals correct: yes\none line took 4.4x as long as separate lines"
+ },
+ "cpp:ca-c03-litmus": {
+  "hash": "27129a9981037ae4",
+  "out": "SB relaxed, both zero:           11140 of 402117 trials\nSB seq_cst, both zero:           0 of 335566 trials\nMP relaxed, flag set, no data:   0 of 545885 trials"
+ },
+ "cpp:ca-c03-publish": {
+  "hash": "937c16007f70dd42",
+  "out": "8080 3\n400000"
+ },
+ "cpp:ca-c03-treiber": {
+  "hash": "1480de6b760509fc",
+  "out": "40000 6200020000"
+ },
+ "cpp:ca-c04-c-harness": {
+  "hash": "fa75da830ddc7004",
+  "out": "median / min: 1.02, max / min: 1.14"
+ },
+ "cpp:ca-c04-dce": {
+  "hash": "ea313f0786e879b5",
+  "out": "discarded version took under 1% of the kept version: yes"
+ },
+ "cpp:ca-c04-sse-time": {
+  "hash": "86af40d690f74dd5",
+  "out": "sums equal: yes; scalar took 4.0x as long as SSE2"
+ },
+ "cpp:ca-c04-touch": {
+  "hash": "a3276236ca74a4f2",
+  "out": "pages: 16384; faults from mapping: 0; faults from touching: 16384"
+ },
+ "python:ca-c01-c-table": {
+  "hash": "09787afc3a72e3bb",
+  "out": "no collision: 999 of 1000\ncollision:    0 of 1000"
+ },
+ "python:ca-c01-cpi": {
+  "hash": "cf3eaba14ba908a0",
+  "out": "good predictor: short CPI 1.03 -> 1.94 G instr/s, deep CPI 1.15 -> 2.61 G instr/s\npoor predictor: short CPI 1.18 -> 1.69 G instr/s, deep CPI 1.90 -> 1.58 G instr/s"
+ },
+ "python:ca-c01-d-ab": {
+  "hash": "276dce521996176f",
+  "out": "2.0 2.083 1.0417"
+ },
+ "python:ca-c01-d-cpi": {
+  "hash": "b227b1a505f37bf6",
+  "out": "0.08 0.045 1.125 0.5625 s"
+ },
+ "python:ca-c01-d-loop": {
+  "hash": "e4335cca3bd14975",
+  "out": "3 2"
+ },
+ "python:ca-c01-d-mpki": {
+  "hash": "4c50ff8362742a58",
+  "out": "0.075 0.325 23.1 %"
+ },
+ "python:ca-c01-d-period": {
+  "hash": "427367792b82199d",
+  "out": "260 ps; 260.00104 us; speedup 3.077"
+ },
+ "python:ca-c01-d-stalls": {
+  "hash": "c14dd97bc51cf44b",
+  "out": "forward total 9 stalls 1\nnone total 14 stalls 6"
+ },
+ "python:ca-c01-predictors": {
+  "hash": "3b2209e6236c9525",
+  "out": "pattern       1-bit  2-bit  gshare8  gshare12   (mispredicts per 1000)\nloop of 10      199    100      215        19\nalternating     999    500        5         7\nrandom          466    482      500       534\nalternating, 2-bit starting in state 1: 1000"
+ },
+ "python:ca-c01-timeline": {
+  "hash": "606c5dbf7f30710b",
+  "out": "forwarding total 8 cycles\nlw  x1,0(x2) IF ID EX MM WB .. .. ..\nadd x3,x1,x4 .. IF ID ** EX MM WB ..\nsub x5,x3,x6 .. .. IF ** ID EX MM WB\nno forwarding total 11 cycles\nlw  x1,0(x2) IF ID EX MM WB .. .. .. .. .. ..\nadd x3,x1,x4 .. IF ID ** ** EX MM WB .. .. ..\nsub x5,x3,x6 .. .. IF ** ** ID ** ** EX MM WB"
+ },
+ "python:ca-c02-amat": {
+  "hash": "a8eda350b40fcc43",
+  "out": "L2 AMAT 30.0 total AMAT 2.5 L2 global miss rate 0.01\nCPI 3.6 stall share 72.2 %"
+ },
+ "python:ca-c02-assoc": {
+  "hash": "eda454e942f2794a",
+  "out": "1-way: 0 hits, 1000 misses\n2-way: 998 hits, 2 misses"
+ },
+ "python:ca-c02-c-sim": {
+  "hash": "dcb7552a8abb7a3f",
+  "out": "1 5 2"
+ },
+ "python:ca-c02-d-amat": {
+  "hash": "4feddc9fdc9b5778",
+  "out": "4.0 0.02 11.0"
+ },
+ "python:ca-c02-d-bits": {
+  "hash": "386af49aa814174c",
+  "out": "1024 6 10 16"
+ },
+ "python:ca-c02-d-clock": {
+  "hash": "2d8f0509ec9750db",
+  "out": "3.6 6.2 1.161"
+ },
+ "python:ca-c02-d-decode": {
+  "hash": "5015dfba99d4aed2",
+  "out": "sets 128 offset 20 index 17 tag 0x7ffe1"
+ },
+ "python:ca-c02-d-meta": {
+  "hash": "e0c560a5fe359ad3",
+  "out": "1024 lines, 17 tag bits, 19456 bits, 2432 bytes"
+ },
+ "python:ca-c02-d-stride": {
+  "hash": "c9789a832f426351",
+  "out": "4 256\n16 1024\n32 1024"
+ },
+ "python:ca-c02-d-sum": {
+  "hash": "0d9b0363308056a6",
+  "out": "256 93.75"
+ },
+ "python:ca-c02-d-tlb": {
+  "hash": "043eba476d1a982c",
+  "out": "64 4 KB -> 0.25 MB\n1536 4 KB -> 6.0 MB\n64 2048 KB -> 128.0 MB"
+ },
+ "python:ca-c02-d-trace": {
+  "hash": "979f4942118b4c52",
+  "out": "0x0 index 0 miss\n0x4 index 0 hit\n0x10 index 1 miss\n0x40 index 0 miss\n0x0 index 0 miss\n0x14 index 1 hit\n0x44 index 0 miss"
+ },
+ "python:ca-c02-replace": {
+  "hash": "a6fa36c1b75c5e38",
+  "out": "LRU     0 hits of 5000\nFIFO    0 hits of 5000\nrandom  3014 hits of 5000"
+ },
+ "python:ca-c02-sim": {
+  "hash": "0672bef19c507cdd",
+  "out": "row-major misses 8192 column-major misses 65536 of 65536\nN=60: ijk 120409 ikj 27900 blocked(12) 7828\nN=64: ikj 33792 blocked(8) 36872"
+ },
+ "python:ca-c02-split": {
+  "hash": "42b7a40138244164",
+  "out": "32 KB 8-way 64 B, 48 bits: (64, 6, 6, 36)\n 1 MB 16-way 64 B, 48 bits: (1024, 6, 10, 32)\n0x4abcd offset 13 index 47 tag 0x4a"
+ },
+ "python:ca-c03-d-mesi": {
+  "hash": "787d3663eb2caa94",
+  "out": "EII\nSSI\nIIM\nSIS\nMII\nSSI"
+ },
+ "python:ca-c03-d-ping": {
+  "hash": "b607f53d5cb11602",
+  "out": "1000"
+ },
+ "python:ca-c03-mesi": {
+  "hash": "2b20f9abf4ed8096",
+  "out": "C0 R: C0=E C1=I  read miss, memory supplies\nC0 W: C0=M C1=I  silent upgrade\nC1 R: C0=S C1=S  read miss, owner writes back and supplies\nC1 W: C0=I C1=M  upgrade: invalidate peer\nC0 W: C0=M C1=I  read-exclusive, owner writes back\nC0 R: C0=M C1=I  hit\nC1 R: C0=S C1=S  read miss, owner writes back and supplies"
+ },
+ "python:ca-c04-c-fold": {
+  "hash": "3511f0e36100bd14",
+  "out": "main       total 100.0%  self   0.0%\nparse      total  55.0%  self   5.0%\nrender     total  40.0%  self   0.0%\nread       total  30.0%  self  30.0%\nlayout     total  25.0%  self   0.0%\nmeasure    total  25.0%  self  25.0%\ntokenize   total  20.0%  self  20.0%\npaint      total  15.0%  self  15.0%\nidle       total   5.0%  self   5.0%"
+ },
+ "python:ca-c04-d-align": {
+  "hash": "02c1d17768889ef1",
+  "out": "0 0\n1 64\n63 64\n64 64\n65 128\n4096 4096\n4097 4160"
+ },
+ "python:ca-c04-d-amdahl": {
+  "hash": "1912dc6365e24390",
+  "out": "5.26 10.0\n0.8571 4.0"
+ },
+ "python:ca-c04-d-little": {
+  "hash": "9bacae272376b236",
+  "out": "100.0 800.0"
+ },
+ "python:ca-c04-d-perf": {
+  "hash": "8e69d4979f68b342",
+  "out": "0.8 2.5 5.0 8.0"
+ },
+ "python:ca-c04-d-util": {
+  "hash": "bfa7f7467be11612",
+  "out": "0.95 20.0\n0.8 5.0"
+ },
+ "python:ca-c04-latency": {
+  "hash": "1889cc9284dc0138",
+  "out": "mean 1.98 ms, p50 1.00, p99 50.02, p99.9 58.16\nchance a request fanning out to 20 servers hits a p99-slow one: 18.2 %\nclosed loop: 90001 samples, p50 1 ms, p99 1 ms\nopen loop:   50000 samples, p50 1 ms, p99 9502 ms"
+ },
+ "python:ca-c04-laws": {
+  "hash": "dfe592367cb1e3fb",
+  "out": "Amdahl, p = 0.95: {2: 1.9, 4: 3.48, 8: 5.93, 16: 9.14, 64: 15.42, 1024: 19.64} limit 20.0\nmeasured L = 4.05, lambda x W = 4.05\nutilisation 0.50: W =    2.0 x service time\nutilisation 0.80: W =    5.0 x service time\nutilisation 0.90: W =   10.0 x service time\nutilisation 0.95: W =   20.0 x service time\nutilisation 0.99: W =  100.0 x service time"
+ },
+ "python:ca-c04-perf-math": {
+  "hash": "be32ca00e79ed561",
+  "out": "IPC 0.75\nbranch miss % 6.0  branch MPKI 13.33\nLLC MPKI 2.22\nshare of cycles if each branch miss costs ~15 cycles: 15.0 %\nshare of cycles if each LLC miss costs ~200 cycles:   33.3 %"
+ },
+ "python:ca-home-hero": {
+  "hash": "261c9de4f90fd498",
+  "out": "0"
+ },
+ "python:cc-c01-c-ssa": {
+  "hash": "4f0eb6f17af375fb",
+  "out": "entry\n  x1 = f(p)\n  y1 = f(x1)\nthen\n  x2 = f(x1, y1)\nelse\n  y2 = f(y1)\njoin\n  x3 = phi({'then': 'x2', 'else': 'x1'})\n  y3 = phi({'then': 'y1', 'else': 'y2'})\n  z1 = f(x3, y3)"
+ },
+ "python:cc-c01-cfg": {
+  "hash": "99c60672f0c1d338",
+  "out": "B0: ['i = 0', 's = 0'] -> ['B1']\nB1: ['if i >= n goto L2'] -> ['B3', 'B2']\nB2: ['s = s + i', 'i = i + 1', 'goto L1'] -> ['B1']\nB3: ['return s'] -> []"
+ },
+ "python:cc-c01-d-chain": {
+  "hash": "7788f21fc5ff9b19",
+  "out": "None ['c']\nc ['b']\nb ['a']\na []\npeak live 1"
+ },
+ "python:cc-c01-d-dce-bug": {
+  "hash": "9763f260b6ac31c7",
+  "out": "[('ret', 'add', 'p', 'q')]"
+ },
+ "python:cc-c01-d-float": {
+  "hash": "dc96810c795a7781",
+  "out": "nan nan -0.0\nFalse False"
+ },
+ "python:cc-c01-dom": {
+  "hash": "d9e3ea9fa0259951",
+  "out": "entry  idom=-      DF=[]\na      idom=entry  DF=['a']\nb      idom=a      DF=['d']\nc      idom=a      DF=['d']\nd      idom=a      DF=['a']\nexit   idom=d      DF=[]\nphi for x at: ['a', 'd']"
+ },
+ "python:cc-c01-fold-dce": {
+  "hash": "188ade0d8bd964a3",
+  "out": "9 ['a = 2 + 2', 'b = a * 3', 'c = x * b', 'd = a - 4', 'e = d * y', 'f = c + e', 'g = x * y', 'h = g + 1', 'ret f']\n4 ['c = x * 12', 'g = x * y', 'h = g + 1', 'ret c']\n2 ['c = x * 12', 'ret c']"
+ },
+ "python:cc-c01-lvn": {
+  "hash": "f955bf9a94d0482e",
+  "out": "['t1 = b + c', 't2 = t1', 't3 = b - c', 'b = t1 * t1', 't4 = b + c', 't5 = b']"
+ },
+ "python:cc-c01-regalloc": {
+  "hash": "a1bc9d8ac70a28d7",
+  "out": "B0 in [] out ['a', 'b']\nB1 in ['a', 'b'] out ['a', 'b', 'c']\nB2 in ['a', 'b', 'c'] out ['a', 'b']\nB3 in ['b', 'c'] out []\ninterference: [('a', 'b'), ('a', 'c'), ('b', 'c')]\nk=3 ({'a': 2, 'b': 1, 'c': 0, 'd': 0}, [])\nk=2 ({'b': 1, 'c': 0, 'd': 0}, ['a'])"
+ },
+ "python:cc-c02-c-mem2reg": {
+  "hash": "4f163a45319c1eec",
+  "out": "[('add', 't1', '0', 'n'), ('add', 't3', 't1', 'n'), ('ret', 't3')]"
+ },
+ "python:cc-c02-d-fixpoint": {
+  "hash": "a76c43ba5cc8eb71",
+  "out": "1 x<<1\n2 x+x"
+ },
+ "python:cc-c02-d-swap": {
+  "hash": "8b656bd9ea40a68a",
+  "out": "parallel:   [(0, 1), (1, 0), (0, 1), (1, 0)]\nsequential: [(0, 1), (1, 1), (1, 1), (1, 1)]"
+ },
+ "python:cc-c02-isel": {
+  "hash": "1cf83ceb3261c0d9",
+  "out": "all patterns cost 5\n   ldr  t0, [x, #4]\n   madd t1, t0, y, z\nno fused patterns cost 8\n   li   t0, #4\n   add  t1, x, t0\n   ldr  t2, [t1]\n   mul  t3, t2, y\n   add  t4, t3, z"
+ },
+ "python:cc-c02-lowering": {
+  "hash": "7979399a112c1118",
+  "out": "loops match NumPy: True\nfor i in 0..2:\n  for j in 0..4:\n    for k in 0..3:\n      load a A i*3+k\n      load b B k*4+j\n      load c C i*4+j\n      mul x a b\n      add s c x\n      store s C i*4+j\nflat match NumPy: True"
+ },
+ "python:cc-c02-rewrite": {
+  "hash": "631d8a7072b9f9a7",
+  "out": "  cancel_transpose: replace %t2 with %x\n  add_zero: replace %a with %x\n{'%b': ('mul', '%x', '%x')} ['%b']\nsame result: True"
+ },
+ "python:cc-c03-bn-fold": {
+  "hash": "bbb986a1bb819c78",
+  "out": "max difference below 1e-12: True\nops: 2 -> 1 | parameters: 44 -> 28"
+ },
+ "python:cc-c03-broadcast": {
+  "hash": "b55c24c327c994b1",
+  "out": "(8, 1, 6) (7, 1) -> (8, 7, 6) | NumPy: (8, 7, 6)\n(3,) (3, 1) -> (3, 3) | NumPy: (3, 3)\n(5, 4) (1,) -> (5, 4) | NumPy: (5, 4)\n() (2, 3) -> (2, 3) | NumPy: (2, 3)\n(2, 3) (3, 2) -> error: (2, 3) and (3, 2) differ at 3 vs 2 | NumPy: error\n(4, 0) (1,) -> (4, 0) | NumPy: (4, 0)"
+ },
+ "python:cc-c03-c-transpose": {
+  "hash": "7317dfb13ed9f259",
+  "out": "[('Relu',), ('Conv',)]\n[('Relu',), ('T', (0, 2, 3, 1)), ('Conv',)]"
+ },
+ "python:cc-c03-d-broadcast": {
+  "hash": "791e756753ad4548",
+  "out": "(3, 3)\n1.3333333333333333 0.0"
+ },
+ "python:cc-c03-d-cycle": {
+  "hash": "0c882f5610b97128",
+  "out": "['d'] False"
+ },
+ "python:cc-c03-d-perm": {
+  "hash": "9391f65e7b0409de",
+  "out": "(2, 4, 5, 3)\n(0, 3, 1, 2) (2, 3, 4, 5)"
+ },
+ "python:cc-c03-fusion": {
+  "hash": "cf4223a2cb430c01",
+  "out": "cannot fuse c2: read by ['r2', 'skip']\n[('r1', 'ConvRelu', ['x']), ('c2', 'Conv', ['r1']), ('r2', 'Relu', ['c2']), ('skip', 'Add', ['c2', 'r2'])]"
+ },
+ "python:cc-c03-layout": {
+  "hash": "ff52d2e7d58fee06",
+  "out": "NCHW memory: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]\nNHWC memory: [0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11]\nfirst pixel, all channels: [0, 4, 8] [0, 4, 8]\nstrides in elements: [12, 4, 2, 1] [12, 6, 3, 1]\nshares memory: True | contiguous: False"
+ },
+ "python:cc-c03-shape": {
+  "hash": "9de5ecce858e9abd",
+  "out": "c1   Conv           ['N', 16, 32, 32]\nr1   Relu           ['N', 16, 32, 32]\np1   MaxPool        ['N', 16, 16, 16]\nc2   Conv           ['N', 16, 16, 16]\na1   Add            ['N', 16, 16, 16]\na2   Add            ['N', 16, 16, 16]\ng    GlobalAvgPool  ['N', 16, 1, 1]\nf    Flatten        ['N', 16]\ny    MatMul         ['N', 10]\n-- with a bad channel count --\nc1   Conv           ['N', 16, 32, 32]\nr1   Relu           ['N', 16, 32, 32]\np1   MaxPool        ['N', 16, 16, 16]\nc2   Conv           ['N', 8, 16, 16]\na1 (Add): cannot broadcast ['N', 16, 16, 16] with ['N', 8, 16, 16]"
+ },
+ "python:cc-c03-topo": {
+  "hash": "edd9bc2aad8e9438",
+  "out": "[['conv1'], ['relu'], ['aux', 'conv2', 'conv3'], ['add'], ['pool']]\ncycle involving ['add', 'aux', 'conv1', 'conv2', 'conv3', 'pool', 'relu']"
+ },
+ "python:cc-c03-trace": {
+  "hash": "ca4b0c2d35235453",
+  "out": "traced with x=3: [('t0', 'mul', 'x', 2)]\nreal model at x=-5: 95\nreplay at x=-5:    -10"
+ },
+ "python:cc-c04-c-brute": {
+  "hash": "556eee7f61b00359",
+  "out": "best peak 176\n{'a': 0, 'b': 48, 'c': 112, 'd': 80, 'e': 0, 'fg': 80, 'in': 48, 'out': 0}"
+ },
+ "python:cc-c04-c-dp": {
+  "hash": "2a99c6de32bdbd4f",
+  "out": "(108, ('r', 'a1', 'a2', 'b1', 'b2', 'add'))"
+ },
+ "python:cc-c04-d-bound": {
+  "hash": "2de2634d3fc38424",
+  "out": "0 10\n1 30\n2 30\n3 50\n4 30"
+ },
+ "python:cc-c04-d-colour": {
+  "hash": "7503422c079da920",
+  "out": "{'P': 0, 'Q': 1, 'R': 0} peak 16"
+ },
+ "python:cc-c04-list": {
+  "hash": "8b7b3eebf43113a1",
+  "out": "chain with a skip\n  1 MAC: makespan 27 peak 176 ['conv1@0', 'conv2@4', 'conv3@10', 'conv4@16', 'concat@19', 'conv5@20', 'relu@24', 'head@25']\n  2 MAC: makespan 24 peak 160 ['conv1@0', 'conv2@4', 'conv4@4', 'conv3@10', 'concat@16', 'conv5@17', 'relu@21', 'head@22']\ntwo branches\n  1 MAC: makespan 12 peak 160 ['r@0', 'a1@2', 'b1@4', 'a2@6', 'b2@8', 'add@10']\n  2 MAC: makespan 8 peak 160 ['r@0', 'a1@2', 'b1@2', 'a2@4', 'b2@4', 'add@6']"
+ },
+ "python:cc-c04-map": {
+  "hash": "f74b387a9c247831",
+  "out": "Conv     npu ['MAC']\nRelu     npu ['FUSED']\nConv     npu ['MAC']\nRelu     npu ['FUSED']\nAdd      npu ['ELTWISE']\nMean     npu ['POOL']\nResize   cpu ['software kernel']\nReshape  npu ['RESHAPE']\nMatMul   npu ['RESHAPE', 'MAC']\nSigmoid  npu ['LUT']\npartitions: [('npu', 6), ('cpu', 1), ('npu', 3)]\ntransfers between CPU and NPU: 2"
+ },
+ "python:cc-c04-orders": {
+  "hash": "3060093b0c5d0e7a",
+  "out": "{108: 2, 160: 4}\n108 ['r', 'a1', 'a2', 'b1', 'b2', 'add']\n160 ['r', 'a1', 'b1', 'a2', 'b2', 'add']\ndepth first 108\nbreadth first 160"
+ },
+ "python:cc-c04-plan": {
+  "hash": "465c97450b5c448a",
+  "out": "tensor size life    offset\na        48 [0, 3]    144\nin       32 [0, 0]      0\nb        64 [1, 2]      0\nc        64 [2, 4]     80\nd        16 [3, 4]    192\ne        80 [4, 5]      0\nf        32 [5, 6]     80\ng        32 [6, 7]      0\nout       8 [7, 7]     32\nnaive (sum of sizes): 376\nlower bound (max live): 176\ngreedy by size: peak 208\nfirst use order: peak 256\ngreedy with in-place relu: peak 208"
+ },
+ "python:cc-c04-spill": {
+  "hash": "51360f7cdef5c0c9",
+  "out": "176 0 bytes moved []\n170 96 bytes moved ['step 2: spill a', 'reload a']\n160 96 bytes moved ['step 2: spill a', 'reload a']\n159 working set of concat does not fit, tile it"
+ },
+ "python:cc-c04-tile": {
+  "hash": "f539a00e9401551a",
+  "out": "full input 20 largest tile input 7\ntiled equals full: True\nno halo, output length 10 of 18"
+ },
+ "python:cc-c05-affine": {
+  "hash": "d9818b7c9ff8b155",
+  "out": "scale=0.015686 zero_point=-64\nr=  0.0 q=  -64 back= 0.00000 error=0.00000\nr=  0.5 q=  -32 back= 0.50196 error=0.00196\nr=  1.0 q=    0 back= 1.00392 error=0.00392\nr=  3.0 q=  127 back= 2.99608 error=0.00392\nr= -1.0 q= -128 back=-1.00392 error=0.00392\nr=  5.0 q=  127 back= 2.99608 error=2.00392\nr= -2.0 q= -128 back=-1.00392 error=0.99608\nhalf a step: 0.00784\nrange excludes 0: -128 zero point for [2, 6]"
+ },
+ "python:cc-c05-crossbar": {
+  "hash": "208065b6772b6fc4",
+  "out": "cells per weight 4 largest column sum 24\nADC 2 bits: match=False worst relative error=0.518 conversions=256 largest sum seen=15\nADC 3 bits: match=False worst relative error=0.066 conversions=256 largest sum seen=15\nADC 4 bits: match=True worst relative error=0.000 conversions=256 largest sum seen=15\nADC 5 bits: match=True worst relative error=0.000 conversions=256 largest sum seen=15\nall-ones data, ADC 4 bits: match=False largest sum seen=24\nall-ones data, ADC 5 bits: match=True largest sum seen=24"
+ },
+ "python:cc-c05-d-acc": {
+  "hash": "01315eb54dbe79d8",
+  "out": "127 32385 66311\n128 32640 65793"
+ },
+ "python:cc-c05-d-q": {
+  "hash": "5b578fad336ec264",
+  "out": "12 127 10 8"
+ },
+ "python:cc-c05-mac": {
+  "hash": "849e7d9dcaadac51",
+  "out": "accumulator=66429 bias=1250\nreal=13.2858 quantized means 13.3500, q=69\n16-bit wrap: 893 16-bit saturate: 32767 true: 66429\n16-bit signed accumulator: up to 1 worst-case products\n24-bit signed accumulator: up to 259 worst-case products\n32-bit signed accumulator: up to 66311 worst-case products"
+ },
+ "python:cc-c05-perchannel": {
+  "hash": "b1698294d6142c86",
+  "out": "per-tensor  scale=0.015748 small=0.007143 large=0.006749\nper-channel small scale=0.000079 levels used=8 error=0.000034\nper-channel large scale=0.015748 levels used=8 error=0.006749\nsmall channel levels with shared scale: 3"
+ },
+ "python:cc-c05-qmul": {
+  "hash": "7f5ae60d3dd0c8a7",
+  "out": "M = 0.01 = 1374389535 / 2^31 * 2^-6\nreal: 1.20 * -2.30 = -2.7600\ninteger: q3 = -25, which means -2.8000\npairs=65536 differ from ideal rounding=656 saturated=2022\nof those differences: exact ties=656, largest difference=1 step\nworst error when not saturated: 0.0500 (half a step is 0.05)"
+ },
+ "python:cc-c05-systolic": {
+  "hash": "4af9d9d42d0f6688",
+  "out": "[[1, 2, 3], [4, 5, 6], [14, 19, 24], [1, 5, 9]]\nmatches A @ W: True\ncycles 7 MAC operations 24 PEs 6\nutilisation 0.57"
+ },
+ "python:cc-home-hero": {
+  "hash": "5d8dc7cc986f6ff1",
+  "out": "(None, 86400)\n86400"
+ },
+ "python:ec-c03-d-rms": {
+  "hash": "0aa5f56e1ded12e6",
+  "out": "U = 0.9\nR -> 3\nR -> 4\nR -> 4"
+ },
+ "python:ec-c03-inversion": {
+  "hash": "692d4264b6433ec5",
+  "out": "plain   LLHMMMMMLLLHHL H done at 13 M done at 8\ninherit LLHLLLHHMMMMML H done at 8 M done at 13"
+ },
+ "python:ec-c03-rms": {
+  "hash": "e5a5ce3a9333aab8",
+  "out": "bounds [1.0, 0.828, 0.78, 0.718]\n[(1, 4), (2, 6), (3, 12)] U = 0.833 bound = 0.78 R = [1, 3, 10]\n[(2, 5), (4, 7)] U = 0.971 bound = 0.828 R = [2, 8]\nABBCACBBAC.."
+ },
+ "python:ec-c04-adc-pwm": {
+  "hash": "f4ed70b546b1fc5c",
+  "out": "LSB = 0.806 mV\ncode for 1.65 V = 2048  for 1.00 V = 1241\nPWM frequency = 1000.0 Hz, duty = 0.25"
+ },
+ "python:ec-c04-c-crc15": {
+  "hash": "697c66428109f09c",
+  "out": "59E"
+ },
+ "python:ec-c04-can-arb": {
+  "hash": "a79ace16cc298002",
+  "out": "bit  8: 7FF sent 1, read 0, backs off\nbit  1: 65A sent 1, read 0, backs off\nwinner 658"
+ },
+ "python:ec-c04-d-addr": {
+  "hash": "3e474c448413f28f",
+  "out": "A0 A1"
+ },
+ "python:ec-c04-d-can": {
+  "hash": "5f80617fac4dcd8d",
+  "out": "0F0 123 124 400"
+ },
+ "python:ec-c04-d-stuff": {
+  "hash": "e2be141c7b87fb8d",
+  "out": "0000011111010000\n111110111"
+ },
+ "python:ec-c04-d-uart": {
+  "hash": "9a564ab29b6930e5",
+  "out": "8N1 1.042 s\n8E1 1.146 s"
+ },
+ "python:ec-c04-pullup": {
+  "hash": "6ebb598647e50a84",
+  "out": "Standard: rise limit 1000 ns, R from 967 to 11802 ohm\nFast: rise limit 300 ns, R from 967 to 3541 ohm"
+ },
+ "python:ec-c04-rates": {
+  "hash": "01ae38265897eb9a",
+  "out": "UART 9600       1041.67 us per byte\nUART 115200       86.81 us per byte\nI2C 400k          22.50 us per byte\nSPI 10M            0.80 us per byte"
+ },
+ "python:ec-c04-uart": {
+  "hash": "ffec32f9d3b2305c",
+  "out": "0100000101\nrx bit time x1.00: data=41 stop=1\nrx bit time x1.03: data=41 stop=1\nrx bit time x1.05: data=41 stop=1\nrx bit time x1.06: data=C1 stop=1"
+ },
+ "python:el-c01-d-cells": {
+  "hash": "228cecd684be34cd",
+  "out": "80000000 40000000 1024"
+ },
+ "python:el-c01-dtb": {
+  "hash": "dd73f25c177ba2f0",
+  "out": "40 d00dfeed 17\nfirst bytes on disk: d00dfeed\naddress 140000000 size 0x1000"
+ },
+ "python:el-c03-cache": {
+  "hash": "5ab7d865d6e0d34e",
+  "out": "1 no invalidate : old\n2 invalidated   : dma\n3 dirty eviction: cpu\n4 cleaned first : dma"
+ },
+ "python:el-c04-d-fifo": {
+  "hash": "1540c2065458cd2d",
+  "out": "dbbcaa"
+ },
+ "python:el-c04-inversion": {
+  "hash": "fd562737e2ae9595",
+  "out": "inherit=False LLLMMMMMMLLHL  H finished 10 ticks after arriving\ninherit=True  LLLLLHMMMMMML  H finished 4 ticks after arriving"
+ },
+ "python:el-c05-c-frame": {
+  "hash": "77b4c45b2b7f91d2",
+  "out": "{'func': 'foo_read', 'off': 44, 'size': 144, 'mod': 'foo', 'ok': True}\n{'func': 'vfs_read', 'off': 168, 'size': 436, 'mod': 'vmlinux', 'ok': True}\n{'func': 'bar', 'off': 512, 'size': 64, 'mod': 'vmlinux', 'ok': False}\nNone"
+ },
+ "python:el-c05-d-bisect": {
+  "hash": "461a1b8e793ceed2",
+  "out": "2 1\n100 7\n1024 10\n15000 14"
+ },
+ "python:el-c05-d-taint": {
+  "hash": "e5e01ed6ff44ab28",
+  "out": "0 clean\n4096 O\n4609 PWO\n12800 WOE"
+ },
+ "python:el-c06-c-layers": {
+  "hash": "13a6e0c927bad346",
+  "out": "('meta-acme-bsp', ['meta'])\n('meta', ['meta-oe', 'meta-acme-bsp'])"
+ },
+ "python:el-c06-d-cpumax": {
+  "hash": "3253bc0b18655972",
+  "out": "50000 100000 -> 0.5 CPUs\n200000 100000 -> 2.0 CPUs\nmax 100000 -> unlimited"
+ },
+ "python:el-c06-d-triplet": {
+  "hash": "942a13cb9a0979c5",
+  "out": "('aarch64', 'linux', 'gnu')\n('arm', 'linux', 'gnueabihf')\n('riscv64', 'linux', 'musl')\n('arm', 'none', 'eabi')"
+ },
+ "python:sh-c01-alias": {
+  "hash": "6acbff51b3fd36e3",
+  "out": " true Hz  peak Hz\n     100    100.0\n     300    300.0\n     700    300.0\n    1300    300.0\n    1700    300.0\n700 Hz equals -(300 Hz): True\n1300 Hz equals +(300 Hz): True\n500 Hz sine, largest sample: 0.000"
+ },
+ "python:sh-c01-c-goertzel": {
+  "hash": "e680203be35622d9",
+  "out": "bin 13: goertzel    10000.000  fft    10000.000\nbin 40: goertzel     2500.000  fft     2500.000\nbin  7: goertzel        0.000  fft        0.000"
+ },
+ "python:sh-c01-conv": {
+  "hash": "ba0aebd5c405a64d",
+  "out": "direct:       [1. 3. 5. 3.]\nFFT size 4:   [1. 3. 5. 3.]\nFFT size 3:   [4. 3. 5.]"
+ },
+ "python:sh-c01-d-bug-freq": {
+  "hash": "a132eee77e07782a",
+  "out": "50.98 Hz\n50.78 Hz"
+ },
+ "python:sh-c01-d-decimate": {
+  "hash": "4d396573b4013697",
+  "out": "50 Hz"
+ },
+ "python:sh-c01-d-fft4": {
+  "hash": "d2c337c21ca50e60",
+  "out": "[10.+0.j -2.+2.j -2.+0.j -2.-2.j]\n30 30.0"
+ },
+ "python:sh-c01-dft": {
+  "hash": "a6d50a5764f0145a",
+  "out": "|X|: [ 8.  0. 12.  0.  0.  0. 12.  0.]\ndirect DFT matches: True\nmean = 1.000, amplitude at bin 2 = 3.000\nN=1024: direct 1048576, FFT 5120, ratio 205\nN=4096: direct 16777216, FFT 24576, ratio 683"
+ },
+ "python:sh-c01-image": {
+  "hash": "0953709122c1cc07",
+  "out": "kernel:\n[[-1  0  1]\n [-2  0  2]\n [-1  0  1]]\nresponse:\n[[ 0 36 36  0]\n [ 0 36 36  0]]\nmean of 3:   [5.0, 70.0, 70.0, 70.0, 5.0]\nmedian of 3: [5.0, 5.0, 5.0, 5.0, 5.0]"
+ },
+ "python:sh-c01-kalman": {
+  "hash": "3d5ba29949cdc578",
+  "out": "z= 10.8  K=0.999  x=10.789  P=0.999\nz=  9.4  K=0.500  x=10.095  P=0.500\nz= 10.3  K=0.333  x=10.163  P=0.333\nz=  9.7  K=0.250  x=10.047  P=0.250\nrunning mean of 4: 10.050\nQ=0.0   gain after 200 steps: 0.005\nQ=0.01  gain after 200 steps: 0.095\nQ=0.1   gain after 200 steps: 0.270\nQ=1.0   gain after 200 steps: 0.618"
+ },
+ "python:sh-c01-moving-average": {
+  "hash": "5eee04f239ac4d40",
+  "out": "  f Hz  measured  formula      dB\n    50     0.904    0.904    -0.9\n   100     0.647    0.647    -3.8\n   150     0.312    0.312   -10.1\n   200     0.000    0.000  -120.0\n   250     0.200    0.200   -14.0\n   300     0.247    0.247   -12.1\n   400     0.000    0.000  -120.0"
+ },
+ "python:sh-c01-quant": {
+  "hash": "5e1bdfca794ef7f2",
+  "out": "bits       Q  measured  rule\n   4 0.12500      26.2  25.8\n   8 0.00781      49.9  49.9\n  12 0.00049      74.0  74.0\n  16 0.00003      98.1  98.1"
+ },
+ "python:sh-c01-resolution": {
+  "hash": "bd45a053bceea70e",
+  "out": "samples= 100 fft size= 100 bin=10.0 Hz peaks at ['100'] Hz\nsamples= 100 fft size=1000 bin= 1.0 Hz peaks at ['102'] Hz\nsamples=1000 fft size=1000 bin= 1.0 Hz peaks at ['100', '104'] Hz"
+ },
+ "python:sh-c01-window": {
+  "hash": "47dbaa5efee54b99",
+  "out": "cycles window  dB at bin 14  dB at bin 20  dB at bin 30\n  10.0 rect          -240.0        -240.0        -240.0\n  10.0 hann          -240.0        -240.0        -240.0\n  10.5 rect           -17.7         -26.7         -31.1\n  10.5 hann           -40.4         -67.2         -83.0"
+ },
+ "python:sh-c02-c-metrics": {
+  "hash": "9c9d9ed719e7b7a4",
+  "out": "rise 0.164 s, overshoot 16.3%, settle 0.808 s"
+ },
+ "python:sh-c02-d-sign": {
+  "hash": "1fffc576feb19c3f",
+  "out": "-0.410\n-1.000"
+ },
+ "python:sh-c02-discrete-limit": {
+  "hash": "a03c241d86c90071",
+  "out": "limit Kp = 20.02\nKp= 2 pole +0.715 | 0.00 0.42 0.58 0.63 0.65\nKp=15 pole -0.523 | 0.00 1.07 0.92 0.94 0.94\nKp=25 pole -1.474 | 0.00 4.04 -8.91 32.59 -100.37"
+ },
+ "python:sh-c02-p-vs-pi": {
+  "hash": "3c9676c90352e3d3",
+  "out": "t s       P 2     P 8  PI 2,2  PI 2,4\n 0.0    0.000   0.000   0.000   0.000\n 0.2    0.326   0.871   0.374   0.421\n 0.5    0.543   0.889   0.686   0.815\n 1.0    0.644   0.889   0.895   1.058\n 2.0    0.666   0.889   0.984   1.041\n 3.0    0.667   0.889   0.996   1.002\n 5.0    0.667   0.889   0.999   1.000\n10.0    0.667   0.889   1.000   1.000\npeak    0.667   0.889   1.000   1.081"
+ },
+ "python:sh-c02-poles": {
+  "hash": "9fcda8d61e26d2e4",
+  "out": "K= 1 rightmost real part -0.500  largest |imag| 0.866  stable\nK= 8 rightmost real part +0.000  largest |imag| 1.732  marginal\nK=10 rightmost real part +0.077  largest |imag| 1.866  unstable"
+ },
+ "python:sh-c02-second-order": {
+  "hash": "cfdaae636582a67b",
+  "out": "zeta  overshoot%  formula%  settle s  4/(zeta wn)\n 0.2        52.6      52.7      1.96         2.00\n 0.5        16.3      16.3      0.81         0.80\n 0.7         4.6       4.6      0.60         0.57\n 1.0         0.0       0.0      0.58         0.40\n 2.0         0.0       0.0      1.49         0.20"
+ },
+ "python:sh-c02-state-space": {
+  "hash": "44fbf17018d2d998",
+  "out": "open-loop |eig| : [1. 1.]\nclosed-loop eig : [0.8 0.8]\nk= 0 position +1.0000 velocity +0.0000\nk=10 position +0.3490 velocity -0.5369\nk=20 position +0.0634 velocity -0.1153\nk=30 position +0.0096 velocity -0.0186\nk=40 position +0.0013 velocity -0.0027"
+ },
+ "python:sh-c02-windup": {
+  "hash": "69985767637a8bc4",
+  "out": " t s    no clamp   clamped\n   1       0.759     0.759\n   2       1.038     0.925\n   3       1.140     0.971\n   4       1.178     0.989\n   5       1.086     0.996\n   6       1.034     0.998\n   8       1.005     1.000\npeak       1.180     1.000\nsettle       6.5       3.4"
+ },
+ "python:sh-c03-axi": {
+  "hash": "c76614bbcab6f878",
+  "out": "cycle valid ready data transfer\n    0     0     0   --\n    1     1     0   D0\n    2     1     1   D0 yes\n    3     1     0   D1\n    4     1     1   D1 yes\n    5     1     1   D2 yes\ntransfers: 3"
+ },
+ "python:sh-c03-blocking": {
+  "hash": "ff2bebc65d128497",
+  "out": "d  blocking   non-blocking\n1 [1, 1, 1] [1, 0, 0]\n0 [0, 0, 0] [0, 1, 0]\n0 [0, 0, 0] [0, 0, 1]\n1 [1, 1, 1] [1, 0, 0]"
+ },
+ "python:sh-c03-c-edge": {
+  "hash": "460127764801cd91",
+  "out": "[0, 1, 0, 0, 1, 0, 0, 1]"
+ },
+ "python:sh-c03-c-fifo": {
+  "hash": "43c47730521ab1ba",
+  "out": "offered A wp=001 rp=000 full=False empty=False\noffered B wp=010 rp=000 full=False empty=False\noffered C wp=011 rp=000 full=False empty=False\noffered D wp=100 rp=000 full=True empty=False\noffered E wp=100 rp=000 full=True empty=False\nread ['A', 'B', 'C', 'D'] wp=100 rp=100 full=False empty=True"
+ },
+ "python:sh-c03-d-overlap": {
+  "hash": "c57f3154554d77bb",
+  "out": "1011011 2 1\n10111011 2 2"
+ },
+ "python:sh-c03-d-twos": {
+  "hash": "eee5f48fbd7f23be",
+  "out": "-128 127 -56\n11111011 -5"
+ },
+ "python:sh-c03-fsm": {
+  "hash": "879b5a8152419b2e",
+  "out": "cycle in moore_state moore_out mealy_state mealy_out\n    0  1          S0         0          S0         0\n    1  0          S1         0          S1         0\n    2  1          S2         0          S2         0\n    3  1          S3         0          S3         1\n    4  0          S4         1          S1         0\n    5  1          S2         0          S2         0\n    6  1          S3         0          S3         1\n    7  1          S4         1          S1         0\n    8  0          S1         0          S1         0\n    9  1          S2         0          S2         0\n   10  1          S3         0          S3         1\n   11  0          S4         1          S1         0\npattern ends at [3, 6, 10]\nmealy hits [3, 6, 10]  moore hits [4, 7, 11]"
+ },
+ "python:sh-c03-gray": {
+  "hash": "73a846a48223617d",
+  "out": "n  binary  gray\n5  0101    0111\n6  0110    0101\n7  0111    0100\n8  1000    1100\n9  1001    1101\nmax flips, binary: 4\nmax flips, gray:   1"
+ },
+ "python:sh-c03-mtbf": {
+  "hash": "11a9e08fc968db1a",
+  "out": "logic after one flop  t_r=1 ns  MTBF=0.0148 s = 4.7e-10 years\none spare period      t_r=9 ns  MTBF=3.49e+15 s = 1.11e+08 years"
+ },
+ "python:sh-c03-pipeline": {
+  "hash": "3818c1b38dbe02e4",
+  "out": "stages  period ns  MHz    latency ns  time for 1000 items, us\n     1      13.0   76.9        13.0          13.00\n     2       7.0  142.9        14.0           7.01\n     3       5.0  200.0        15.0           5.01\n     4       4.0  250.0        16.0           4.01\n     6       3.0  333.3        18.0           3.02\n    12       2.0  500.0        24.0           2.02\nunbalanced 6+3+3: 7.0 ns period"
+ },
+ "python:sh-c03-power": {
+  "hash": "8d57c3a04799e4b6",
+  "out": "option                         power  task time  energy\nbaseline                       1.000       1.00   1.000\nsame V, half f                 0.500       2.00   1.000\n0.9 V, 0.9 f                   0.729       1.11   0.810\ntwo units, 0.7 V, half f each  0.490       1.00   0.490"
+ },
+ "python:sh-c03-slack": {
+  "hash": "08167d9db2ab6acc",
+  "out": "case                setup ns  hold ns  fmax MHz\nclean                   2.00     1.50     125.0\ntoo much logic         -1.00     1.50      90.9\npositive skew           3.00     0.50     142.9\nshort path              3.00    -0.30     142.9\nshort, slower clk      13.00    -0.30     142.9"
+ },
+ "python:sh-home-hero": {
+  "hash": "037a0a11095f1261",
+  "out": "700 Hz tone sampled at 1000 Hz shows a peak at 300 Hz"
+ }
+}

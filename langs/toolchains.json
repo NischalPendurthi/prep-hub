@@ -3,5 +3,7 @@
   "java": "OpenJDK 21 (Temurin)",
   "go": "Go 1.27.3",
   "rust": "Rust 1.99.1 (edition 2024)",
+  "numpy": "1.26.4 (topics guides)",
+  "gcc": "whatever ubuntu-latest ships (topics guides); examples must not print compiler-specific output",
   "note": "Keep these in sync with .github/workflows/pages.yml. Local installs: Go in ~/.local/go, Rust via rustup in ~/.cargo."
 }

@@ -1,0 +1,856 @@
+{
+ "guides": [
+  "embedded-linux",
+  "embedded-c",
+  "comp-arch",
+  "compilers",
+  "signals-hw",
+  "ml-foundations",
+  "deep-learning",
+  "llms",
+  "agents",
+  "rl",
+  "speech",
+  "system-design",
+  "software-design",
+  "data-analytics",
+  "aptitude",
+  "markets"
+ ],
+ "tracks": [
+  {
+   "id": "embedded",
+   "name": "Embedded & systems software",
+   "blurb": "Linux and bare-metal development close to the hardware: kernel, drivers, bring-up, latency and low-level debugging.",
+   "groups": [
+    {
+     "name": "Language and CS foundations",
+     "items": [
+      {
+       "id": "cpp-objects",
+       "text": "C++ object model and lifetime",
+       "href": "../guide/#ch01"
+      },
+      {
+       "id": "cpp-mem",
+       "text": "new/delete, fragmentation and memory pools",
+       "href": "../guide/#ch09"
+      },
+      {
+       "id": "cpp-placement",
+       "text": "Placement new and custom allocation",
+       "href": "../guide/#ch14"
+      },
+      {
+       "id": "os-procs",
+       "text": "Processes, threads, scheduling, `fork()`",
+       "href": "../mcq/#/d/os/proc"
+      },
+      {
+       "id": "os-sync",
+       "text": "Synchronisation and deadlock",
+       "href": "../guide/#ch05"
+      },
+      {
+       "id": "os-mem",
+       "text": "Virtual memory and paging",
+       "href": "../mcq/#/d/os/vm"
+      },
+      {
+       "id": "os-virt",
+       "text": "Virtualization and Linux basics",
+       "href": "../mcq/#/d/os/virt"
+      }
+     ]
+    },
+    {
+     "name": "Embedded C and microcontrollers",
+     "items": [
+      {
+       "id": "ec-c",
+       "text": "`volatile`, bit manipulation, alignment and the memory map",
+       "guide": "embedded-c",
+       "ch": "01"
+      },
+      {
+       "id": "ec-mmio",
+       "text": "Memory-mapped registers, startup code and linker scripts",
+       "guide": "embedded-c",
+       "ch": "02"
+      },
+      {
+       "id": "ec-rtos",
+       "text": "Interrupt handlers and RTOS scheduling",
+       "guide": "embedded-c",
+       "ch": "03"
+      },
+      {
+       "id": "ec-bus",
+       "text": "UART, SPI, I2C and CAN",
+       "guide": "embedded-c",
+       "ch": "04"
+      }
+     ]
+    },
+    {
+     "name": "Linux kernel and BSP",
+     "items": [
+      {
+       "id": "el-boot",
+       "text": "Boot chain, device tree and BSP porting",
+       "guide": "embedded-linux",
+       "ch": "01"
+      },
+      {
+       "id": "el-drivers",
+       "text": "Kernel modules and character drivers",
+       "guide": "embedded-linux",
+       "ch": "02"
+      },
+      {
+       "id": "el-irq",
+       "text": "Interrupts, kernel locking, DMA and cache coherency",
+       "guide": "embedded-linux",
+       "ch": "03"
+      },
+      {
+       "id": "el-rt",
+       "text": "PREEMPT_RT and sub-100µs latency tuning",
+       "guide": "embedded-linux",
+       "ch": "04"
+      },
+      {
+       "id": "el-debug",
+       "text": "ftrace, perf, gdb, JTAG and reading an oops",
+       "guide": "embedded-linux",
+       "ch": "05"
+      },
+      {
+       "id": "el-build",
+       "text": "Cross-toolchains, Yocto, containers and CI",
+       "guide": "embedded-linux",
+       "ch": "06"
+      }
+     ]
+    },
+    {
+     "name": "Architecture and performance",
+     "items": [
+      {
+       "id": "ca-pipe",
+       "text": "Pipelines and branch prediction",
+       "guide": "comp-arch",
+       "ch": "01"
+      },
+      {
+       "id": "ca-cache",
+       "text": "Caches and cache-friendly code",
+       "guide": "comp-arch",
+       "ch": "02"
+      },
+      {
+       "id": "ca-mesi",
+       "text": "Cache coherence and memory ordering",
+       "guide": "comp-arch",
+       "ch": "03"
+      },
+      {
+       "id": "ca-simd",
+       "text": "SIMD, NUMA and profiling",
+       "guide": "comp-arch",
+       "ch": "04"
+      }
+     ]
+    },
+    {
+     "name": "Signals, controls and hardware (domain-dependent)",
+     "items": [
+      {
+       "id": "sh-dsp",
+       "text": "Sampling, FFT and filters",
+       "guide": "signals-hw",
+       "ch": "01"
+      },
+      {
+       "id": "sh-ctrl",
+       "text": "Feedback control and PID",
+       "guide": "signals-hw",
+       "ch": "02"
+      },
+      {
+       "id": "sh-digital",
+       "text": "Digital logic, RTL, timing and SoC buses",
+       "guide": "signals-hw",
+       "ch": "03"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "mlsys",
+   "name": "ML compilers & accelerators",
+   "blurb": "Taking trained models to custom silicon: graph compilers, NPU toolchains, scheduling, memory planning and hardware/software co-design.",
+   "groups": [
+    {
+     "name": "Foundations",
+     "items": [
+      {
+       "id": "cpp-objects",
+       "text": "C++ object model and lifetime",
+       "href": "../guide/#ch01"
+      },
+      {
+       "id": "cpp-moves",
+       "text": "Move semantics",
+       "href": "../guide/#ch20"
+      },
+      {
+       "id": "dsa-map",
+       "text": "DSA patterns and templates",
+       "href": "../atlas/"
+      },
+      {
+       "id": "ca-cache",
+       "text": "Caches and cache-friendly code",
+       "guide": "comp-arch",
+       "ch": "02"
+      },
+      {
+       "id": "ca-simd",
+       "text": "SIMD, NUMA and profiling",
+       "guide": "comp-arch",
+       "ch": "04"
+      }
+     ]
+    },
+    {
+     "name": "Compilers",
+     "items": [
+      {
+       "id": "cc-ir",
+       "text": "IRs, SSA and optimisation passes",
+       "guide": "compilers",
+       "ch": "01"
+      },
+      {
+       "id": "cc-mlir",
+       "text": "LLVM and MLIR",
+       "guide": "compilers",
+       "ch": "02"
+      },
+      {
+       "id": "cc-graph",
+       "text": "ONNX and TFLite graphs, tensor shapes and layouts",
+       "guide": "compilers",
+       "ch": "03"
+      },
+      {
+       "id": "cc-sched",
+       "text": "Lowering, scheduling and memory planning",
+       "guide": "compilers",
+       "ch": "04"
+      },
+      {
+       "id": "cc-npu",
+       "text": "Quantization and NPU / processing-in-memory dataflow",
+       "guide": "compilers",
+       "ch": "05"
+      }
+     ]
+    },
+    {
+     "name": "Models and hardware",
+     "items": [
+      {
+       "id": "dl-nn",
+       "text": "Neural network operations and backprop",
+       "guide": "deep-learning",
+       "ch": "01"
+      },
+      {
+       "id": "dl-tf",
+       "text": "CNNs and transformers",
+       "guide": "deep-learning",
+       "ch": "02"
+      },
+      {
+       "id": "sh-digital",
+       "text": "Digital logic, RTL, timing and SoC buses",
+       "guide": "signals-hw",
+       "ch": "03"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "aiml",
+   "name": "AI/ML engineering & research",
+   "blurb": "Models, LLM systems and agents in production, from classical ML to real-time voice and perception research.",
+   "groups": [
+    {
+     "name": "Foundations",
+     "items": [
+      {
+       "id": "ml-math",
+       "text": "Probability, linear algebra and optimisation",
+       "guide": "ml-foundations",
+       "ch": "01"
+      },
+      {
+       "id": "ml-classic",
+       "text": "Classical ML: linear models, trees, ensembles, clustering",
+       "guide": "ml-foundations",
+       "ch": "02"
+      },
+      {
+       "id": "ml-eval",
+       "text": "Validation, metrics and forecasting",
+       "guide": "ml-foundations",
+       "ch": "03"
+      },
+      {
+       "id": "py-object",
+       "text": "Python object model",
+       "href": "../langs/python/#ch01"
+      },
+      {
+       "id": "py-gil",
+       "text": "Python concurrency and the GIL",
+       "href": "../langs/python/#ch11"
+      },
+      {
+       "id": "dsa-map",
+       "text": "DSA patterns and templates",
+       "href": "../atlas/"
+      },
+      {
+       "id": "dsa-ladder",
+       "text": "Timed problem practice",
+       "href": "../ladder/"
+      },
+      {
+       "id": "os-procs",
+       "text": "Processes, threads, scheduling, `fork()`",
+       "href": "../mcq/#/d/os/proc"
+      },
+      {
+       "id": "cn-tcp",
+       "text": "TCP, UDP, sockets and HTTP",
+       "href": "../guide/#ch08"
+      }
+     ]
+    },
+    {
+     "name": "Deep learning",
+     "items": [
+      {
+       "id": "dl-nn",
+       "text": "Neural network operations and backprop",
+       "guide": "deep-learning",
+       "ch": "01"
+      },
+      {
+       "id": "dl-tf",
+       "text": "CNNs and transformers",
+       "guide": "deep-learning",
+       "ch": "02"
+      },
+      {
+       "id": "dl-vision",
+       "text": "Detection, tracking, behaviour prediction and multimodal models",
+       "guide": "deep-learning",
+       "ch": "03"
+      }
+     ]
+    },
+    {
+     "name": "LLMs, agents and evals",
+     "items": [
+      {
+       "id": "llm-core",
+       "text": "Tokenization, attention and how LLMs are trained",
+       "guide": "llms",
+       "ch": "01"
+      },
+      {
+       "id": "llm-tune",
+       "text": "LoRA, QLoRA, RLHF and DPO",
+       "guide": "llms",
+       "ch": "02"
+      },
+      {
+       "id": "llm-serve",
+       "text": "Quantization and serving with vLLM or TGI",
+       "guide": "llms",
+       "ch": "03"
+      },
+      {
+       "id": "ag-loop",
+       "text": "The agent loop: tools, planning, context and memory",
+       "guide": "agents",
+       "ch": "01"
+      },
+      {
+       "id": "ag-rag",
+       "text": "RAG: chunking, embeddings, hybrid search and re-ranking",
+       "guide": "agents",
+       "ch": "02"
+      },
+      {
+       "id": "ag-evals",
+       "text": "Evals, guardrails and multi-agent systems",
+       "guide": "agents",
+       "ch": "03"
+      },
+      {
+       "id": "ag-coding",
+       "text": "Working effectively with agentic coding tools",
+       "guide": "agents",
+       "ch": "04"
+      }
+     ]
+    },
+    {
+     "name": "Reinforcement learning",
+     "items": [
+      {
+       "id": "rl-mdp",
+       "text": "MDPs, Q-learning and policy gradients",
+       "guide": "rl",
+       "ch": "01"
+      },
+      {
+       "id": "rl-bandit",
+       "text": "Bandits and offline RL",
+       "guide": "rl",
+       "ch": "02"
+      },
+      {
+       "id": "rl-env",
+       "text": "Designing RL environments",
+       "guide": "rl",
+       "ch": "03"
+      }
+     ]
+    },
+    {
+     "name": "Real-time speech and serving",
+     "items": [
+      {
+       "id": "sp-pipe",
+       "text": "VAD, ASR, TTS and diarization",
+       "guide": "speech",
+       "ch": "01"
+      },
+      {
+       "id": "sp-stream",
+       "text": "Streaming inference, WebRTC and latency budgets",
+       "guide": "speech",
+       "ch": "02"
+      },
+      {
+       "id": "sp-ops",
+       "text": "Docker, Kubernetes and monitoring ML services",
+       "guide": "speech",
+       "ch": "03"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sde",
+   "name": "Software engineering",
+   "blurb": "Backend, full-stack and platform roles: strong DSA, CS fundamentals, system design and clean object-oriented code.",
+   "groups": [
+    {
+     "name": "Coding rounds",
+     "items": [
+      {
+       "id": "dsa-map",
+       "text": "DSA patterns and templates",
+       "href": "../atlas/"
+      },
+      {
+       "id": "dsa-ladder",
+       "text": "Timed problem practice",
+       "href": "../ladder/"
+      }
+     ]
+    },
+    {
+     "name": "CS fundamentals",
+     "items": [
+      {
+       "id": "os-procs",
+       "text": "Processes, threads, scheduling, `fork()`",
+       "href": "../mcq/#/d/os/proc"
+      },
+      {
+       "id": "os-sync",
+       "text": "Synchronisation and deadlock",
+       "href": "../guide/#ch05"
+      },
+      {
+       "id": "os-mem",
+       "text": "Virtual memory and paging",
+       "href": "../mcq/#/d/os/vm"
+      },
+      {
+       "id": "cn-tcp",
+       "text": "TCP, UDP, sockets and HTTP",
+       "href": "../guide/#ch08"
+      },
+      {
+       "id": "sql-joins",
+       "text": "SQL joins and window functions",
+       "href": "../mcq/#/d/sql/window"
+      },
+      {
+       "id": "sql-txn",
+       "text": "Transactions and isolation",
+       "href": "../mcq/#/d/sql/txn"
+      },
+      {
+       "id": "sql-index",
+       "text": "Indexing",
+       "href": "../mcq/#/d/sql/index"
+      },
+      {
+       "id": "cn-infra",
+       "text": "Load balancers, CDNs and proxies",
+       "href": "../mcq/#/d/networks/infra"
+      }
+     ]
+    },
+    {
+     "name": "Languages",
+     "items": [
+      {
+       "id": "java-jmm",
+       "text": "Java: JVM, memory model and collections",
+       "href": "../langs/java/#ch01"
+      },
+      {
+       "id": "py-object",
+       "text": "Python object model",
+       "href": "../langs/python/#ch01"
+      },
+      {
+       "id": "cpp-objects",
+       "text": "C++ object model and lifetime",
+       "href": "../guide/#ch01"
+      }
+     ]
+    },
+    {
+     "name": "Design",
+     "items": [
+      {
+       "id": "sd-core",
+       "text": "Caching, queues, consistency and scaling",
+       "guide": "system-design",
+       "ch": "01"
+      },
+      {
+       "id": "sd-rel",
+       "text": "Idempotency, rate limits and high availability",
+       "guide": "system-design",
+       "ch": "02"
+      },
+      {
+       "id": "sd-pay",
+       "text": "Ledgers, payments and real-time fraud detection",
+       "guide": "system-design",
+       "ch": "03"
+      },
+      {
+       "id": "sw-lld",
+       "text": "OOP, low-level design and design patterns",
+       "guide": "software-design",
+       "ch": "01"
+      },
+      {
+       "id": "sw-web",
+       "text": "MVC, REST and web fundamentals",
+       "guide": "software-design",
+       "ch": "02"
+      },
+      {
+       "id": "sw-sdlc",
+       "text": "Testing, CI/CD and Agile",
+       "guide": "software-design",
+       "ch": "03"
+      }
+     ]
+    },
+    {
+     "name": "Other rounds",
+     "items": [
+      {
+       "id": "ap-quant",
+       "text": "Aptitude: quantitative, logic and verbal",
+       "guide": "aptitude",
+       "ch": "01"
+      },
+      {
+       "id": "ap-hr",
+       "text": "HR, culture fit and group discussion",
+       "guide": "aptitude",
+       "ch": "02"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "data",
+   "name": "Data science & analytics",
+   "blurb": "Turning large datasets into decisions: statistics, modelling, experimentation and communicating results to clients.",
+   "groups": [
+    {
+     "name": "Data handling",
+     "items": [
+      {
+       "id": "sql-joins",
+       "text": "SQL joins and window functions",
+       "href": "../mcq/#/d/sql/window"
+      },
+      {
+       "id": "sql-classic",
+       "text": "Classic SQL interview queries",
+       "href": "../mcq/#/d/sql/classic"
+      },
+      {
+       "id": "da-pandas",
+       "text": "pandas and Spark",
+       "guide": "data-analytics",
+       "ch": "01"
+      }
+     ]
+    },
+    {
+     "name": "Statistics and modelling",
+     "items": [
+      {
+       "id": "ml-math",
+       "text": "Probability, linear algebra and optimisation",
+       "guide": "ml-foundations",
+       "ch": "01"
+      },
+      {
+       "id": "ml-classic",
+       "text": "Classical ML: linear models, trees, ensembles, clustering",
+       "guide": "ml-foundations",
+       "ch": "02"
+      },
+      {
+       "id": "ml-eval",
+       "text": "Validation, metrics and forecasting",
+       "guide": "ml-foundations",
+       "ch": "03"
+      },
+      {
+       "id": "da-stats",
+       "text": "Regression, bootstrapping, survival and choice models",
+       "guide": "data-analytics",
+       "ch": "02"
+      },
+      {
+       "id": "da-exp",
+       "text": "Experiment design and A/B testing",
+       "guide": "data-analytics",
+       "ch": "03"
+      }
+     ]
+    },
+    {
+     "name": "Business communication",
+     "items": [
+      {
+       "id": "da-case",
+       "text": "Business cases, dashboards and presenting insights",
+       "guide": "data-analytics",
+       "ch": "04"
+      },
+      {
+       "id": "ap-quant",
+       "text": "Aptitude: quantitative, logic and verbal",
+       "guide": "aptitude",
+       "ch": "01"
+      },
+      {
+       "id": "ap-hr",
+       "text": "HR, culture fit and group discussion",
+       "guide": "aptitude",
+       "ch": "02"
+      }
+     ]
+    },
+    {
+     "name": "Applied GenAI",
+     "items": [
+      {
+       "id": "ag-rag",
+       "text": "RAG: chunking, embeddings, hybrid search and re-ranking",
+       "guide": "agents",
+       "ch": "02"
+      },
+      {
+       "id": "ag-loop",
+       "text": "The agent loop: tools, planning, context and memory",
+       "guide": "agents",
+       "ch": "01"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "quant",
+   "name": "Quant research & trading systems",
+   "blurb": "Alpha research and low-latency infrastructure: probability, statistics, market microstructure and fast C++.",
+   "groups": [
+    {
+     "name": "Mathematics and finance",
+     "items": [
+      {
+       "id": "q-prob",
+       "text": "Probability for quant finance",
+       "href": "../mcq/#/d/finance/prob"
+      },
+      {
+       "id": "q-stoch",
+       "text": "Stochastic calculus and GBM",
+       "href": "../mcq/#/d/finance/stoch"
+      },
+      {
+       "id": "q-ts",
+       "text": "Time series and forecasting",
+       "href": "../mcq/#/d/finance/timeseries"
+      },
+      {
+       "id": "q-vol",
+       "text": "Volatility models and backtesting",
+       "href": "../mcq/#/d/finance/volmodels"
+      },
+      {
+       "id": "q-opt",
+       "text": "Option pricing",
+       "href": "../mcq/#/d/finance/optpricing"
+      },
+      {
+       "id": "q-greeks",
+       "text": "The Greeks",
+       "href": "../mcq/#/d/finance/greeks"
+      }
+     ]
+    },
+    {
+     "name": "Systems and low latency",
+     "items": [
+      {
+       "id": "cpp-objects",
+       "text": "C++ object model and lifetime",
+       "href": "../guide/#ch01"
+      },
+      {
+       "id": "cpp-moves",
+       "text": "Move semantics",
+       "href": "../guide/#ch20"
+      },
+      {
+       "id": "cpp-cachealloc",
+       "text": "Cache-friendly allocation",
+       "href": "../guide/#ch19"
+      },
+      {
+       "id": "ca-cache",
+       "text": "Caches and cache-friendly code",
+       "guide": "comp-arch",
+       "ch": "02"
+      },
+      {
+       "id": "ca-mesi",
+       "text": "Cache coherence and memory ordering",
+       "guide": "comp-arch",
+       "ch": "03"
+      },
+      {
+       "id": "dsa-map",
+       "text": "DSA patterns and templates",
+       "href": "../atlas/"
+      }
+     ]
+    },
+    {
+     "name": "Markets",
+     "items": [
+      {
+       "id": "mm-book",
+       "text": "Order books and market microstructure",
+       "guide": "markets",
+       "ch": "01"
+      },
+      {
+       "id": "mm-alpha",
+       "text": "Alpha research and backtesting pitfalls",
+       "guide": "markets",
+       "ch": "02"
+      },
+      {
+       "id": "mm-ll",
+       "text": "Market making, FIX and low-latency systems",
+       "guide": "markets",
+       "ch": "03"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "rounds": [
+  {
+   "round": "Online coding test",
+   "tests": "DSA under time pressure, sometimes language or domain MCQs.",
+   "prep": "Timed sets on the [ladder](../ladder/), and revise [patterns](../atlas/). Practise in the language the test allows."
+  },
+  {
+   "round": "Aptitude test",
+   "tests": "Arithmetic, logic, data interpretation and verbal reasoning at speed.",
+   "prep": "Short daily timed sets. Learn when to skip a question."
+  },
+  {
+   "round": "Technical interview",
+   "tests": "Depth on your resume and fundamentals, plus live coding.",
+   "prep": "Explain every resume line down to its internals, and answer drills out loud."
+  },
+  {
+   "round": "Research discussion",
+   "tests": "How you frame problems, read papers, design experiments and evaluate results.",
+   "prep": "Prepare to walk through one project: hypothesis, baseline, metric, failure and what you would try next."
+  },
+  {
+   "round": "Essay",
+   "tests": "Motivation, clear writing and fit with the team's technical area.",
+   "prep": "Write about a specific system you built and link it to the role's technical field. Use your own words and examples."
+  },
+  {
+   "round": "Problem decomposition",
+   "tests": "Breaking an ambiguous business problem into a scoped technical plan.",
+   "prep": "Practise out loud: clarify the goal, choose a metric, list assumptions, propose the smallest useful system."
+  },
+  {
+   "round": "Group discussion",
+   "tests": "Structured reasoning and how you work with others.",
+   "prep": "Make one clear point at a time, build on others' points and summarise near the end."
+  },
+  {
+   "round": "HR or culture fit",
+   "tests": "Motivation, ownership, teamwork and location or relocation fit.",
+   "prep": "Prepare stories about a failure, a conflict and ownership. Research the company before each round."
+  }
+ ]
+}

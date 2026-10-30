@@ -7,6 +7,7 @@ One site for placement and interview prep, published at **https://nischalpendurt
 | `/` | Hub landing page with progress from each tool | `index.html` |
 | `/guide/` | C++ / OS / Networks interview guide | `guide/index.html` |
 | `/langs/` | Language internals: Python, Java, Go, Rust | `langs/` (built from `langs/content/`) |
+| `/topics/` | Role-based roadmaps and topic guides: embedded, compilers, ML, system design, aptitude | `topics/` (built from `topics/content/`) |
 | `/mcq/` | Placement MCQ Prep (2,363 questions) | `mcq/` |
 | `/atlas/` | CP Atlas: pattern map, templates, problem log, revision queue | `atlas/` (built from `atlas/content/`) |
 | `/ladder/` | Codeforces 2000–2400 ladder, hard drill, segment tree & BIT, PYQ tracker | `ladder/` |
@@ -30,6 +31,10 @@ Push to `main`. `.github/workflows/pages.yml` checks the atlas templates, runs `
 ## Language internals guides
 
 `langs/` holds the Python, Java, Go and Rust guides, built from Markdown by `node langs/build.mjs`, which runs every example and records its output. See `langs/README.md` for the chapter format.
+
+## Topic guides
+
+`topics/` holds the role roadmaps (`tracks.json`) and topic guides. It uses the same chapter format and build as `langs/`: `node langs/build.mjs --root topics`. See `topics/README.md`.
 
 ## Logging a CP Atlas problem
 ```bash
