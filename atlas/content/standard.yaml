@@ -26,3 +26,19 @@
 - {platform: LC, id: strange-printer, title: Strange Printer, rating: Hard, variants: [interval-dp]}
 - {platform: CF, id: 1114D, title: Flood Fill, rating: 1900, variants: [interval-dp]}
 - {platform: CF, id: 1132F, title: Clear the String, rating: 2000, variants: [interval-dp]}
+
+# ---- digit-dp
+- {platform: CSES, id: 2220, title: Counting Numbers, variants: [digit-dp]}
+- {platform: CF, id: 1036C, title: Classy Numbers, rating: 1900, variants: [digit-dp]}
+- {platform: LC, id: numbers-at-most-n-given-digit-set, title: Numbers At Most N Given Digit Set, rating: Hard, variants: [digit-dp]}
+- {platform: LC, id: count-of-integers, title: Count of Integers, rating: Hard, variants: [digit-dp]}
+- {platform: CF, id: 628D, title: Magic Numbers, rating: 2200, variants: [digit-dp]}
+
+# ---- digit-dp-aggregate
+- {platform: LC, id: number-of-digit-one, title: Number of Digit One, rating: Hard, variants: [digit-dp-aggregate]}
+- {platform: LC, id: digit-count-in-range, title: Digit Count in Range, rating: Hard, variants: [digit-dp-aggregate]}
+- {platform: CF, id: 1073E, title: Segment Sum, rating: 2300, variants: [digit-dp-aggregate, digit-dp]}
+
+# ---- digit-dp-fix-target
+- {platform: CF, id: 55D, title: Beautiful numbers, rating: 2500, variants: [digit-dp-fix-target]}
+- {platform: LC, id: number-of-beautiful-integers-in-the-range, title: Number of Beautiful Integers in the Range, rating: Hard, variants: [digit-dp-fix-target, digit-dp]}

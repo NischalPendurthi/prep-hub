@@ -142,7 +142,9 @@
     - id: dp-digit
       title: Digit DP
       variants:
-        - {id: digit-dp, title: Digit DP}
+        - {id: digit-dp, title: "Digit DP: Count with a State"}
+        - {id: digit-dp-aggregate, title: "Digit DP: Sum over All Numbers"}
+        - {id: digit-dp-fix-target, title: "Digit DP: Fix the Unknown Target"}
     - id: dp-trees
       title: Trees
       variants:
