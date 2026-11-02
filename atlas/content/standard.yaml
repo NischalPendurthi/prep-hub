@@ -42,3 +42,22 @@
 # ---- digit-dp-fix-target
 - {platform: CF, id: 55D, title: Beautiful numbers, rating: 2500, variants: [digit-dp-fix-target]}
 - {platform: LC, id: number-of-beautiful-integers-in-the-range, title: Number of Beautiful Integers in the Range, rating: Hard, variants: [digit-dp-fix-target, digit-dp]}
+
+# ---- convex-hull-trick
+- {platform: CSES, id: 2084, title: Monster Game I, variants: [convex-hull-trick]}
+- {platform: CF, id: 319C, title: Kalila and Dimna in the Logging Industry, rating: 2100, variants: [convex-hull-trick]}
+- {platform: CF, id: 1083E, title: The Fair Nut and Rectangles, rating: 2400, variants: [convex-hull-trick]}
+- {platform: CF, id: 311B, title: Cats Transport, rating: 2400, variants: [convex-hull-trick, partition-dp]}
+- {platform: CF, id: 643C, title: Levels and Regions, rating: 2400, variants: [convex-hull-trick, expected-value-dp]}
+- {platform: CF, id: 1715E, title: Long Way Home, rating: 2400, variants: [convex-hull-trick, dijkstra]}
+- {platform: CF, id: 1137E, title: Train Car Selection, rating: 2700, variants: [convex-hull-trick]}
+- {platform: CF, id: 455E, title: Function, rating: 2900, variants: [convex-hull-trick]}
+
+# ---- li-chao-tree
+- {platform: CSES, id: 2085, title: Monster Game II, variants: [li-chao-tree]}
+- {platform: CF, id: 660F, title: Bear and Bowling 4, rating: 2500, variants: [li-chao-tree]}
+- {platform: CF, id: 678F, title: Lena and Queries, rating: 2500, variants: [li-chao-tree]}
+- {platform: CF, id: 631E, title: Product Sum, rating: 2600, variants: [li-chao-tree]}
+- {platform: CF, id: 1179D, title: Fedor Runs for President, rating: 2700, variants: [li-chao-tree, tree-dp]}
+- {platform: CF, id: 932F, title: Escape Through Leaf, rating: 2700, variants: [li-chao-tree, small-to-large]}
+- {platform: CF, id: 1303G, title: Sum of Prefix Sums, rating: 2700, variants: [li-chao-tree]}

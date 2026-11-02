@@ -167,6 +167,8 @@
       variants:
         - {id: dp-prefix-opt, title: Prefix-Sum Optimisation}
         - {id: dp-monotonic-queue, title: Monotonic-Queue Optimisation}
+        - {id: convex-hull-trick, title: Convex Hull Trick (Monotonic Deque)}
+        - {id: li-chao-tree, title: Li Chao Tree}
 
 - id: graphs
   title: Graphs
