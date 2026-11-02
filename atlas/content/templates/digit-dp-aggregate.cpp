@@ -42,7 +42,7 @@ void Solve(){
     auto f=[&](ll x)->ll{
         if(x<0)return 0;
         s=to_string(x);
-        return go(0,1,0).second;
+        return go(0,1,0).second+(D==0);  // the number 0 itself is written "0" but never sets started
     };
     cout<<f(b)-f(a-1)<<endl;
 }

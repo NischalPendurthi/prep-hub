@@ -13,6 +13,7 @@ idea: |
 complexity: "O(digits × |STATE| × 10) per query"
 pitfalls:
   - "Leading zeros are not written: for digit 0 you need `started`, and only count `d==D` once started."
+  - "…but the number 0 itself IS written as \"0\": with D = 0, add 1 in f(x) for every x ≥ 0."
   - "Under mod, subtract as ((f(r) - f(l-1)) % MOD + MOD) % MOD."
   - "Memoise the pair with a separate vis[] array; {-1,-1} sentinels get confused with real values under mod."
   - "Memo depends on D: reset vis whenever D changes."

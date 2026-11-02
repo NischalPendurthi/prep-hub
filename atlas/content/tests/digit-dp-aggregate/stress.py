@@ -3,7 +3,7 @@ import random, subprocess, sys
 exe = sys.argv[1]
 for it in range(300):
     hi = random.choice([30, 1000, 50000])
-    a = random.randint(0, hi)
+    a = random.choice([0, random.randint(0, hi)])  # ranges starting at 0 hit the "0" edge case
     b = random.randint(a, hi)
     d = random.randint(0, 9)  # d = 0 checks that leading zeros are not counted
     exp = sum(str(v).count(str(d)) for v in range(a, b + 1))
