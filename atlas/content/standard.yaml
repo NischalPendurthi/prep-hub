@@ -14,8 +14,8 @@
 - {platform: CF, id: 1313C2, title: Skyscrapers (hard version), rating: 1900, variants: [monotonic-stack]}
 
 # ---- bipartite-matching
-- {platform: CSES, id: 1696, title: School Dance, variants: [bipartite-matching]}
-- {platform: CF, id: 489B, title: BerSU Ball, rating: 1200, variants: [bipartite-matching]}
+- {platform: CSES, id: 1696, title: "School Dance", variants: [bipartite-matching, min-path-cover]}
+- {platform: CF, id: 489B, title: "BerSU Ball", rating: 1200, variants: [bipartite-matching, min-path-cover]}
 - {platform: LC, id: maximum-students-taking-exam, title: Maximum Students Taking Exam, rating: Hard, variants: [bipartite-matching, bitmask-dp]}
 - {platform: CF, id: 1139E, title: Maximize Mex, rating: 2400, variants: [bipartite-matching]}
 
@@ -61,3 +61,795 @@
 - {platform: CF, id: 1179D, title: Fedor Runs for President, rating: 2700, variants: [li-chao-tree, tree-dp]}
 - {platform: CF, id: 932F, title: Escape Through Leaf, rating: 2700, variants: [li-chao-tree, small-to-large]}
 - {platform: CF, id: 1303G, title: Sum of Prefix Sums, rating: 2700, variants: [li-chao-tree]}
+
+# ---- prefix-sum-1d
+- {platform: CSES, id: 1646, title: Static Range Sum Queries, variants: [prefix-sum-1d]}
+- {platform: CF, id: 313B, title: Ilya and Queries, rating: 1100, variants: [prefix-sum-1d]}
+- {platform: CF, id: 433B, title: Kuriyama Mirai's Stones, rating: 1200, variants: [prefix-sum-1d]}
+- {platform: CF, id: 466C, title: Number of Ways, rating: 1700, variants: [prefix-sum-1d]}
+- {platform: CF, id: 1197D, title: "Yet Another Subarray Problem", rating: 1900, variants: [prefix-sum-1d, state-machine-dp]}
+- {platform: CF, id: 2026D, title: Sums of Segments, rating: 1900, variants: [prefix-sum-1d]}
+
+# ---- prefix-sum-2d
+- {platform: CSES, id: 1652, title: Forest Queries, variants: [prefix-sum-2d]}
+- {platform: LC, id: range-sum-query-2d-immutable, title: Range Sum Query 2D - Immutable, rating: Medium, variants: [prefix-sum-2d]}
+- {platform: CF, id: 635A, title: Orchestra, rating: 1100, variants: [prefix-sum-2d]}
+- {platform: CF, id: 1722E, title: Counting Rectangles, rating: 1600, variants: [prefix-sum-2d]}
+- {platform: CF, id: 1731D, title: Valiant's New Map, rating: 1700, variants: [prefix-sum-2d, bs-on-answer]}
+- {platform: CF, id: 1301E, title: Nanosoft, rating: 2500, variants: [prefix-sum-2d]}
+
+# ---- difference-array
+- {platform: LC, id: corporate-flight-bookings, title: Corporate Flight Bookings, rating: Medium, variants: [difference-array]}
+- {platform: CF, id: 816B, title: Karen and Coffee, rating: 1400, variants: [difference-array]}
+- {platform: CF, id: 295A, title: "Greg and Array", rating: 1400, variants: [difference-array, fenwick-range-point]}
+- {platform: CF, id: 276C, title: "Little Girl and Maximum Sum", rating: 1500, variants: [difference-array, fenwick-range-point]}
+- {platform: CF, id: 1343D, title: Constant Palindrome Sum, rating: 1700, variants: [difference-array]}
+- {platform: CF, id: 1661D, title: Progressions Covering, rating: 1900, variants: [difference-array]}
+
+# ---- prefix-xor
+- {platform: CSES, id: 1650, title: Range Xor Queries, variants: [prefix-xor]}
+- {platform: CF, id: 1847C, title: "Vampiric Powers, anyone?", rating: 1400, variants: [prefix-xor]}
+- {platform: CF, id: 1109A, title: Sasha and a Bit of Relax, rating: 1600, variants: [prefix-xor, prefix-hashmap-count]}
+- {platform: CF, id: 1879D, title: Sum of XOR Functions, rating: 1700, variants: [prefix-xor, contribution-technique]}
+- {platform: CF, id: 1968F, title: Equal XOR Segments, rating: 1800, variants: [prefix-xor]}
+- {platform: CF, id: 617E, title: XOR and Favorite Number, rating: 2200, variants: [prefix-xor]}
+
+# ---- prefix-hashmap-count
+- {platform: CSES, id: 1661, title: Subarray Sums II, variants: [prefix-hashmap-count]}
+- {platform: LC, id: subarray-sum-equals-k, title: Subarray Sum Equals K, rating: Medium, variants: [prefix-hashmap-count]}
+- {platform: CF, id: 1520D, title: "Same Differences", rating: 1200, variants: [prefix-hashmap-count, fenwick-inversions]}
+- {platform: CF, id: 1398C, title: Good Subarrays, rating: 1600, variants: [prefix-hashmap-count]}
+- {platform: CF, id: 1748C, title: Zero-Sum Prefixes, rating: 1600, variants: [prefix-hashmap-count]}
+- {platform: CF, id: 1731C, title: Even Subarrays, rating: 1700, variants: [prefix-hashmap-count, prefix-xor]}
+
+# ---- two-pointers-opposite
+- {platform: CSES, id: 1090, title: Ferris Wheel, variants: [two-pointers-opposite]}
+- {platform: LC, id: container-with-most-water, title: Container With Most Water, rating: Medium, variants: [two-pointers-opposite]}
+- {platform: CF, id: 1006C, title: Three Parts of the Array, rating: 1200, variants: [two-pointers-opposite]}
+- {platform: CF, id: 1793C, title: Dora and Search, rating: 1200, variants: [two-pointers-opposite]}
+- {platform: CF, id: 1538C, title: "Number of Pairs", rating: 1300, variants: [two-pointers-opposite, bs-bounds]}
+- {platform: CF, id: 1324D, title: "Pair of Topics", rating: 1400, variants: [two-pointers-opposite, bs-bounds]}
+
+# ---- two-pointers-same-dir
+- {platform: CSES, id: 1660, title: Subarray Sums I, variants: [two-pointers-same-dir]}
+- {platform: CF, id: 279B, title: Books, rating: 1400, variants: [two-pointers-same-dir]}
+- {platform: CF, id: 1462E2, title: "Close Tuples (hard version)", rating: 1700, variants: [two-pointers-same-dir, ncr-factorials]}
+- {platform: CF, id: 1777C, title: Quiz Master, rating: 1700, variants: [two-pointers-same-dir]}
+- {platform: CF, id: 1133E, title: K Balanced Teams, rating: 1800, variants: [two-pointers-same-dir]}
+- {platform: CF, id: 1555E, title: "Boring Segments", rating: 2100, variants: [two-pointers-same-dir, segtree-descent, segtree-lazy]}
+
+# ---- window-fixed
+- {platform: CSES, id: 3222, title: Sliding Window Distinct Values, variants: [window-fixed]}
+- {platform: CF, id: 1690D, title: Black and White Stripe, rating: 1000, variants: [window-fixed]}
+- {platform: CF, id: 363B, title: Fence, rating: 1100, variants: [window-fixed]}
+- {platform: CF, id: 1196D2, title: RGB Substring (hard version), rating: 1600, variants: [window-fixed]}
+- {platform: CF, id: 1073C, title: Vasya and Robot, rating: 1800, variants: [window-fixed, bs-on-answer]}
+- {platform: CF, id: 954G, title: Castle Defense, rating: 2000, variants: [window-fixed, bs-on-answer]}
+
+# ---- window-variable
+- {platform: CSES, id: 1141, title: Playlist, variants: [window-variable]}
+- {platform: CF, id: 1354B, title: Ternary String, rating: 1200, variants: [window-variable]}
+- {platform: CF, id: 602B, title: Approximating a Constant Range, rating: 1400, variants: [window-variable]}
+- {platform: CF, id: 616D, title: Longest k-Good Segment, rating: 1600, variants: [window-variable]}
+- {platform: CF, id: 1611F, title: ATM and Students, rating: 1800, variants: [window-variable]}
+- {platform: CF, id: 6E, title: Exposition, rating: 1900, variants: [window-variable]}
+
+# ---- window-at-most-k
+- {platform: CSES, id: 2428, title: Distinct Values Subarrays II, variants: [window-at-most-k]}
+- {platform: LC, id: subarrays-with-k-different-integers, title: Subarrays with K Different Integers, rating: Hard, variants: [window-at-most-k]}
+- {platform: LC, id: count-number-of-nice-subarrays, title: Count Number of Nice Subarrays, rating: Medium, variants: [window-at-most-k]}
+- {platform: LC, id: binary-subarrays-with-sum, title: Binary Subarrays With Sum, rating: Medium, variants: [window-at-most-k]}
+- {platform: CF, id: 1736C1, title: Good Subarrays (Easy Version), rating: 1300, variants: [window-at-most-k]}
+
+# ---- contribution-technique
+- {platform: LC, id: sum-of-subarray-ranges, title: Sum of Subarray Ranges, rating: Medium, variants: [contribution-technique, monotonic-stack]}
+- {platform: CF, id: 1648A, title: Weird Sum, rating: 1400, variants: [contribution-technique]}
+- {platform: CF, id: 817D, title: Imbalanced Array, rating: 1900, variants: [contribution-technique, monotonic-stack]}
+- {platform: CF, id: 1009E, title: Intercity Travelling, rating: 2000, variants: [contribution-technique]}
+- {platform: CF, id: 1988E, title: Range Minimum Sum, rating: 2300, variants: [contribution-technique]}
+
+# ---- bs-bounds
+- {platform: CSES, id: 1091, title: Concert Tickets, variants: [bs-bounds]}
+- {platform: CF, id: 706B, title: Interesting drink, rating: 1100, variants: [bs-bounds]}
+- {platform: CF, id: 600B, title: Queries about less or equal elements, rating: 1300, variants: [bs-bounds]}
+- {platform: CF, id: 895B, title: XK Segments, rating: 1700, variants: [bs-bounds]}
+
+# ---- bs-on-answer
+- {platform: CSES, id: 1620, title: Factory Machines, variants: [bs-on-answer]}
+- {platform: LC, id: koko-eating-bananas, title: Koko Eating Bananas, rating: Medium, variants: [bs-on-answer]}
+- {platform: CF, id: 1201C, title: Maximum Median, rating: 1400, variants: [bs-on-answer]}
+- {platform: CF, id: 670D2, title: Magic Powder - 2, rating: 1500, variants: [bs-on-answer]}
+- {platform: CF, id: 371C, title: Hamburgers, rating: 1600, variants: [bs-on-answer]}
+- {platform: CF, id: 1370D, title: Odd-Even Subsequence, rating: 2000, variants: [bs-on-answer]}
+- {platform: CF, id: 1288D, title: Minimax Problem, rating: 2000, variants: [bs-on-answer, bitmask-dp]}
+
+# ---- bs-on-reals
+- {platform: CF, id: 780B, title: The Meeting Place Cannot Be Changed, rating: 1600, variants: [bs-on-reals]}
+- {platform: CF, id: 1730B, title: Meeting on the Line, rating: 1600, variants: [bs-on-reals]}
+- {platform: CF, id: 939E, title: Maximize!, rating: 1800, variants: [bs-on-reals]}
+- {platform: CF, id: 1059D, title: Nature Reserve, rating: 2200, variants: [bs-on-reals, geometry-basics]}
+
+# ---- sweep-line-events
+- {platform: CSES, id: 1619, title: Restaurant Customers, variants: [sweep-line-events]}
+- {platform: CF, id: 1000C, title: Covered Points Count, rating: 1700, variants: [sweep-line-events, coordinate-compression]}
+- {platform: CF, id: 1249D2, title: Too Many Segments (hard version), rating: 1800, variants: [sweep-line-events]}
+- {platform: CF, id: 1420D, title: Rescue Nibel!, rating: 1800, variants: [sweep-line-events, ncr-factorials]}
+- {platform: LC, id: the-skyline-problem, title: The Skyline Problem, rating: Hard, variants: [sweep-line-events]}
+
+# ---- coordinate-compression
+- {platform: CSES, id: 1144, title: Salary Queries, variants: [coordinate-compression, fenwick-point-range]}
+- {platform: LC, id: rank-transform-of-an-array, title: Rank Transform of an Array, rating: Easy, variants: [coordinate-compression]}
+- {platform: CF, id: 1915F, title: "Greetings", rating: 1500, variants: [coordinate-compression, fenwick-inversions, pbds-order-statistics, fenwick-point-range]}
+- {platform: CF, id: 652D, title: Nested Segments, rating: 1800, variants: [coordinate-compression]}
+- {platform: CF, id: 1311F, title: Moving Points, rating: 1900, variants: [coordinate-compression]}
+- {platform: CF, id: 61E, title: "Enemy is weak", rating: 1900, variants: [coordinate-compression, pbds-order-statistics, fenwick-inversions]}
+
+# ---- interval-merge
+- {platform: LC, id: merge-intervals, title: Merge Intervals, rating: Medium, variants: [interval-merge]}
+- {platform: LC, id: insert-interval, title: Insert Interval, rating: Medium, variants: [interval-merge]}
+- {platform: LC, id: interval-list-intersections, title: Interval List Intersections, rating: Medium, variants: [interval-merge]}
+- {platform: CF, id: 976C, title: Nested Segments, rating: 1500, variants: [interval-merge]}
+- {platform: CF, id: 1029C, title: "Maximal Intersection", rating: 1600, variants: [interval-merge, interval-greedy]}
+- {platform: CF, id: 612D, title: The Union of k-Segments, rating: 1800, variants: [interval-merge, sweep-line-events]}
+
+# ---- bit-tricks
+- {platform: CSES, id: 1146, title: Counting Bits, variants: [bit-tricks]}
+- {platform: CF, id: 1420B, title: Rock and Lever, rating: 1200, variants: [bit-tricks]}
+- {platform: CF, id: 1362C, title: Johnny and Another Rating Drop, rating: 1400, variants: [bit-tricks]}
+- {platform: CF, id: 1516B, title: AGAGA XOOORRR, rating: 1500, variants: [bit-tricks, prefix-xor]}
+- {platform: CF, id: 1325D, title: "Ehab the Xorcist", rating: 1700, variants: [bit-tricks, constructive]}
+- {platform: CF, id: 1415D, title: XOR-gun, rating: 2000, variants: [bit-tricks]}
+
+# ---- submask-enumeration
+- {platform: CF, id: 1097B, title: Petr and a Combination Lock, rating: 1200, variants: [submask-enumeration]}
+- {platform: LC, id: fair-distribution-of-cookies, title: Fair Distribution of Cookies, rating: Medium, variants: [submask-enumeration]}
+- {platform: LC, id: minimum-number-of-work-sessions-to-finish-the-tasks, title: Minimum Number of Work Sessions to Finish the Tasks, rating: Medium, variants: [submask-enumeration, bitmask-dp]}
+- {platform: LC, id: parallel-courses-ii, title: Parallel Courses II, rating: Hard, variants: [submask-enumeration, bitmask-dp]}
+- {platform: CF, id: 165E, title: Compatible Numbers, rating: 2200, variants: [submask-enumeration, sos-dp]}
+- {platform: CF, id: 1234F, title: Yet Another Substring Reverse, rating: 2200, variants: [submask-enumeration, sos-dp]}
+
+# ---- bitwise-greedy
+- {platform: CF, id: 1669H, title: Maximal AND, rating: 1300, variants: [bitwise-greedy]}
+- {platform: CF, id: 1918C, title: XOR-distance, rating: 1400, variants: [bitwise-greedy]}
+- {platform: CF, id: 276D, title: Little Girl and Maximum XOR, rating: 1700, variants: [bitwise-greedy]}
+- {platform: CF, id: 1721D, title: Maximum AND, rating: 1800, variants: [bitwise-greedy]}
+- {platform: CF, id: 1946D, title: Birthday Gift, rating: 1900, variants: [bitwise-greedy]}
+
+# ---- meet-in-the-middle
+- {platform: CSES, id: 1628, title: Meet in the Middle, variants: [meet-in-the-middle]}
+- {platform: CF, id: 888E, title: Maximum Subsequence, rating: 1800, variants: [meet-in-the-middle]}
+- {platform: CF, id: 1006F, title: Xor-Paths, rating: 2100, variants: [meet-in-the-middle]}
+- {platform: CF, id: 525E, title: Anya and Cubes, rating: 2100, variants: [meet-in-the-middle]}
+- {platform: LC, id: closest-subsequence-sum, title: Closest Subsequence Sum, rating: Hard, variants: [meet-in-the-middle]}
+- {platform: LC, id: partition-array-into-two-arrays-to-minimize-sum-difference, title: Partition Array Into Two Arrays to Minimize Sum Difference, rating: Hard, variants: [meet-in-the-middle]}
+
+# ---- stack-simulation
+- {platform: CF, id: 1374C, title: Move Brackets, rating: 1000, variants: [stack-simulation]}
+- {platform: CF, id: 81A, title: Plug-in, rating: 1400, variants: [stack-simulation]}
+- {platform: CF, id: 1506D, title: Epic Transformation, rating: 1400, variants: [stack-simulation]}
+- {platform: CF, id: 5C, title: Longest Regular Bracket Sequence, rating: 1900, variants: [stack-simulation]}
+- {platform: LC, id: longest-valid-parentheses, title: Longest Valid Parentheses, rating: Hard, variants: [stack-simulation]}
+- {platform: LC, id: asteroid-collision, title: Asteroid Collision, rating: Medium, variants: [stack-simulation]}
+
+# ---- monotonic-deque
+- {platform: LC, id: sliding-window-maximum, title: Sliding Window Maximum, rating: Hard, variants: [monotonic-deque]}
+- {platform: LC, id: shortest-subarray-with-sum-at-least-k, title: Shortest Subarray with Sum at Least K, rating: Hard, variants: [monotonic-deque]}
+- {platform: CF, id: 940E, title: Cashback, rating: 2000, variants: [monotonic-deque, dp-monotonic-queue]}
+- {platform: CF, id: 487B, title: Strip, rating: 2000, variants: [monotonic-deque, dp-monotonic-queue]}
+- {platform: CF, id: 1077F2, title: Pictures with Kittens (hard version), rating: 2100, variants: [monotonic-deque, dp-monotonic-queue]}
+- {platform: CF, id: 372C, title: Watching Fireworks is Fun, rating: 2100, variants: [monotonic-deque, dp-monotonic-queue]}
+
+# ---- heap-top-k
+- {platform: LC, id: kth-largest-element-in-a-stream, title: Kth Largest Element in a Stream, rating: Easy, variants: [heap-top-k]}
+- {platform: LC, id: top-k-frequent-elements, title: Top K Frequent Elements, rating: Medium, variants: [heap-top-k]}
+- {platform: LC, id: maximum-subsequence-score, title: Maximum Subsequence Score, rating: Medium, variants: [heap-top-k]}
+- {platform: CF, id: 1140C, title: Playlist, rating: 1600, variants: [heap-top-k]}
+- {platform: CF, id: 1526C2, title: Potions (Hard Version), rating: 1600, variants: [heap-top-k, heap-regret-greedy]}
+- {platform: CF, id: 1271D, title: Portals, rating: 2100, variants: [heap-top-k]}
+
+# ---- two-heaps-median
+- {platform: LC, id: find-median-from-data-stream, title: Find Median from Data Stream, rating: Hard, variants: [two-heaps-median]}
+- {platform: LC, id: sliding-window-median, title: Sliding Window Median, rating: Hard, variants: [two-heaps-median]}
+- {platform: CSES, id: 1076, title: Sliding Window Median, variants: [two-heaps-median]}
+- {platform: CSES, id: 1077, title: Sliding Window Cost, variants: [two-heaps-median, multiset-budget]}
+- {platform: CF, id: 713C, title: Sonya and Problem Wihtout a Legend, rating: 2300, variants: [two-heaps-median]}
+- {platform: CF, id: 1520E, title: Arranging The Sheep, rating: 1400, variants: [two-heaps-median]}
+
+# ---- k-way-merge
+- {platform: LC, id: merge-k-sorted-lists, title: Merge k Sorted Lists, rating: Hard, variants: [k-way-merge]}
+- {platform: LC, id: smallest-range-covering-elements-from-k-lists, title: Smallest Range Covering Elements from K Lists, rating: Hard, variants: [k-way-merge]}
+- {platform: LC, id: find-k-pairs-with-smallest-sums, title: Find K Pairs with Smallest Sums, rating: Medium, variants: [k-way-merge]}
+- {platform: LC, id: kth-smallest-element-in-a-sorted-matrix, title: Kth Smallest Element in a Sorted Matrix, rating: Medium, variants: [k-way-merge]}
+- {platform: CF, id: 1574D, title: The Strongest Build, rating: 2000, variants: [k-way-merge]}
+
+# ---- heap-scheduling
+- {platform: CSES, id: 1164, title: Room Allocation, variants: [heap-scheduling]}
+- {platform: LC, id: single-threaded-cpu, title: "Single-Threaded CPU", rating: Medium, variants: [heap-scheduling, scheduling-simulation]}
+- {platform: LC, id: meeting-rooms-iii, title: "Meeting Rooms III", rating: Hard, variants: [heap-scheduling, scheduling-simulation]}
+- {platform: CF, id: 1353D, title: Constructing the Array, rating: 1600, variants: [heap-scheduling]}
+- {platform: CF, id: 1061D, title: TV Shows, rating: 2000, variants: [heap-scheduling]}
+
+# ---- multiset-budget
+- {platform: LC, id: divide-an-array-into-subarrays-with-minimum-cost-ii, title: Divide an Array Into Subarrays With Minimum Cost II, rating: Hard, variants: [multiset-budget]}
+- {platform: CF, id: 1185C2, title: Exam in BerSU (hard version), rating: 1700, variants: [multiset-budget]}
+- {platform: LC, id: finding-mk-average, title: Finding MK Average, rating: Hard, variants: [multiset-budget]}
+- {platform: CF, id: 1185C1, title: Exam in BerSU (easy version), rating: 1200, variants: [multiset-budget]}
+
+# ---- pbds-order-statistics
+- {platform: CSES, id: 2163, title: "Josephus Problem II", variants: [pbds-order-statistics, fenwick-kth]}
+- {platform: CSES, id: 1749, title: "List Removals", variants: [pbds-order-statistics, fenwick-kth]}
+- {platform: CF, id: 459D, title: "Pashmak and Parmida's problem", rating: 1800, variants: [pbds-order-statistics, fenwick-point-range]}
+- {platform: LC, id: count-of-smaller-numbers-after-self, title: "Count of Smaller Numbers After Self", rating: Hard, variants: [pbds-order-statistics, fenwick-inversions]}
+
+# ---- dsu-basic
+- {platform: CSES, id: 1676, title: Road Construction, variants: [dsu-basic]}
+- {platform: CF, id: 1167C, title: News Distribution, rating: 1400, variants: [dsu-basic]}
+- {platform: CF, id: 277A, title: Learning Languages, rating: 1400, variants: [dsu-basic]}
+- {platform: CF, id: 1559D1, title: Mocha and Diana (Easy Version), rating: 1400, variants: [dsu-basic]}
+- {platform: CF, id: 1209D, title: Cow and Snacks, rating: 1700, variants: [dsu-basic]}
+- {platform: CF, id: 25D, title: Roads not only in Berland, rating: 1900, variants: [dsu-basic]}
+
+# ---- dsu-offline-reverse
+- {platform: CSES, id: 1677, title: Network Breakdown, variants: [dsu-offline-reverse]}
+- {platform: CF, id: 722C, title: Destroying Array, rating: 1600, variants: [dsu-offline-reverse]}
+- {platform: CF, id: 1213G, title: Path Queries, rating: 1800, variants: [dsu-offline-reverse]}
+- {platform: CF, id: 1618G, title: Trader Problem, rating: 2200, variants: [dsu-offline-reverse]}
+- {platform: CF, id: 1416D, title: Graph and Queries, rating: 2600, variants: [dsu-offline-reverse]}
+
+# ---- dsu-parity
+- {platform: CF, id: 1594D, title: The Number of Imposters, rating: 1700, variants: [dsu-parity]}
+- {platform: CF, id: 687A, title: NP-Hard Problem, rating: 1500, variants: [dsu-parity, bipartite-check]}
+- {platform: CF, id: 776D, title: The Door Problem, rating: 2000, variants: [dsu-parity]}
+- {platform: CF, id: 1615D, title: X(or)-mas Tree, rating: 2200, variants: [dsu-parity]}
+- {platform: CF, id: 1044D, title: Deduction Queries, rating: 2400, variants: [dsu-parity]}
+- {platform: LC, id: evaluate-division, title: Evaluate Division, rating: Medium, variants: [dsu-parity]}
+
+# ---- fenwick-point-range
+- {platform: CSES, id: 1648, title: Dynamic Range Sum Queries, variants: [fenwick-point-range]}
+- {platform: LC, id: range-sum-query-mutable, title: Range Sum Query - Mutable, rating: Medium, variants: [fenwick-point-range]}
+- {platform: CF, id: 1676H2, title: Maximum Crossings (Hard Version), rating: 1500, variants: [fenwick-point-range, fenwick-inversions]}
+- {platform: CF, id: 597C, title: Subsequences, rating: 1900, variants: [fenwick-point-range]}
+
+# ---- fenwick-range-point
+- {platform: CSES, id: 1651, title: Range Update Queries, variants: [fenwick-range-point]}
+- {platform: CF, id: 383C, title: Propagating tree, rating: 2000, variants: [fenwick-range-point, subtree-euler-tour]}
+
+# ---- fenwick-inversions
+- {platform: CF, id: 1430E, title: String Reversal, rating: 1900, variants: [fenwick-inversions]}
+- {platform: CF, id: 1585D, title: Yet Another Sorting Problem, rating: 1900, variants: [fenwick-inversions]}
+- {platform: CF, id: 911D, title: Inversion Counting, rating: 1800, variants: [fenwick-inversions]}
+
+# ---- fenwick-kth
+- {platform: CF, id: 1354D, title: Multiset, rating: 1900, variants: [fenwick-kth, segtree-descent]}
+- {platform: CF, id: 1227D2, title: Optimal Subsequences (Hard Version), rating: 1800, variants: [fenwick-kth]}
+- {platform: CF, id: 1946C, title: Tree Cutting, rating: 1600, variants: [fenwick-kth]}
+
+# ---- segtree-basic
+- {platform: CSES, id: 1649, title: Dynamic Range Minimum Queries, variants: [segtree-basic]}
+- {platform: CF, id: 339D, title: Xenia and Bit Operations, rating: 1700, variants: [segtree-basic]}
+- {platform: CF, id: 474F, title: Ant colony, rating: 2100, variants: [segtree-basic]}
+- {platform: CF, id: 1328D, title: Carousel, rating: 1800, variants: [segtree-basic]}
+- {platform: CF, id: 1179C, title: Serge and Dining Room, rating: 2200, variants: [segtree-basic, segtree-descent]}
+
+# ---- segtree-lazy
+- {platform: CSES, id: 1735, title: Range Updates and Sums, variants: [segtree-lazy]}
+- {platform: CF, id: 242E, title: XOR on Segment, rating: 2000, variants: [segtree-lazy]}
+- {platform: CF, id: 52C, title: Circular RMQ, rating: 2200, variants: [segtree-lazy]}
+- {platform: CF, id: 1114F, title: "Please, another Queries on Array?", rating: 2400, variants: [segtree-lazy]}
+- {platform: CF, id: 877E, title: Danil and a Part-time Job, rating: 2000, variants: [segtree-lazy, subtree-euler-tour]}
+- {platform: CF, id: 1108E2, title: Array and Segments (Hard version), rating: 2100, variants: [segtree-lazy]}
+
+# ---- segtree-descent
+- {platform: CSES, id: 1143, title: Hotel Queries, variants: [segtree-descent]}
+- {platform: CF, id: 1927D, title: "Find the Different Ones!", rating: 1300, variants: [segtree-descent]}
+- {platform: CF, id: 1520F2, title: Guess the K-th Zero (Hard version), rating: 2200, variants: [segtree-descent]}
+- {platform: CF, id: 1404C, title: Fixed Point Removal, rating: 2300, variants: [segtree-descent, fenwick-kth]}
+
+# ---- segtree-custom-merge
+- {platform: CSES, id: 1190, title: Subarray Sum Queries, variants: [segtree-custom-merge]}
+- {platform: CF, id: 380C, title: Sereja and Brackets, rating: 2000, variants: [segtree-custom-merge]}
+- {platform: CF, id: 1149C, title: Tree Generator™, rating: 2700, variants: [segtree-custom-merge]}
+- {platform: CF, id: 1567E, title: Non-Decreasing Dilemma, rating: 2200, variants: [segtree-custom-merge]}
+- {platform: CF, id: 1251D, title: Salary Changing, rating: 1900, variants: [segtree-custom-merge]}
+
+# ---- sparse-table-rmq
+- {platform: CSES, id: 1647, title: Static Range Minimum Queries, variants: [sparse-table-rmq]}
+- {platform: CF, id: 1548B, title: Integers Have Friends, rating: 1800, variants: [sparse-table-rmq, two-pointers-same-dir]}
+- {platform: CF, id: 689D, title: Friends and Subsequences, rating: 2100, variants: [sparse-table-rmq, bs-bounds]}
+- {platform: CF, id: 1454F, title: Array Partition, rating: 2100, variants: [sparse-table-rmq]}
+- {platform: CF, id: 1407D, title: Discrete Centrifugal Jumps, rating: 2200, variants: [sparse-table-rmq, monotonic-stack]}
+- {platform: CF, id: 1950E, title: Nearly Shortest Repeating Substring, rating: 1500, variants: [sparse-table-rmq]}
+
+# ---- trie-strings
+- {platform: CSES, id: 1731, title: Word Combinations, variants: [trie-strings]}
+- {platform: LC, id: implement-trie-prefix-tree, title: Implement Trie (Prefix Tree), rating: Medium, variants: [trie-strings]}
+- {platform: CF, id: 455B, title: A Lot of Games, rating: 1900, variants: [trie-strings, nim-grundy]}
+- {platform: CF, id: 271D, title: "Good Substrings", rating: 1800, variants: [trie-strings, rolling-hash]}
+- {platform: CF, id: 1902E, title: Collapsing Strings, rating: 1900, variants: [trie-strings]}
+
+# ---- binary-trie-xor
+- {platform: CSES, id: 1655, title: Maximum Xor Subarray, variants: [binary-trie-xor]}
+- {platform: CF, id: 706D, title: Vasiliy's Multiset, rating: 1800, variants: [binary-trie-xor]}
+- {platform: CF, id: 923C, title: Perfect Security, rating: 1800, variants: [binary-trie-xor]}
+- {platform: CF, id: 1980G, title: Yasya and the Mysterious Tree, rating: 2300, variants: [binary-trie-xor]}
+- {platform: CF, id: 817E, title: Choosing The Commander, rating: 2000, variants: [binary-trie-xor]}
+- {platform: CF, id: 1777F, title: Comfortably Numb, rating: 2400, variants: [binary-trie-xor]}
+
+# ---- sqrt-decomposition
+- {platform: CF, id: 13E, title: Holes, rating: 2700, variants: [sqrt-decomposition]}
+- {platform: CF, id: 785E, title: Anton and Permutation, rating: 2200, variants: [sqrt-decomposition]}
+- {platform: CF, id: 797E, title: Array Queries, rating: 2000, variants: [sqrt-decomposition]}
+- {platform: CF, id: 1207F, title: Remainder Problem, rating: 2100, variants: [sqrt-decomposition]}
+- {platform: CF, id: 86D, title: Powerful array, rating: 2200, variants: [sqrt-decomposition]}
+
+# ---- dp-linear
+- {platform: CSES, id: 1633, title: Dice Combinations, variants: [dp-linear]}
+- {platform: CSES, id: 1637, title: Removing Digits, variants: [dp-linear]}
+- {platform: LC, id: house-robber, title: House Robber, rating: Medium, variants: [dp-linear]}
+- {platform: CF, id: 1195C, title: Basketball Exercise, rating: 1400, variants: [dp-linear]}
+- {platform: CF, id: 455A, title: Boredom, rating: 1500, variants: [dp-linear]}
+- {platform: CF, id: 1324E, title: Sleeping Schedule, rating: 1700, variants: [dp-linear]}
+- {platform: CF, id: 1625C, title: Road Optimization, rating: 1700, variants: [dp-linear, partition-dp]}
+
+# ---- dp-grid
+- {platform: CSES, id: 1638, title: Grid Paths I, variants: [dp-grid]}
+- {platform: LC, id: maximal-square, title: Maximal Square, rating: Medium, variants: [dp-grid]}
+- {platform: CF, id: 429B, title: Working out, rating: 1600, variants: [dp-grid]}
+- {platform: CF, id: 1695C, title: Zero Path, rating: 1700, variants: [dp-grid]}
+- {platform: CF, id: 2B, title: The least round way, rating: 2000, variants: [dp-grid]}
+- {platform: CF, id: 559C, title: "Gerald and Giant Chess", rating: 2200, variants: [dp-grid, ncr-factorials, inclusion-exclusion]}
+
+# ---- knapsack-01
+- {platform: CSES, id: 1158, title: Book Shop, variants: [knapsack-01]}
+- {platform: LC, id: partition-equal-subset-sum, title: Partition Equal Subset Sum, rating: Medium, variants: [knapsack-01, subset-sum-bitset]}
+- {platform: CF, id: 1633D, title: Make Them Equal, rating: 1600, variants: [knapsack-01]}
+- {platform: CF, id: 19B, title: Checkout Assistant, rating: 1900, variants: [knapsack-01]}
+- {platform: CF, id: 366C, title: Dima and Salad, rating: 1900, variants: [knapsack-01]}
+- {platform: CF, id: 837D, title: Round Subset, rating: 2100, variants: [knapsack-01]}
+
+# ---- knapsack-unbounded
+- {platform: CSES, id: 1634, title: Minimizing Coins, variants: [knapsack-unbounded]}
+- {platform: CSES, id: 1635, title: Coin Combinations I, variants: [knapsack-unbounded]}
+- {platform: CSES, id: 1636, title: Coin Combinations II, variants: [knapsack-unbounded]}
+- {platform: LC, id: coin-change-ii, title: Coin Change II, rating: Medium, variants: [knapsack-unbounded]}
+- {platform: CF, id: 189A, title: Cut Ribbon, rating: 1300, variants: [knapsack-unbounded]}
+- {platform: CF, id: 1673C, title: Palindrome Basis, rating: 1500, variants: [knapsack-unbounded]}
+
+# ---- knapsack-bounded
+- {platform: CSES, id: 1159, title: Book Shop II, variants: [knapsack-bounded]}
+- {platform: CF, id: 106C, title: Buns, rating: 1700, variants: [knapsack-bounded]}
+- {platform: CF, id: 922E, title: Birds, rating: 2200, variants: [knapsack-bounded]}
+- {platform: CF, id: 95E, title: Lucky Country, rating: 2500, variants: [knapsack-bounded, subset-sum-bitset]}
+
+# ---- subset-sum-bitset
+- {platform: CSES, id: 1745, title: Money Sums, variants: [subset-sum-bitset]}
+- {platform: CSES, id: 1706, title: School Excursion, variants: [subset-sum-bitset]}
+- {platform: CF, id: 1516C, title: Baby Ehab Partitions Again, rating: 1700, variants: [subset-sum-bitset]}
+- {platform: CF, id: 577B, title: Modulo Sum, rating: 1900, variants: [subset-sum-bitset]}
+- {platform: CF, id: 755F, title: PolandBall and Gifts, rating: 2600, variants: [subset-sum-bitset]}
+- {platform: CF, id: 1856E2, title: PermuTree (hard version), rating: 2700, variants: [subset-sum-bitset]}
+
+# ---- lis
+- {platform: CSES, id: 1145, title: Increasing Subsequence, variants: [lis]}
+- {platform: LC, id: russian-doll-envelopes, title: Russian Doll Envelopes, rating: Hard, variants: [lis]}
+- {platform: CF, id: 1682C, title: "LIS or Reverse LIS?", rating: 1400, variants: [lis]}
+- {platform: CF, id: 340D, title: Bubble Sort Graph, rating: 1500, variants: [lis]}
+- {platform: CF, id: 486E, title: LIS of Sequence, rating: 2200, variants: [lis]}
+- {platform: CF, id: 1468A, title: LaIS, rating: 2200, variants: [lis]}
+
+# ---- lcs-edit-distance
+- {platform: CSES, id: 1639, title: Edit Distance, variants: [lcs-edit-distance]}
+- {platform: LC, id: longest-common-subsequence, title: Longest Common Subsequence, rating: Medium, variants: [lcs-edit-distance]}
+- {platform: CF, id: 1446B, title: Catching Cheaters, rating: 1800, variants: [lcs-edit-distance]}
+- {platform: CF, id: 463D, title: Gargari and Permutations, rating: 1900, variants: [lcs-edit-distance]}
+- {platform: CF, id: 346B, title: Lucky Common Subsequence, rating: 2000, variants: [lcs-edit-distance, kmp]}
+- {platform: CF, id: 1149B, title: Three Religions, rating: 2200, variants: [lcs-edit-distance]}
+
+# ---- partition-dp
+- {platform: LC, id: minimum-difficulty-of-a-job-schedule, title: Minimum Difficulty of a Job Schedule, rating: Hard, variants: [partition-dp]}
+- {platform: LC, id: partition-array-for-maximum-sum, title: Partition Array for Maximum Sum, rating: Medium, variants: [partition-dp]}
+- {platform: CF, id: 1969C, title: Minimizing the Sum, rating: 1700, variants: [partition-dp]}
+- {platform: CF, id: 1077F1, title: "Pictures with Kittens (easy version)", rating: 1900, variants: [partition-dp, dp-monotonic-queue]}
+- {platform: CF, id: 833B, title: The Bakery, rating: 2200, variants: [partition-dp, segtree-lazy]}
+- {platform: CF, id: 868F, title: Yet Another Minimization Problem, rating: 2500, variants: [partition-dp, dp-prefix-opt]}
+
+# ---- bitmask-dp
+- {platform: CSES, id: 1653, title: Elevator Rides, variants: [bitmask-dp]}
+- {platform: CSES, id: 1690, title: Hamiltonian Flights, variants: [bitmask-dp]}
+- {platform: CF, id: 580D, title: Kefa and Dishes, rating: 1800, variants: [bitmask-dp]}
+- {platform: CF, id: 453B, title: Little Pony and Harmony Chest, rating: 2000, variants: [bitmask-dp]}
+- {platform: CF, id: 1185G1, title: Playlist for Polycarp (easy version), rating: 2100, variants: [bitmask-dp]}
+- {platform: CF, id: 11D, title: A Simple Task, rating: 2200, variants: [bitmask-dp]}
+
+# ---- sos-dp
+- {platform: CSES, id: 1654, title: SOS Bit Problem, variants: [sos-dp]}
+- {platform: CF, id: 449D, title: Jzzhu and Numbers, rating: 2400, variants: [sos-dp, inclusion-exclusion]}
+- {platform: CF, id: 1208F, title: Bits And Pieces, rating: 2600, variants: [sos-dp]}
+- {platform: CF, id: 383E, title: Vowels, rating: 2700, variants: [sos-dp]}
+
+# ---- tree-dp
+- {platform: CSES, id: 1674, title: "Subordinates", variants: [tree-dp, subtree-euler-tour]}
+- {platform: CSES, id: 1130, title: Tree Matching, variants: [tree-dp]}
+- {platform: LC, id: house-robber-iii, title: House Robber III, rating: Medium, variants: [tree-dp]}
+- {platform: CF, id: 1528A, title: Parsa's Humongous Tree, rating: 1600, variants: [tree-dp]}
+- {platform: CF, id: 1083A, title: The Fair Nut and the Best Path, rating: 1800, variants: [tree-dp]}
+- {platform: CF, id: 461B, title: Appleman and Tree, rating: 2000, variants: [tree-dp]}
+
+# ---- rerooting
+- {platform: CSES, id: 1132, title: "Tree Distances I", variants: [rerooting, tree-diameter]}
+- {platform: CSES, id: 1133, title: Tree Distances II, variants: [rerooting]}
+- {platform: LC, id: sum-of-distances-in-tree, title: Sum of Distances in Tree, rating: Hard, variants: [rerooting]}
+- {platform: CF, id: 219D, title: Choosing Capital for Treeland, rating: 1700, variants: [rerooting]}
+- {platform: CF, id: 1324F, title: Maximum White Subtree, rating: 1800, variants: [rerooting]}
+- {platform: CF, id: 1092F, title: Tree with Maximum Cost, rating: 1900, variants: [rerooting]}
+- {platform: CF, id: 1187E, title: Tree Painting, rating: 2100, variants: [rerooting]}
+
+# ---- dag-dp
+- {platform: CSES, id: 1681, title: Game Routes, variants: [dag-dp]}
+- {platform: CSES, id: 1680, title: Longest Flight Route, variants: [dag-dp]}
+- {platform: LC, id: longest-increasing-path-in-a-matrix, title: Longest Increasing Path in a Matrix, rating: Hard, variants: [dag-dp]}
+- {platform: CF, id: 919D, title: Substring, rating: 1700, variants: [dag-dp, topo-sort]}
+- {platform: CF, id: 721C, title: Journey, rating: 1800, variants: [dag-dp]}
+- {platform: CF, id: 1679D, title: Toss a Coin to Your Graph..., rating: 1900, variants: [dag-dp, bs-on-answer]}
+
+# ---- state-machine-dp
+- {platform: CF, id: 698A, title: Vacations, rating: 1400, variants: [state-machine-dp]}
+- {platform: LC, id: best-time-to-buy-and-sell-stock-with-cooldown, title: Best Time to Buy and Sell Stock with Cooldown, rating: Medium, variants: [state-machine-dp]}
+- {platform: LC, id: best-time-to-buy-and-sell-stock-iv, title: Best Time to Buy and Sell Stock IV, rating: Hard, variants: [state-machine-dp]}
+- {platform: CF, id: 1286A, title: Garland, rating: 1800, variants: [state-machine-dp]}
+- {platform: CF, id: 1155D, title: Beautiful Array, rating: 1900, variants: [state-machine-dp]}
+
+# ---- expected-value-dp
+- {platform: CSES, id: 1725, title: Dice Probability, variants: [expected-value-dp]}
+- {platform: CF, id: 453A, title: Little Pony and Expected Maximum, rating: 1600, variants: [expected-value-dp]}
+- {platform: CF, id: 518D, title: Ilya and Escalator, rating: 1700, variants: [expected-value-dp]}
+- {platform: CF, id: 148D, title: Bag of mice, rating: 1800, variants: [expected-value-dp]}
+- {platform: CF, id: 540D, title: Bad Luck Island, rating: 1900, variants: [expected-value-dp]}
+- {platform: CF, id: 1265E, title: Beautiful Mirrors, rating: 2100, variants: [expected-value-dp]}
+
+# ---- dp-prefix-opt
+- {platform: CF, id: 474D, title: Flowers, rating: 1700, variants: [dp-prefix-opt, dp-linear]}
+- {platform: LC, id: k-inverse-pairs-array, title: K Inverse Pairs Array, rating: Hard, variants: [dp-prefix-opt]}
+- {platform: CF, id: 479E, title: Riding in a Lift, rating: 1900, variants: [dp-prefix-opt]}
+- {platform: CF, id: 1067A, title: Array Without Local Maximums, rating: 1900, variants: [dp-prefix-opt]}
+- {platform: CF, id: 1498C, title: Planar Reflections, rating: 1600, variants: [dp-prefix-opt]}
+
+# ---- dp-monotonic-queue
+- {platform: LC, id: jump-game-vi, title: Jump Game VI, rating: Medium, variants: [dp-monotonic-queue]}
+- {platform: LC, id: constrained-subsequence-sum, title: Constrained Subsequence Sum, rating: Hard, variants: [dp-monotonic-queue]}
+
+# ---- bfs
+- {platform: CSES, id: 1667, title: Message Route, variants: [bfs]}
+- {platform: CF, id: 520B, title: Two Buttons, rating: 1400, variants: [bfs]}
+- {platform: CF, id: 1037D, title: "Valid BFS?", rating: 1700, variants: [bfs]}
+- {platform: CF, id: 59E, title: Shortest Path, rating: 2000, variants: [bfs]}
+- {platform: CF, id: 1520G, title: "To Go Or Not To Go?", rating: 2200, variants: [bfs]}
+- {platform: LC, id: word-ladder, title: Word Ladder, rating: Hard, variants: [bfs]}
+
+# ---- multi-source-bfs
+- {platform: CSES, id: 1194, title: Monsters, variants: [multi-source-bfs]}
+- {platform: LC, id: rotting-oranges, title: Rotting Oranges, rating: Medium, variants: [multi-source-bfs]}
+- {platform: CF, id: 986A, title: Fair, rating: 1600, variants: [multi-source-bfs]}
+- {platform: CF, id: 1272E, title: Nearest Opposite Parity, rating: 1900, variants: [multi-source-bfs]}
+- {platform: CF, id: 1349C, title: Orac and Game of Life, rating: 2000, variants: [multi-source-bfs]}
+
+# ---- zero-one-bfs
+- {platform: CF, id: 1063B, title: Labyrinth, rating: 1800, variants: [zero-one-bfs]}
+- {platform: CF, id: 173B, title: Chamber of Secrets, rating: 1800, variants: [zero-one-bfs]}
+- {platform: CF, id: 590C, title: Three States, rating: 2200, variants: [zero-one-bfs, multi-source-bfs]}
+- {platform: CF, id: 1340C, title: Nastya and Unexpected Guest, rating: 2400, variants: [zero-one-bfs]}
+- {platform: LC, id: minimum-cost-to-make-at-least-one-valid-path-in-a-grid, title: Minimum Cost to Make at Least One Valid Path in a Grid, rating: Hard, variants: [zero-one-bfs]}
+
+# ---- grid-flood-fill
+- {platform: CSES, id: 1192, title: Counting Rooms, variants: [grid-flood-fill]}
+- {platform: LC, id: number-of-islands, title: Number of Islands, rating: Medium, variants: [grid-flood-fill]}
+- {platform: CF, id: 723D, title: Lakes in Berland, rating: 1600, variants: [grid-flood-fill]}
+- {platform: CF, id: 377A, title: Maze, rating: 1600, variants: [grid-flood-fill]}
+- {platform: CF, id: 598D, title: Igor In the Museum, rating: 1700, variants: [grid-flood-fill]}
+- {platform: CF, id: 1365D, title: Solve The Maze, rating: 1700, variants: [grid-flood-fill]}
+
+# ---- cycle-detection
+- {platform: CSES, id: 1678, title: Round Trip II, variants: [cycle-detection]}
+- {platform: CSES, id: 1669, title: Round Trip, variants: [cycle-detection]}
+- {platform: CF, id: 977E, title: Cyclic Components, rating: 1500, variants: [cycle-detection]}
+- {platform: CF, id: 659E, title: New Reform, rating: 1600, variants: [cycle-detection]}
+- {platform: CF, id: 915D, title: Almost Acyclic Graph, rating: 2200, variants: [cycle-detection]}
+
+# ---- topo-sort
+- {platform: CSES, id: 1679, title: Course Schedule, variants: [topo-sort]}
+- {platform: LC, id: course-schedule-ii, title: Course Schedule II, rating: Medium, variants: [topo-sort]}
+- {platform: CF, id: 510C, title: Fox And Names, rating: 1600, variants: [topo-sort]}
+- {platform: CF, id: 1385E, title: Directing Edges, rating: 2000, variants: [topo-sort]}
+- {platform: CF, id: 825E, title: Minimal Labels, rating: 2300, variants: [topo-sort]}
+
+# ---- dijkstra
+- {platform: CSES, id: 1671, title: Shortest Routes I, variants: [dijkstra]}
+- {platform: CSES, id: 1195, title: Flight Discount, variants: [dijkstra]}
+- {platform: CF, id: 20C, title: "Dijkstra?", rating: 1900, variants: [dijkstra]}
+- {platform: CF, id: 1915G, title: Bicycles, rating: 1800, variants: [dijkstra]}
+- {platform: CF, id: 545E, title: Paths and Trees, rating: 2000, variants: [dijkstra]}
+- {platform: CF, id: 1433G, title: Reducing Delivery Cost, rating: 2100, variants: [dijkstra]}
+
+# ---- bellman-ford
+- {platform: CSES, id: 1197, title: Cycle Finding, variants: [bellman-ford]}
+- {platform: CSES, id: 1673, title: High Score, variants: [bellman-ford]}
+- {platform: LC, id: cheapest-flights-within-k-stops, title: Cheapest Flights Within K Stops, rating: Medium, variants: [bellman-ford]}
+- {platform: CF, id: 147B, title: Smile House, rating: 2500, variants: [bellman-ford, floyd-warshall]}
+
+# ---- floyd-warshall
+- {platform: CSES, id: 1672, title: Shortest Routes II, variants: [floyd-warshall]}
+- {platform: CF, id: 295B, title: Greg and Graph, rating: 1700, variants: [floyd-warshall]}
+- {platform: CF, id: 1204C, title: "Anna, Svyatoslav and Maps", rating: 1700, variants: [floyd-warshall]}
+- {platform: CF, id: 33B, title: String Problem, rating: 1800, variants: [floyd-warshall]}
+- {platform: CF, id: 25C, title: Roads in Berland, rating: 1900, variants: [floyd-warshall]}
+- {platform: CF, id: 1196F, title: K-th Path, rating: 2200, variants: [floyd-warshall]}
+
+# ---- mst-kruskal
+- {platform: CSES, id: 1675, title: Road Reparation, variants: [mst-kruskal, mst-prim]}
+- {platform: CF, id: 1081D, title: Maximum Distance, rating: 1800, variants: [mst-kruskal]}
+- {platform: CF, id: 1095F, title: Make It Connected, rating: 1900, variants: [mst-kruskal]}
+- {platform: CF, id: 1513D, title: GCD and MST, rating: 2000, variants: [mst-kruskal]}
+- {platform: CF, id: 609E, title: "Minimum spanning tree for each edge", rating: 2100, variants: [mst-kruskal, lca-binary-lifting]}
+- {platform: CF, id: 891C, title: Envy, rating: 2300, variants: [mst-kruskal]}
+
+# ---- mst-prim
+- {platform: LC, id: min-cost-to-connect-all-points, title: Min Cost to Connect All Points, rating: Medium, variants: [mst-prim]}
+- {platform: CF, id: 1245D, title: Shichikuji and Power Grid, rating: 1900, variants: [mst-prim, mst-kruskal]}
+- {platform: CF, id: 1242B, title: 0-1 MST, rating: 1900, variants: [mst-prim]}
+- {platform: CF, id: 472D, title: "Design Tutorial: Inverse the Problem", rating: 1900, variants: [mst-prim]}
+- {platform: CF, id: 1508C, title: Complete the MST, rating: 2500, variants: [mst-prim]}
+
+# ---- bipartite-check
+- {platform: CSES, id: 1668, title: Building Teams, variants: [bipartite-check]}
+- {platform: CF, id: 862B, title: Mahmoud and Ehab and the bipartiteness, rating: 1300, variants: [bipartite-check]}
+- {platform: CF, id: 1702E, title: Split Into Two Sets, rating: 1600, variants: [bipartite-check]}
+- {platform: CF, id: 1144F, title: Graph Without Long Directed Paths, rating: 1700, variants: [bipartite-check]}
+- {platform: CF, id: 1093D, title: Beautiful Graph, rating: 1700, variants: [bipartite-check]}
+
+# ---- scc
+- {platform: CSES, id: 1683, title: Planets and Kingdoms, variants: [scc]}
+- {platform: CSES, id: 1686, title: Coin Collector, variants: [scc, dag-dp]}
+- {platform: CF, id: 427C, title: Checkposts, rating: 1700, variants: [scc]}
+- {platform: CF, id: 949C, title: Data Center Maintenance, rating: 1900, variants: [scc]}
+- {platform: CF, id: 999E, title: Reachability from the Capital, rating: 2000, variants: [scc]}
+- {platform: CF, id: 1137C, title: Museums Tour, rating: 2500, variants: [scc, dag-dp]}
+
+# ---- bridges-articulation
+- {platform: CSES, id: 2076, title: Necessary Roads, variants: [bridges-articulation]}
+- {platform: CSES, id: 2077, title: Necessary Cities, variants: [bridges-articulation]}
+- {platform: LC, id: critical-connections-in-a-network, title: Critical Connections in a Network, rating: Hard, variants: [bridges-articulation]}
+- {platform: CF, id: 118E, title: Bertown roads, rating: 2000, variants: [bridges-articulation]}
+- {platform: CF, id: 1000E, title: We Need More Bosses, rating: 2100, variants: [bridges-articulation]}
+- {platform: CF, id: 732F, title: Tourist Reform, rating: 2300, variants: [bridges-articulation]}
+
+# ---- euler-path
+- {platform: CSES, id: 1691, title: Mail Delivery, variants: [euler-path]}
+- {platform: CSES, id: 1693, title: Teleporters Path, variants: [euler-path]}
+- {platform: LC, id: reconstruct-itinerary, title: Reconstruct Itinerary, rating: Hard, variants: [euler-path]}
+- {platform: CF, id: 723E, title: One-Way Reform, rating: 2200, variants: [euler-path]}
+- {platform: CF, id: 1152E, title: Neko and Flashback, rating: 2400, variants: [euler-path]}
+- {platform: CF, id: 508D, title: Tanya and Password, rating: 2500, variants: [euler-path]}
+
+# ---- min-path-cover
+- {platform: CSES, id: 1711, title: Distinct Routes, variants: [min-path-cover, max-flow-dinic]}
+- {platform: CF, id: 818G, title: Four Melodies, rating: 2600, variants: [min-path-cover, max-flow-dinic]}
+- {platform: CF, id: 1404E, title: Bricks, rating: 2800, variants: [min-path-cover, bipartite-matching]}
+
+# ---- max-flow-dinic
+- {platform: CSES, id: 1694, title: Download Speed, variants: [max-flow-dinic]}
+- {platform: CSES, id: 1695, title: Police Chase, variants: [max-flow-dinic]}
+- {platform: CF, id: 546E, title: Soldier and Traveling, rating: 2100, variants: [max-flow-dinic]}
+- {platform: CF, id: 498C, title: Array and Operations, rating: 2100, variants: [max-flow-dinic]}
+- {platform: CF, id: 653D, title: Delivery Bears, rating: 2200, variants: [max-flow-dinic]}
+- {platform: CF, id: 1082G, title: Petya and Graph, rating: 2400, variants: [max-flow-dinic]}
+
+# ---- functional-graph
+- {platform: CSES, id: 1750, title: Planets Queries I, variants: [functional-graph]}
+- {platform: CSES, id: 1751, title: Planets Cycles, variants: [functional-graph]}
+- {platform: CF, id: 1020B, title: Badge, rating: 1000, variants: [functional-graph]}
+- {platform: CF, id: 1867D, title: Cyclic Operations, rating: 1800, variants: [functional-graph]}
+- {platform: CF, id: 702E, title: Analysis of Pathes in Functional Graph, rating: 2100, variants: [functional-graph]}
+- {platform: CF, id: 1335F, title: Robots on a Grid, rating: 2200, variants: [functional-graph]}
+
+# ---- subtree-euler-tour
+- {platform: CSES, id: 1137, title: Subtree Queries, variants: [subtree-euler-tour, fenwick-point-range]}
+- {platform: CF, id: 1676G, title: White-Black Balanced Subtrees, rating: 1300, variants: [subtree-euler-tour]}
+- {platform: CF, id: 1006E, title: Military Problem, rating: 1600, variants: [subtree-euler-tour]}
+- {platform: CF, id: 620E, title: New Year Tree, rating: 2100, variants: [subtree-euler-tour, segtree-lazy]}
+- {platform: CF, id: 343D, title: Water Tree, rating: 2100, variants: [subtree-euler-tour]}
+
+# ---- tree-diameter
+- {platform: CSES, id: 1131, title: Tree Diameter, variants: [tree-diameter]}
+- {platform: CF, id: 1085D, title: Minimum Diameter Tree, rating: 1700, variants: [tree-diameter]}
+- {platform: CF, id: 1881F, title: Minimum Maximum Distance, rating: 1700, variants: [tree-diameter]}
+- {platform: CF, id: 1404B, title: Tree Tag, rating: 1900, variants: [tree-diameter]}
+- {platform: CF, id: 1294F, title: Three Paths on a Tree, rating: 2000, variants: [tree-diameter]}
+- {platform: CF, id: 911F, title: Tree Destruction, rating: 2400, variants: [tree-diameter]}
+
+# ---- lca-binary-lifting
+- {platform: CSES, id: 1687, title: Company Queries I, variants: [lca-binary-lifting]}
+- {platform: CSES, id: 1688, title: Company Queries II, variants: [lca-binary-lifting]}
+- {platform: CF, id: 1328E, title: Tree Queries, rating: 1900, variants: [lca-binary-lifting]}
+- {platform: CF, id: 1702G2, title: Passable Paths (hard version), rating: 2000, variants: [lca-binary-lifting]}
+- {platform: CF, id: 519E, title: A and B and Lecture Rooms, rating: 2100, variants: [lca-binary-lifting]}
+- {platform: CF, id: 932D, title: Tree, rating: 2200, variants: [lca-binary-lifting]}
+
+# ---- tree-distance-queries
+- {platform: CSES, id: 1135, title: Distance Queries, variants: [tree-distance-queries]}
+- {platform: CSES, id: 1136, title: Counting Paths, variants: [tree-distance-queries]}
+- {platform: CF, id: 191C, title: Fools and Roads, rating: 1900, variants: [tree-distance-queries]}
+- {platform: CF, id: 832D, title: "Misha, Grisha and Underground", rating: 1900, variants: [tree-distance-queries]}
+- {platform: CF, id: 1304E, title: 1-Trees and Queries, rating: 2000, variants: [tree-distance-queries]}
+- {platform: CF, id: 342E, title: Xenia and Tree, rating: 2400, variants: [tree-distance-queries]}
+
+# ---- small-to-large
+- {platform: CSES, id: 1139, title: Distinct Colors, variants: [small-to-large]}
+- {platform: CF, id: 1923E, title: Count Paths, rating: 2000, variants: [small-to-large]}
+- {platform: CF, id: 208E, title: Blood Cousins, rating: 2100, variants: [small-to-large]}
+- {platform: CF, id: 570D, title: Tree Requests, rating: 2200, variants: [small-to-large]}
+- {platform: CF, id: 600E, title: Lomsat gelral, rating: 2300, variants: [small-to-large]}
+- {platform: CF, id: 1709E, title: XOR Tree, rating: 2400, variants: [small-to-large]}
+
+# ---- anagram-counting
+- {platform: LC, id: find-all-anagrams-in-a-string, title: Find All Anagrams in a String, rating: Medium, variants: [anagram-counting, window-fixed]}
+- {platform: LC, id: group-anagrams, title: Group Anagrams, rating: Medium, variants: [anagram-counting]}
+- {platform: LC, id: number-of-wonderful-substrings, title: Number of Wonderful Substrings, rating: Medium, variants: [anagram-counting, prefix-xor]}
+- {platform: CF, id: 1093B, title: Letters Rearranging, rating: 900, variants: [anagram-counting]}
+- {platform: CF, id: 1251B, title: Binary Palindromes, rating: 1400, variants: [anagram-counting]}
+- {platform: CF, id: 144C, title: Anagram Search, rating: 1500, variants: [anagram-counting, window-fixed]}
+- {platform: CF, id: 1234D, title: Distinct Characters Queries, rating: 1600, variants: [anagram-counting]}
+
+# ---- rolling-hash
+- {platform: CSES, id: 1732, title: Finding Borders, variants: [rolling-hash, kmp]}
+- {platform: CF, id: 1326D2, title: Prefix-Suffix Palindrome (Hard version), rating: 1800, variants: [rolling-hash, manacher]}
+- {platform: CF, id: 1200E, title: Compress Words, rating: 2000, variants: [rolling-hash, kmp]}
+- {platform: CF, id: 1056E, title: Check Transcription, rating: 2100, variants: [rolling-hash]}
+- {platform: CF, id: 727E, title: Games on a CD, rating: 2300, variants: [rolling-hash]}
+
+# ---- kmp
+- {platform: CSES, id: 1753, title: String Matching, variants: [kmp]}
+- {platform: LC, id: shortest-palindrome, title: Shortest Palindrome, rating: Hard, variants: [kmp]}
+- {platform: CF, id: 1137B, title: Camp Schedule, rating: 1600, variants: [kmp]}
+- {platform: CF, id: 126B, title: Password, rating: 1700, variants: [kmp, z-function]}
+- {platform: CF, id: 432D, title: Prefixes and Suffixes, rating: 2000, variants: [kmp, z-function]}
+- {platform: CF, id: 808G, title: Anthem of Berland, rating: 2300, variants: [kmp]}
+
+# ---- z-function
+- {platform: CSES, id: 1733, title: Finding Periods, variants: [z-function]}
+- {platform: LC, id: sum-of-scores-of-built-strings, title: Sum of Scores of Built Strings, rating: Hard, variants: [z-function]}
+- {platform: CF, id: 535D, title: Tavas and Malekas, rating: 1900, variants: [z-function]}
+- {platform: CF, id: 1968G1, title: Division + LCP (easy version), rating: 1900, variants: [z-function]}
+- {platform: CF, id: 1968G2, title: Division + LCP (hard version), rating: 2200, variants: [z-function]}
+
+# ---- manacher
+- {platform: CSES, id: 1111, title: Longest Palindrome, variants: [manacher]}
+- {platform: LC, id: palindromic-substrings, title: Palindromic Substrings, rating: Medium, variants: [manacher, palindrome-dp]}
+- {platform: CF, id: 1326D1, title: Prefix-Suffix Palindrome (Easy version), rating: 1500, variants: [manacher]}
+- {platform: CF, id: 1080E, title: Sonya and Matrix Beauty, rating: 2400, variants: [manacher]}
+- {platform: CF, id: 17E, title: Palisection, rating: 2900, variants: [manacher]}
+
+# ---- palindrome-dp
+- {platform: LC, id: palindrome-partitioning-ii, title: Palindrome Partitioning II, rating: Hard, variants: [palindrome-dp]}
+- {platform: LC, id: minimum-insertion-steps-to-make-a-string-palindrome, title: Minimum Insertion Steps to Make a String Palindrome, rating: Hard, variants: [palindrome-dp]}
+- {platform: CF, id: 159D, title: Palindrome pairs, rating: 1500, variants: [palindrome-dp]}
+- {platform: CF, id: 245H, title: Queries for Number of Palindromes, rating: 1800, variants: [palindrome-dp]}
+- {platform: CF, id: 835D, title: Palindromic characteristics, rating: 1900, variants: [palindrome-dp]}
+- {platform: CF, id: 607B, title: Zuma, rating: 1900, variants: [palindrome-dp, interval-dp]}
+
+# ---- binpow-modinv
+- {platform: CSES, id: 1095, title: Exponentiation, variants: [binpow-modinv]}
+- {platform: CSES, id: 1712, title: Exponentiation II, variants: [binpow-modinv]}
+- {platform: CF, id: 1514B, title: "AND 0, Sum Big", rating: 1200, variants: [binpow-modinv]}
+- {platform: CF, id: 1279D, title: Santa's Bot, rating: 1700, variants: [binpow-modinv]}
+- {platform: CF, id: 935D, title: Fafa and Ancient Alphabet, rating: 1900, variants: [binpow-modinv]}
+- {platform: CF, id: 615D, title: Multipliers, rating: 2000, variants: [binpow-modinv, divisors]}
+
+# ---- ncr-factorials
+- {platform: CSES, id: 1079, title: Binomial Coefficients, variants: [ncr-factorials]}
+- {platform: CF, id: 1569C, title: Jury Meeting, rating: 1500, variants: [ncr-factorials]}
+- {platform: CF, id: 300C, title: Beautiful Numbers, rating: 1800, variants: [ncr-factorials]}
+- {platform: CF, id: 869C, title: The Intriguing Obsession, rating: 1800, variants: [ncr-factorials]}
+
+# ---- sieve-spf
+- {platform: CSES, id: 1713, title: Counting Divisors, variants: [sieve-spf, divisors]}
+- {platform: CF, id: 776B, title: Sherlock and his girlfriend, rating: 1200, variants: [sieve-spf]}
+- {platform: CF, id: 230B, title: T-primes, rating: 1300, variants: [sieve-spf]}
+- {platform: CF, id: 1366D, title: Two Divisors, rating: 2000, variants: [sieve-spf]}
+- {platform: CF, id: 1499D, title: The Number of Pairs, rating: 2100, variants: [sieve-spf, divisors]}
+
+# ---- divisors
+- {platform: CSES, id: 1081, title: Common Divisors, variants: [divisors]}
+- {platform: CSES, id: 1082, title: Sum of Divisors, variants: [divisors]}
+- {platform: CF, id: 1203C, title: Common Divisors, rating: 1300, variants: [divisors, gcd-ext-euclid]}
+- {platform: CF, id: 762A, title: k-th divisor, rating: 1400, variants: [divisors]}
+- {platform: CF, id: 1349A, title: Orac and LCM, rating: 1600, variants: [divisors, sieve-spf]}
+- {platform: CF, id: 1114C, title: "Trailing Loves (or L'oeufs?)", rating: 1700, variants: [divisors, sieve-spf]}
+
+# ---- gcd-ext-euclid
+- {platform: CF, id: 1458A, title: Row GCD, rating: 1600, variants: [gcd-ext-euclid]}
+- {platform: CF, id: 582A, title: GCD Table, rating: 1700, variants: [gcd-ext-euclid]}
+- {platform: CF, id: 7C, title: Line, rating: 1800, variants: [gcd-ext-euclid]}
+- {platform: CF, id: 1244C, title: The Football Season, rating: 2000, variants: [gcd-ext-euclid]}
+- {platform: CF, id: 1155C, title: Alarm Clocks Everywhere, rating: 1300, variants: [gcd-ext-euclid]}
+
+# ---- inclusion-exclusion
+- {platform: CSES, id: 2185, title: Prime Multiples, variants: [inclusion-exclusion]}
+- {platform: CSES, id: 2417, title: Counting Coprime Pairs, variants: [inclusion-exclusion, sieve-spf]}
+- {platform: CF, id: 1295D, title: Same GCDs, rating: 1800, variants: [inclusion-exclusion, gcd-ext-euclid]}
+- {platform: CF, id: 1207D, title: Number of Permutations, rating: 1800, variants: [inclusion-exclusion, ncr-factorials]}
+- {platform: CF, id: 803F, title: Coprime Subsequences, rating: 2000, variants: [inclusion-exclusion]}
+- {platform: CF, id: 451E, title: Devu and Flowers, rating: 2300, variants: [inclusion-exclusion, ncr-factorials]}
+
+# ---- matrix-exponentiation
+- {platform: CSES, id: 1722, title: Fibonacci Numbers, variants: [matrix-exponentiation]}
+- {platform: CSES, id: 1096, title: Throwing Dice, variants: [matrix-exponentiation]}
+- {platform: CF, id: 185A, title: Plant, rating: 1300, variants: [matrix-exponentiation]}
+- {platform: CF, id: 691E, title: Xor-sequences, rating: 1900, variants: [matrix-exponentiation]}
+- {platform: CF, id: 621E, title: Wet Shark and Blocks, rating: 2000, variants: [matrix-exponentiation]}
+- {platform: CF, id: 1117D, title: Magic Gems, rating: 2100, variants: [matrix-exponentiation]}
+
+# ---- nim-grundy
+- {platform: CSES, id: 1730, title: Nim Game I, variants: [nim-grundy]}
+- {platform: CSES, id: 2207, title: Grundy's Game, variants: [nim-grundy]}
+- {platform: CF, id: 1033C, title: Permutation Game, rating: 1600, variants: [nim-grundy]}
+- {platform: CF, id: 1194D, title: 1-2-K Game, rating: 1700, variants: [nim-grundy]}
+- {platform: CF, id: 768E, title: Game of Stones, rating: 2100, variants: [nim-grundy]}
+- {platform: CF, id: 850C, title: Arpa and a game with Mojtaba, rating: 2200, variants: [nim-grundy]}
+
+# ---- geometry-basics
+- {platform: CSES, id: 2189, title: Point Location Test, variants: [geometry-basics]}
+- {platform: CSES, id: 2190, title: Line Segment Intersection, variants: [geometry-basics]}
+- {platform: CSES, id: 2191, title: Polygon Area, variants: [geometry-basics]}
+- {platform: CSES, id: 2192, title: Point in Polygon, variants: [geometry-basics]}
+- {platform: CF, id: 1C, title: Ancient Berland Circus, rating: 2100, variants: [geometry-basics]}
+- {platform: CF, id: 166B, title: Polygons, rating: 2100, variants: [geometry-basics]}
+
+# ---- exchange-argument
+- {platform: CSES, id: 1630, title: Tasks and Deadlines, variants: [exchange-argument]}
+- {platform: LC, id: largest-number, title: Largest Number, rating: Medium, variants: [exchange-argument]}
+- {platform: CF, id: 632C, title: The Smallest String Concatenation, rating: 1700, variants: [exchange-argument]}
+- {platform: CF, id: 922D, title: Robot Vacuum Cleaner, rating: 1800, variants: [exchange-argument]}
+- {platform: CF, id: 1203F1, title: Complete the Projects (easy version), rating: 2100, variants: [exchange-argument]}
+- {platform: CF, id: 1203F2, title: Complete the Projects (hard version), rating: 2300, variants: [exchange-argument, knapsack-01]}
+
+# ---- interval-greedy
+- {platform: CSES, id: 1629, title: Movie Festival, variants: [interval-greedy]}
+- {platform: LC, id: minimum-number-of-arrows-to-burst-balloons, title: Minimum Number of Arrows to Burst Balloons, rating: Medium, variants: [interval-greedy]}
+- {platform: CSES, id: 1632, title: Movie Festival II, variants: [interval-greedy, multiset-budget]}
+- {platform: CF, id: 845C, title: Two TVs, rating: 1500, variants: [interval-greedy]}
+- {platform: CF, id: 1141F2, title: Same Sum Blocks (Hard), rating: 1900, variants: [interval-greedy]}
+
+# ---- heap-regret-greedy
+- {platform: CF, id: 1526C1, title: Potions (Easy Version), rating: 1500, variants: [heap-regret-greedy]}
+- {platform: LC, id: course-schedule-iii, title: Course Schedule III, rating: Hard, variants: [heap-regret-greedy]}
+- {platform: LC, id: minimum-number-of-refueling-stops, title: Minimum Number of Refueling Stops, rating: Hard, variants: [heap-regret-greedy]}
+- {platform: CF, id: 865D, title: Buy Low Sell High, rating: 2400, variants: [heap-regret-greedy]}
+- {platform: CF, id: 3D, title: Least Cost Bracket Sequence, rating: 2600, variants: [heap-regret-greedy]}
+
+# ---- constructive
+- {platform: CSES, id: 1070, title: Permutations, variants: [constructive]}
+- {platform: CSES, id: 1092, title: Two Sets, variants: [constructive]}
+- {platform: CF, id: 1497C1, title: k-LCM (easy version), rating: 1200, variants: [constructive]}
+- {platform: CF, id: 1335D, title: Anti-Sudoku, rating: 1300, variants: [constructive]}
+- {platform: CF, id: 1352G, title: Special Permutation, rating: 1600, variants: [constructive]}
+
+# ---- matrix-traversal
+- {platform: LC, id: spiral-matrix, title: Spiral Matrix, rating: Medium, variants: [matrix-traversal]}
+- {platform: LC, id: rotate-image, title: Rotate Image, rating: Medium, variants: [matrix-traversal]}
+- {platform: LC, id: diagonal-traverse, title: Diagonal Traverse, rating: Medium, variants: [matrix-traversal]}
+- {platform: LC, id: game-of-life, title: Game of Life, rating: Medium, variants: [matrix-traversal]}
+- {platform: CF, id: 1676D, title: X-Sum, rating: 1000, variants: [matrix-traversal]}
+- {platform: CF, id: 1703E, title: Mirror Grid, rating: 1200, variants: [matrix-traversal]}
+
+# ---- scheduling-simulation
+- {platform: LC, id: process-tasks-using-servers, title: Process Tasks Using Servers, rating: Medium, variants: [scheduling-simulation, heap-scheduling]}
+- {platform: LC, id: task-scheduler, title: Task Scheduler, rating: Medium, variants: [scheduling-simulation]}
+- {platform: CF, id: 644B, title: Processing Queries, rating: 1700, variants: [scheduling-simulation]}
+
+# ---- aggregation-formatting
+- {platform: LC, id: display-table-of-food-orders-in-a-restaurant, title: Display Table of Food Orders in a Restaurant, rating: Medium, variants: [aggregation-formatting]}
+- {platform: LC, id: subdomain-visit-count, title: Subdomain Visit Count, rating: Medium, variants: [aggregation-formatting]}
+- {platform: LC, id: text-justification, title: Text Justification, rating: Hard, variants: [aggregation-formatting]}
+- {platform: CF, id: 4C, title: Registration system, rating: 1300, variants: [aggregation-formatting]}
+- {platform: CF, id: 5B, title: Center Alignment, rating: 1200, variants: [aggregation-formatting]}
+- {platform: CF, id: 159A, title: Friends or Not, rating: 1400, variants: [aggregation-formatting]}
