@@ -1,0 +1,20 @@
+{
+  "os": {
+    "name": "Operating Systems",
+    "hn_terms": ["operating systems", "operating system course", "os lectures", "xv6", "linux kernel", "kernel", "scheduler", "virtual memory", "page table", "paging", "tlb", "mutex", "semaphore", "deadlock", "concurrency", "threads", "file system", "filesystem", "fork", "system calls", "syscall", "context switch", "6.828", "6.s081", "cs162", "ostep", "remzi", "virtualization", "hypervisor", "io_uring", "raid", "ssd"],
+    "subtopics": {
+      "basics": {"name": "OS Basics & Kernel", "yt": ["what is an operating system kernel lecture", "system calls user mode kernel mode explained", "operating systems course lecture 1 introduction"]},
+      "proc": {"name": "Processes & fork()", "yt": ["process abstraction fork exec lecture", "fork system call explained", "process control block context switch lecture"]},
+      "ipc": {"name": "Inter-Process Communication", "yt": ["inter process communication pipes shared memory lecture", "unix pipes explained", "ipc message passing shared memory operating system"]},
+      "threads": {"name": "Threads", "yt": ["threads vs processes lecture", "user level vs kernel level threads lecture", "threads operating systems lecture"]},
+      "sched": {"name": "CPU Scheduling", "yt": ["cpu scheduling lecture operating systems", "multilevel feedback queue scheduling", "linux completely fair scheduler explained"]},
+      "sync": {"name": "Process Synchronization", "yt": ["locks mutex semaphores lecture", "condition variables monitors lecture", "producer consumer problem semaphore", "race condition critical section lecture"]},
+      "deadlock": {"name": "Deadlocks", "yt": ["deadlock lecture operating systems", "bankers algorithm explained", "deadlock prevention avoidance detection"]},
+      "mem": {"name": "Memory Management & Paging", "yt": ["paging lecture operating systems", "page tables multilevel paging explained", "segmentation vs paging lecture", "tlb translation lookaside buffer"]},
+      "vm": {"name": "Virtual Memory & Page Replacement", "yt": ["virtual memory lecture", "page replacement algorithms lru lecture", "demand paging page fault thrashing"]},
+      "fs": {"name": "File Systems", "yt": ["file systems lecture inode", "file system implementation lecture", "journaling file system crash consistency"]},
+      "disk": {"name": "Disk Scheduling & RAID", "yt": ["disk scheduling algorithms lecture", "raid explained lecture", "hard disk drives and ssd lecture operating systems"]},
+      "virt": {"name": "Virtualization & Linux", "yt": ["virtual machines hypervisor lecture", "containers vs virtual machines namespaces cgroups", "linux kernel explained"]}
+    }
+  }
+}

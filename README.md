@@ -9,6 +9,7 @@ One site for placement and interview prep, published at **https://nischalpendurt
 | `/langs/` | Language internals: Python, Java, Go, Rust | `langs/` (built from `langs/content/`) |
 | `/topics/` | Role-based roadmaps and topic guides: embedded, compilers, ML, system design, aptitude | `topics/` (built from `topics/content/`) |
 | `/mcq/` | Placement MCQ Prep (2,363 questions) | `mcq/` |
+| `/videos/` | Video Picks: one best lecture per subtopic, plus deeper and quicker alternatives | `videos/` (built from `videos/content/`) |
 | `/atlas/` | CP Atlas: pattern map, templates, problem log, revision queue | `atlas/` (built from `atlas/content/`) |
 | `/ladder/` | Codeforces 2000–2400 ladder, hard drill, segment tree & BIT, PYQ tracker | `ladder/` |
 | `/counter/` | Practice counter with GitHub Gist sync | `counter/` |
@@ -43,3 +44,10 @@ python3 tools/add.py <url> sol.cpp -v <variant-id> -i "the one-line trick"
 python3 tools/build.py    # must pass
 cd .. && git add -A && git commit -m "atlas: log <problem>" && git push
 ```
+
+## Video picks
+
+`videos/content/<topic>.json` holds the curated picks; `videos/content/index.json` sets topic order (topics without a file show as "soon").
+To add a topic: add its search terms and subtopics to `videos/tools/topics.json`, run `python3 videos/tools/harvest.py <topic>`
+(Hacker News + YouTube candidates into `videos/.work/<topic>/review.txt`), write `videos/content/<topic>.json`, then
+`python3 videos/tools/build.py --online` to confirm every video still exists, embeds and has the recorded title. CI runs the offline check.

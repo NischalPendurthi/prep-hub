@@ -1,0 +1,495 @@
+{
+  "id": "os",
+  "name": "Operating Systems",
+  "blurb": "One best video per subtopic, chosen for correct, interview-depth explanations, with a deeper lecture and a quicker or more visual alternative. Watch the best pick, then do that subtopic's MCQs.",
+  "method": "<ul><li><b>Best pick</b>: the clearest correct explanation at interview depth, usually 10–30 minutes. Most come from Mythili Vutukuru's IIT Bombay course, which follows <i>Operating Systems: Three Easy Pieces</i> closely.</li><li><b>Go deeper</b>: a full university lecture (Berkeley CS162) or an expert talk that Hacker News users recommend. The HN count is how many different HN users linked that video.</li><li><b>Quick / visual</b>: a short or animated explanation that helps the idea stick.</li><li>Candidates came from 3,500 YouTube links in Hacker News comments plus YouTube search for every subtopic. High-view exam channels lost when an English lecture explained the same idea more precisely; numericals (Gantt charts, Banker's, page replacement) are covered by the linked MCQs.</li></ul>",
+  "subtopics": [
+    {
+      "key": "courses",
+      "name": "Full courses",
+      "note": "If you have time for one course, take the first. Every best pick below comes from it.",
+      "picks": [
+        {
+          "kind": "l",
+          "id": "PLDW872573QAb4bj0URobvQTD41IV6gRkx",
+          "thumb": "aCJ3YgoolHQ",
+          "role": "course",
+          "title": "Operating Systems (OS) Lectures",
+          "channel": "Mythili Vutukuru",
+          "length": "33 videos",
+          "why": "IIT Bombay course built on OSTEP: 20 concept lectures of 10–30 minutes, then xv6 code walkthroughs showing how a real kernel does traps, context switches, paging and locking."
+        },
+        {
+          "kind": "l",
+          "id": "PL6CdojO56mZ3SeRfpzMBMObSnTziA0gfE",
+          "thumb": "4FpG1DcvHzc",
+          "role": "deeper",
+          "title": "CS162 Spring 2020",
+          "channel": "John Kubiatowicz",
+          "length": "13 videos",
+          "why": "Berkeley's OS course. Long lectures (80+ minutes) that go further than interviews need on scheduling, deadlock and file systems. Use it for topics you want to master, not as a first pass."
+        },
+        {
+          "kind": "l",
+          "id": "PL9vTTBa7QaQPdvEuMTqS9McY-ieaweU8M",
+          "thumb": "M9HHWFp84f0",
+          "role": "quick",
+          "title": "Operating Systems Theory",
+          "channel": "Core Dumped",
+          "length": "11 videos",
+          "why": "Carefully animated explanations of processes, threads, scheduling and IPC. Good for revision once you know the terms."
+        }
+      ]
+    },
+    {
+      "key": "basics",
+      "name": "OS Basics & Kernel",
+      "mcq": "../mcq/#/d/os/basics",
+      "note": "Know why there are two privilege modes, what a system call does step by step, and how the OS takes back control of the CPU (timer interrupt).",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "aCJ3YgoolHQ",
+          "role": "best",
+          "title": "Operating Systems Lecture 1: Introduction",
+          "channel": "Mythili Vutukuru",
+          "length": "14:26",
+          "why": "Frames the OS as virtualising the CPU and memory and handling concurrency and persistence: the map that every later topic fits into."
+        },
+        {
+          "kind": "v",
+          "id": "4FpG1DcvHzc",
+          "role": "deeper",
+          "title": "CS162 Lecture 2: Four Fundamental OS Concepts",
+          "channel": "John Kubiatowicz",
+          "length": "1:22:19",
+          "why": "Threads, address spaces, processes and dual-mode operation, explained from the hardware up. Watch it when \"what happens on a system call\" questions feel shaky."
+        },
+        {
+          "kind": "v",
+          "id": "H4SDPLiUnv4",
+          "role": "quick",
+          "title": "How a Single Bit Inside Your Processor Shields Your Operating System's Integrity",
+          "channel": "Core Dumped",
+          "length": "21:30",
+          "why": "Animated walk through the mode bit, privileged instructions and traps. Makes user vs kernel mode concrete."
+        }
+      ]
+    },
+    {
+      "key": "proc",
+      "name": "Processes & fork()",
+      "mcq": "../mcq/#/d/os/proc",
+      "note": "fork/exec/wait semantics, zombies and orphans, the PCB, and what a context switch saves. The MCQs cover \"how many times is this printed\" fork puzzles.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "8ad4DzlZwgI",
+          "role": "best",
+          "title": "Operating Systems Lecture 3: System Calls for Process Management",
+          "channel": "Mythili Vutukuru",
+          "length": "21:03",
+          "why": "fork, exec, wait and exit with real code, including zombies, orphans and how a shell runs a command: exactly what interviewers ask."
+        },
+        {
+          "kind": "v",
+          "id": "RxLJvh-nzQ8",
+          "role": "deeper",
+          "title": "Operating Systems Lecture 4: Process Execution Mechanisms",
+          "channel": "Mythili Vutukuru",
+          "length": "24:14",
+          "why": "Limited direct execution: the kernel stack, the trap into the kernel and the context switch, step by step."
+        },
+        {
+          "kind": "v",
+          "id": "SwIPOf2YAgI",
+          "role": "quick",
+          "title": "The Weird Way Linux Creates Processes",
+          "channel": "Core Dumped",
+          "length": "17:51",
+          "why": "Why Unix splits creation into fork + exec and how copy-on-write makes it cheap, with clear animation."
+        }
+      ]
+    },
+    {
+      "key": "ipc",
+      "name": "Inter-Process Communication",
+      "mcq": "../mcq/#/d/os/ipc",
+      "note": "Shared memory vs message passing, pipes and named pipes, sockets, and signals. Know the trade-offs, not just the list.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "UbXGJDWNK9c",
+          "role": "best",
+          "title": "Operating Systems Lecture 6: Inter-process communication",
+          "channel": "Mythili Vutukuru",
+          "length": "11:50",
+          "why": "Shared memory, signals, sockets, pipes and message queues in 12 minutes, each tied to the system calls that create it."
+        },
+        {
+          "kind": "v",
+          "id": "Mqb2dVRe0uo",
+          "role": "deeper",
+          "title": "Communicating between processes (using pipes) in C",
+          "channel": "CodeVault",
+          "length": "14:00",
+          "why": "Hands-on: pipe() + fork() in C, closing the right ends, and why reads block. Good if you're asked to write it."
+        },
+        {
+          "kind": "v",
+          "id": "Y2mDwW2pMv4",
+          "role": "quick",
+          "title": "IPC: To Share Memory Or To Send Messages",
+          "channel": "Core Dumped",
+          "length": "14:15",
+          "why": "Visual comparison of the two IPC models and what each costs."
+        }
+      ]
+    },
+    {
+      "key": "threads",
+      "name": "Threads",
+      "mcq": "../mcq/#/d/os/threads",
+      "note": "What threads share and what they don't, user vs kernel threads and the 1:1 / M:N models, and why threads help even on one core.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "SVHLonf5AGY",
+          "role": "best",
+          "title": "Operating Systems Lecture 12: Introduction to threads and concurrency",
+          "channel": "Mythili Vutukuru",
+          "length": "20:39",
+          "why": "What a thread shares with its process, pthreads basics, and how a data race arises at the instruction level."
+        },
+        {
+          "kind": "v",
+          "id": "KXuZi9aeGTw",
+          "role": "deeper",
+          "title": "User-level threads....... with threads. - Paul Turner - Google",
+          "channel": "Linux Plumbers Conference",
+          "length": "34:00",
+          "hn": 20,
+          "why": "The most-recommended OS video on Hacker News (20 users). A Google kernel engineer on the real costs of kernel vs user threads and how Google combined them."
+        },
+        {
+          "kind": "v",
+          "id": "M9HHWFp84f0",
+          "role": "quick",
+          "title": "Why Are Threads Needed On Single Core Processors",
+          "channel": "Core Dumped",
+          "length": "16:07",
+          "why": "Clears up the usual confusion between concurrency and parallelism, with animation."
+        }
+      ]
+    },
+    {
+      "key": "sched",
+      "name": "CPU Scheduling",
+      "mcq": "../mcq/#/d/os/sched",
+      "note": "FCFS, SJF/SRTF, Round Robin, priority and MLFQ: their metrics (turnaround, waiting, response) and trade-offs. Practise Gantt-chart numericals in the MCQs.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "c1I99E1S3QA",
+          "role": "best",
+          "title": "Operating Systems Lecture 5: Scheduling Policies",
+          "channel": "Mythili Vutukuru",
+          "length": "10:20",
+          "why": "FIFO, SJF, STCF, Round Robin and MLFQ with the metric each one optimises, in ten minutes."
+        },
+        {
+          "kind": "v",
+          "id": "U7P4FbrraYs",
+          "role": "deeper",
+          "title": "CS162 Lecture 10: Scheduling 1: Concepts and Classic Policies",
+          "channel": "John Kubiatowicz",
+          "length": "1:28:06",
+          "why": "The same policies with the reasoning behind them: starvation, the convoy effect, and how to compare policies properly."
+        },
+        {
+          "kind": "v",
+          "id": "O2tV9q6784k",
+          "role": "quick",
+          "title": "The Fancy Algorithms That Make Your Computer Feel Smoother",
+          "channel": "Core Dumped",
+          "length": "45:02",
+          "why": "Animated tour from FCFS to MLFQ and Linux's CFS. Long, but the best visual intuition for why real schedulers look the way they do."
+        }
+      ]
+    },
+    {
+      "key": "sync",
+      "name": "Process Synchronization",
+      "mcq": "../mcq/#/d/os/sync",
+      "note": "The most-asked OS topic. Race conditions, how a lock is built from atomic instructions, condition variables (and why you wait in a while loop), semaphores, producer-consumer and readers-writers.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "EBevKfTDXUI",
+          "role": "best",
+          "title": "Operating Systems Lecture 13: Locks",
+          "channel": "Mythili Vutukuru",
+          "length": "25:14",
+          "why": "Why disabling interrupts and plain flag variables fail, test-and-set and compare-and-swap, spinning vs sleeping locks."
+        },
+        {
+          "kind": "v",
+          "id": "rMpOfbaP2PQ",
+          "role": "next",
+          "title": "Operating Systems Lecture 14: Condition variables",
+          "channel": "Mythili Vutukuru",
+          "length": "16:14",
+          "why": "Producer-consumer done correctly with condition variables, including why you re-check the condition in a while loop."
+        },
+        {
+          "kind": "v",
+          "id": "XN2P60BcowI",
+          "role": "next",
+          "title": "Operating Systems Lecture 15: Semaphores",
+          "channel": "Mythili Vutukuru",
+          "length": "8:59",
+          "why": "Semaphores as locks and as ordering tools, and the bounded-buffer solution."
+        },
+        {
+          "kind": "v",
+          "id": "gRX-YxdFQzk",
+          "role": "deeper",
+          "title": "CS162 Lecture 7: Synchronization 2: Semaphores (Con't), Lock Implementation, Atomic Instructions",
+          "channel": "John Kubiatowicz",
+          "length": "1:27:34",
+          "why": "Building locks from atomic instructions and the hardware underneath. Go here for depth on implementation questions."
+        }
+      ]
+    },
+    {
+      "key": "deadlock",
+      "name": "Deadlocks",
+      "mcq": "../mcq/#/d/os/deadlock",
+      "note": "The four Coffman conditions, prevention by breaking one of them (usually lock ordering), avoidance with Banker's algorithm, and detection.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "qnU7CHiJXTE",
+          "role": "best",
+          "title": "Operating Systems Lecture 16: Concurrency bugs",
+          "channel": "Mythili Vutukuru",
+          "length": "11:33",
+          "why": "Deadlock conditions and how real code prevents each one, plus atomicity and ordering bugs: the practical side interviewers care about."
+        },
+        {
+          "kind": "v",
+          "id": "FDwJ6EW4dCM",
+          "role": "deeper",
+          "title": "CS162 Lecture 12: Scheduling 3: Deadlock",
+          "channel": "John Kubiatowicz",
+          "length": "1:26:21",
+          "why": "Full treatment: resource-allocation graphs, detection, and Banker's algorithm worked through."
+        },
+        {
+          "kind": "v",
+          "id": "lMNrmDUJ3GY",
+          "role": "quick",
+          "title": "Banker's Algorithm | Operating Systems | GeeksforGeeks",
+          "channel": "GeeksforGeeks",
+          "length": "4:20",
+          "why": "A worked safe-sequence example in about four minutes. Watch it before the Banker's MCQs."
+        }
+      ]
+    },
+    {
+      "key": "mem",
+      "name": "Memory Management & Paging",
+      "mcq": "../mcq/#/d/os/mem",
+      "note": "Address translation, page tables and multi-level paging, the TLB, segmentation vs paging, and malloc-style free-space management.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "PTh2kL8ENzU",
+          "role": "best",
+          "title": "Operating Systems Lecture 9: Paging",
+          "channel": "Mythili Vutukuru",
+          "length": "20:36",
+          "why": "Page tables, page-table entries, the TLB and multi-level tables, with the arithmetic for page-table sizes."
+        },
+        {
+          "kind": "v",
+          "id": "mYxkp5vpyqc",
+          "role": "next",
+          "title": "Operating Systems Lecture 8: Mechanism of address translation",
+          "channel": "Mythili Vutukuru",
+          "length": "12:59",
+          "why": "Base/bound and segmentation: the problems paging was invented to solve. Watch it first if paging feels arbitrary."
+        },
+        {
+          "kind": "l",
+          "id": "PLiwt1iVUib9s2Uo5BeYmwkDFUh70fJPxX",
+          "thumb": "qlH4-oHnBb8",
+          "role": "deeper",
+          "title": "Virtual Memory",
+          "channel": "David Black-Schaffer",
+          "length": "14 videos",
+          "why": "Fourteen short, precise videos (Uppsala University) on translation, page faults, multi-level tables and TLBs, each with worked examples."
+        },
+        {
+          "kind": "v",
+          "id": "bq3_uT5Z424",
+          "role": "quick",
+          "title": "Operating Systems Lecture 11: Memory allocation and free space management algorithms",
+          "channel": "Mythili Vutukuru",
+          "length": "16:37",
+          "why": "First/best/worst fit, buddy allocation and slab allocators. Covers \"how does malloc work?\""
+        }
+      ]
+    },
+    {
+      "key": "vm",
+      "name": "Virtual Memory & Page Replacement",
+      "mcq": "../mcq/#/d/os/vm",
+      "note": "Demand paging, what happens on a page fault, FIFO / LRU / Optimal and Belady's anomaly, clock approximation, thrashing and working sets.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "r9NwqtqS2Ac",
+          "role": "best",
+          "title": "Operating Systems Lecture 10: Demand Paging",
+          "channel": "Mythili Vutukuru",
+          "length": "20:26",
+          "why": "The page-fault path, swap, replacement policies, the clock approximation of LRU and thrashing."
+        },
+        {
+          "kind": "v",
+          "id": "IBgkKX6DUTM",
+          "role": "deeper",
+          "title": "CS162 Lecture 15: Memory 3: Caching and TLBs (Con't), Demand Paging",
+          "channel": "John Kubiatowicz",
+          "length": "1:27:15",
+          "why": "Demand paging as caching: effective access time, replacement policies and Belady's anomaly, rigorously."
+        },
+        {
+          "kind": "v",
+          "id": "beefUhRH5lU",
+          "role": "deeper",
+          "title": "SREcon19 Asia/Pacific - Linux Memory Management at Scale: Under the Hood",
+          "channel": "USENIX",
+          "length": "",
+          "hn": 1,
+          "why": "Chris Down (Linux kernel memory developer, Meta) on page cache, reclaim and swap in production. Very good for \"how does Linux actually do it\" follow-ups."
+        },
+        {
+          "kind": "v",
+          "id": "qlH4-oHnBb8",
+          "role": "quick",
+          "title": "Virtual Memory: 3 What is Virtual Memory?",
+          "channel": "David Black-Schaffer",
+          "length": "8:47",
+          "why": "The clearest nine-minute explanation of what virtual memory is for."
+        }
+      ]
+    },
+    {
+      "key": "fs",
+      "name": "File Systems",
+      "mcq": "../mcq/#/d/os/fs",
+      "note": "Files, directories and file descriptors, hard vs soft links, inodes and block allocation, and crash consistency with journaling.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "JoTIG_ElTyY",
+          "role": "best",
+          "title": "Operating Systems Lecture 19: File system implementation",
+          "channel": "Mythili Vutukuru",
+          "length": "27:14",
+          "why": "On-disk layout (superblock, bitmaps, inodes, data blocks), what open/read/write actually touch, caching, and journaling."
+        },
+        {
+          "kind": "v",
+          "id": "sBQeOJvbOvw",
+          "role": "next",
+          "title": "Operating Systems Lecture 18: Files and directories",
+          "channel": "Mythili Vutukuru",
+          "length": "14:49",
+          "why": "The file API, the open-file table, hard vs symbolic links: the user-facing half."
+        },
+        {
+          "kind": "v",
+          "id": "a_h0AWNOqWU",
+          "role": "deeper",
+          "title": "CS162 Lecture 20 (4/14/2020): Filesystems (Con't), Reliability, Transactions",
+          "channel": "John Kubiatowicz",
+          "length": "1:25:17",
+          "why": "Crash consistency in depth: journaling, copy-on-write file systems and transactions."
+        }
+      ]
+    },
+    {
+      "key": "disk",
+      "name": "Disk Scheduling & RAID",
+      "mcq": "../mcq/#/d/os/disk",
+      "note": "Seek, rotation and transfer time; FCFS / SSTF / SCAN / C-SCAN / LOOK; RAID 0, 1, 5 and 10 trade-offs; why SSDs change the picture.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "-ZFINyHshqo",
+          "role": "best",
+          "title": "Operating Systems Lecture 20: Hard disk internals",
+          "channel": "Mythili Vutukuru",
+          "length": "11:45",
+          "why": "The disk-access-time model and the scheduling algorithms built on it, in twelve minutes."
+        },
+        {
+          "kind": "v",
+          "id": "KcOpkz2Q4h4",
+          "role": "deeper",
+          "title": "CS162 Lecture 18 (4/2/2020): Queueing Theory, Disk Scheduling & File Systems",
+          "channel": "John Kubiatowicz",
+          "length": "1:25:23",
+          "why": "Disk scheduling with the queueing theory that explains when it matters."
+        },
+        {
+          "kind": "v",
+          "id": "U-OCdTeZLac",
+          "role": "quick",
+          "title": "What is RAID 0, 1, 5, & 10?",
+          "channel": "PowerCert Animated Videos",
+          "length": "5:04",
+          "why": "Striping, mirroring and parity, animated in five minutes. Enough for RAID interview questions."
+        }
+      ]
+    },
+    {
+      "key": "virt",
+      "name": "Virtualization & Linux",
+      "mcq": "../mcq/#/d/os/virt",
+      "note": "Type 1 vs type 2 hypervisors, trap-and-emulate and hardware support, and containers vs VMs (namespaces + cgroups share one kernel).",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "Jph3H1wZTKM",
+          "role": "best",
+          "title": "Virtualization and Cloud Computing Lecture 1: Introduction",
+          "channel": "Mythili Vutukuru",
+          "length": "19:00",
+          "why": "What a hypervisor must do, the hypervisor types, and where containers fit, from the same IIT Bombay instructor."
+        },
+        {
+          "kind": "v",
+          "id": "sK5i-N34im8",
+          "role": "deeper",
+          "title": "Cgroups, namespaces, and beyond: what are containers made from?",
+          "channel": "Docker",
+          "length": "54:25",
+          "why": "Jérôme Petazzoni builds a container from kernel primitives. After this, \"container vs VM\" questions are easy."
+        },
+        {
+          "kind": "v",
+          "id": "cjXI-yxqGTI",
+          "role": "quick",
+          "title": "Containers vs VMs: What's the difference?",
+          "channel": "IBM Technology",
+          "length": "8:08",
+          "why": "An eight-minute comparison for revision."
+        }
+      ]
+    }
+  ]
+}

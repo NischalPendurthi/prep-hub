@@ -14,6 +14,7 @@
     { id: "langs", name: "Languages", href: "langs/" },
     { id: "topics", name: "Topics", href: "topics/" },
     { id: "mcq", name: "MCQ Prep", href: "mcq/" },
+    { id: "videos", name: "Videos", href: "videos/" },
     { id: "atlas", name: "CP Atlas", href: "atlas/" },
     { id: "ladder", name: "Ladder", href: "ladder/" },
     { id: "counter", name: "Counter", href: "counter/" }

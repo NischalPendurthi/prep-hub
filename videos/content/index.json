@@ -1,0 +1,14 @@
+{
+  "topics": [
+    {"id": "os", "name": "Operating Systems"},
+    {"id": "networks", "name": "Computer Networks"},
+    {"id": "dbms", "name": "DBMS & SQL"},
+    {"id": "oop", "name": "OOP & C++"},
+    {"id": "system-design", "name": "System Design"},
+    {"id": "comp-arch", "name": "Computer Architecture"},
+    {"id": "ml", "name": "ML & Deep Learning"},
+    {"id": "llms", "name": "LLMs & Agents"},
+    {"id": "compilers", "name": "Compilers"},
+    {"id": "embedded", "name": "Embedded & Linux Kernel"}
+  ]
+}
