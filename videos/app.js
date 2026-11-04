@@ -63,14 +63,14 @@
   function card(t, p) {
     var id = uid(t, p), w = !!watched[id];
     return '<article class="pick ' + p.role + (w ? " watched" : "") + '" data-uid="' + esc(id) + '">' +
-      '<button class="thumb" type="button" aria-label="Play ' + esc(p.title) + '" data-embed="' + esc(embedUrl(p)) + '">' +
+      '<button class="thumb" type="button" aria-label="Play ' + esc(p.label || p.title) + '" data-embed="' + esc(embedUrl(p)) + '">' +
       '<img loading="lazy" alt="" src="' + thumb(p) + '">' +
       '<span class="play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></span>' +
       (p.length ? '<span class="len">' + esc(p.length) + "</span>" : "") +
       (p.start ? '<span class="from">from ' + hms(p.start) + "</span>" : "") +
       "</button>" +
       '<div class="body"><span class="role">' + (ROLE[p.role] || p.role) + "</span>" +
-      '<h3><a href="' + esc(watchUrl(p)) + '" target="_blank" rel="noopener">' + esc(p.title) + "</a></h3>" +
+      '<h3><a href="' + esc(watchUrl(p)) + '" target="_blank" rel="noopener">' + esc(p.label || p.title) + "</a></h3>" +
       '<div class="by">' + esc(p.channel) + "</div>" +
       '<p class="why">' + esc(p.why) + "</p>" +
       '<div class="foot"><label><input type="checkbox"' + (w ? " checked" : "") + "> Watched</label>" +

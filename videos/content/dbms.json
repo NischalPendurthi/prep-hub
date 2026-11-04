@@ -1,0 +1,572 @@
+{
+  "id": "dbms",
+  "name": "DBMS & SQL",
+  "blurb": "One best video per subtopic, drawn from Stanford's database course, CMU's database course and the best SQL teachers on YouTube, each with a deeper and a quicker alternative. Watch the best pick, then do that subtopic's MCQs.",
+  "method": "<ul><li><b>Best pick</b>: the clearest correct explanation at interview depth. For SQL and theory most come from Jennifer Widom's Stanford course (short, exact lectures); for design, joins and normalization from Decomplexify; for interview-style queries from techTFQ.</li><li><b>Go deeper</b>: Andy Pavlo's CMU 15-445 lectures on how a database actually implements indexes, joins and concurrency control, and Martin Kleppmann (author of <i>Designing Data-Intensive Applications</i>) on distributed data.</li><li><b>Quick / visual</b>: short refreshers for revision.</li><li>Candidates came from Hacker News comments that link YouTube plus YouTube search for every subtopic. High-view exam channels lost when an English lecture explained the same idea more precisely; FD closure and candidate-key numericals are covered by the linked MCQs.</li></ul>",
+  "subtopics": [
+    {
+      "key": "courses",
+      "name": "Full courses",
+      "note": "CMU 15-445 is the best database course online, but it teaches how to build a database. For interviews, use it for indexing and transactions and the picks below for everything else.",
+      "picks": [
+        {
+          "kind": "l",
+          "id": "PLSE8ODhjZXjYDBpQnSymaectKjxCy6BYq",
+          "thumb": "7NPIENPr-zk",
+          "role": "course",
+          "title": "CMU Intro to Database Systems (15-445/645 - Fall 2024)",
+          "channel": "CMU Database Group",
+          "length": "26 videos",
+          "why": "Andy Pavlo's course: storage, buffer pools, B+trees, hashing, join algorithms, query optimisation, two-phase locking, MVCC, recovery and distributed databases. The most-recommended database course on Hacker News (13 users linked its 2019 edition)."
+        },
+        {
+          "kind": "l",
+          "id": "PLNITTkCQVxeXryTQvY0JBWTyN9ynxxPH8",
+          "thumb": "GFQaEYEc8_8",
+          "role": "quick",
+          "title": "Relational database (RDBMS)",
+          "channel": "Decomplexify",
+          "length": "8 videos",
+          "why": "Keys, ER diagrams, joins and normal forms with clear examples: the design half of DBMS interviews."
+        },
+        {
+          "kind": "l",
+          "id": "PLQnljOFTspQXjD0HOzN7P2tgzu7scWpl2",
+          "thumb": "pomxJOFVcQs",
+          "role": "deeper",
+          "title": "Database Engineering",
+          "channel": "Hussein Nasser",
+          "length": "118 videos",
+          "why": "A backend engineer on how Postgres and MySQL behave in practice: indexes, isolation, locks, replication and sharding. Dip in by topic; don't watch it all."
+        }
+      ]
+    },
+    {
+      "key": "fund",
+      "name": "DBMS Fundamentals & Keys",
+      "mcq": "../mcq/#/d/sql/fund",
+      "note": "Super, candidate, primary, foreign and surrogate keys; ER modelling and cardinality; relational algebra (selection, projection, joins, division).",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "8wUUMOKAK-c",
+          "role": "best",
+          "title": "Database Keys Made Easy - Primary, Foreign, Candidate, Surrogate, & Many More",
+          "channel": "Decomplexify",
+          "length": "23:19",
+          "why": "Every kind of key on one running example, with the reasoning for choosing a primary key, natural vs surrogate."
+        },
+        {
+          "kind": "v",
+          "id": "LowjDtiNlk4",
+          "role": "next",
+          "title": "Entity Relationship Diagrams",
+          "channel": "Decomplexify",
+          "length": "20:32",
+          "why": "Entities, relationships and cardinality, then turning the diagram into tables."
+        },
+        {
+          "kind": "v",
+          "id": "tii7xcFilOA",
+          "role": "next",
+          "title": "05-01-relational-algebra-1.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "18:05",
+          "why": "Jennifer Widom (Stanford) on select, project, product and join, with the exact semantics SQL is built on.",
+          "label": "Relational Algebra (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "7NPIENPr-zk",
+          "role": "deeper",
+          "title": "#01 - Relational Model & Algebra (CMU Intro to Database Systems)",
+          "channel": "CMU Database Group",
+          "length": "1:14:50",
+          "why": "Why the relational model won, and relational algebra as a database actually executes it."
+        }
+      ]
+    },
+    {
+      "key": "basics",
+      "name": "SQL Basics & NULL Handling",
+      "mcq": "../mcq/#/d/sql/basics",
+      "note": "SELECT/WHERE/ORDER BY semantics, the logical order a query is evaluated in, and three-valued logic: why `= NULL` never matches and how NULL breaks NOT IN.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "4IxirOdp6bw",
+          "role": "best",
+          "title": "06-02-basic-select-statement.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "9:57",
+          "why": "The SELECT-FROM-WHERE block with its precise meaning, demonstrated live: a ten-minute foundation for every query after it.",
+          "label": "The Basic SELECT Statement (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "qdR2z_Ws56k",
+          "role": "next",
+          "title": "06-07-null-values.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "6:25",
+          "why": "How NULL behaves in comparisons, WHERE and aggregates: the source of most \"what does this query return?\" traps.",
+          "label": "NULL Values (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "HXV3zeQKqGY",
+          "role": "deeper",
+          "title": "SQL Tutorial - Full Database Course for Beginners",
+          "channel": "freeCodeCamp.org",
+          "length": "4:20:39",
+          "why": "A complete hands-on SQL course if you've never written queries. Skip it if you have."
+        }
+      ]
+    },
+    {
+      "key": "agg",
+      "name": "Aggregation & GROUP BY",
+      "mcq": "../mcq/#/d/sql/agg",
+      "note": "What GROUP BY does to rows, which columns you may select, WHERE vs HAVING, COUNT(*) vs COUNT(col), and ROLLUP/CUBE.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "428B57dOxcE",
+          "role": "best",
+          "title": "06-06-aggregation.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "25:18",
+          "why": "Aggregates, GROUP BY and HAVING demonstrated query by query, including the cases that surprise people.",
+          "label": "Aggregation (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "Ccye_H34hBo",
+          "role": "deeper",
+          "title": "GROUPING SETS vs ROLLUP vs CUBE in SQL | Advanced SQL Tutorial with Examples",
+          "channel": "techTFQ",
+          "length": "33:40",
+          "why": "Multi-level subtotals, which come up in analytics-role SQL rounds."
+        },
+        {
+          "kind": "v",
+          "id": "VQf0V6Wwbf4",
+          "role": "quick",
+          "title": "GROUP BY and HAVING Clause in SQL",
+          "channel": "Neso Academy",
+          "length": "7:57",
+          "why": "WHERE vs HAVING in eight minutes for revision."
+        }
+      ]
+    },
+    {
+      "key": "joins",
+      "name": "Joins",
+      "mcq": "../mcq/#/d/sql/joins",
+      "note": "Inner, left, right, full and cross joins, self joins, how duplicates and NULLs multiply rows, and how databases execute joins (nested loop, hash, sort-merge).",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "nivyaiCeWjs",
+          "role": "best",
+          "title": "Learn SQL Joins",
+          "channel": "Decomplexify",
+          "length": "21:39",
+          "why": "Every join type explained with row-level pictures instead of misleading Venn diagrams, including self joins."
+        },
+        {
+          "kind": "v",
+          "id": "xUsY2jWQa1w",
+          "role": "next",
+          "title": "SQL JOINS Interview Question | What does different SQL Joins return?",
+          "channel": "techTFQ",
+          "length": "25:17",
+          "why": "The classic interview question: row counts for each join when keys repeat or are NULL."
+        },
+        {
+          "kind": "v",
+          "id": "MFazkaZKs1s",
+          "role": "deeper",
+          "title": "#12 - Join Algorithms: Hash, Sort-Merge, Nested Loop Joins (CMU Intro to Database Systems)",
+          "channel": "CMU Database Group",
+          "length": "1:14:23",
+          "why": "How the database actually runs a join and what each algorithm costs. Answers \"why is my join slow?\""
+        }
+      ]
+    },
+    {
+      "key": "subq",
+      "name": "Subqueries & Set Operations",
+      "mcq": "../mcq/#/d/sql/subq",
+      "note": "Scalar, IN/EXISTS and correlated subqueries; subqueries in FROM and SELECT; CTEs; UNION vs UNION ALL, INTERSECT, EXCEPT.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "IJPXosPGLTU",
+          "role": "best",
+          "title": "06-04-subqueries-in-where.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "20:14",
+          "why": "IN, EXISTS, ALL and ANY, and when a subquery equals a join and when it doesn't (duplicates).",
+          "label": "Subqueries in WHERE (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "8OCAxk1Rybg",
+          "role": "next",
+          "title": "06-05-subqueries-in-from-select.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "8:02",
+          "why": "Derived tables and scalar subqueries in SELECT.",
+          "label": "Subqueries in FROM and SELECT (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "thcqxTlSAmw",
+          "role": "next",
+          "title": "06 03 table variables set operators",
+          "channel": "Stanford Dbclass",
+          "length": "10:33",
+          "why": "UNION, INTERSECT and EXCEPT, with set vs bag semantics.",
+          "label": "Table Variables and Set Operators (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "QNfnuK-1YYY",
+          "role": "deeper",
+          "title": "SQL WITH Clause | How to write SQL Queries using WITH Clause | SQL CTE (Common Table Expression)",
+          "channel": "techTFQ",
+          "length": "24:48",
+          "why": "Rewriting nested subqueries as CTEs, which is how good interview answers are usually written."
+        }
+      ]
+    },
+    {
+      "key": "window",
+      "name": "Window Functions",
+      "mcq": "../mcq/#/d/sql/window",
+      "note": "OVER, PARTITION BY and ORDER BY; ROW_NUMBER vs RANK vs DENSE_RANK; LEAD/LAG; running totals and frame clauses. Very common in SQL rounds.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "Ww71knvhQ-s",
+          "role": "best",
+          "title": "SQL Window Function | How to write SQL Query using RANK, DENSE RANK, LEAD/LAG | SQL Queries Tutorial",
+          "channel": "techTFQ",
+          "length": "24:55",
+          "why": "The window functions that matter for interviews, each used to solve a real query."
+        },
+        {
+          "kind": "v",
+          "id": "zAmJPdZu8Rg",
+          "role": "deeper",
+          "title": "SQL Window Function | How to write SQL Query using Frame Clause, CUME_DIST | SQL Queries Tutorial",
+          "channel": "techTFQ",
+          "length": "54:31",
+          "why": "Frame clauses (ROWS vs RANGE) and FIRST_VALUE/LAST_VALUE: the part most people get wrong."
+        },
+        {
+          "kind": "v",
+          "id": "rIcB4zMYMas",
+          "role": "quick",
+          "title": "SQL Window Functions | Clearly Explained | PARTITION BY, ORDER BY, ROW_NUMBER, RANK, DENSE_RANK",
+          "channel": "Maven Analytics",
+          "length": "7:52",
+          "why": "Eight-minute visual refresher."
+        }
+      ]
+    },
+    {
+      "key": "classic",
+      "name": "Classic Interview Queries",
+      "mcq": "../mcq/#/d/sql/classic",
+      "note": "Nth highest salary, duplicates, top-N per group, consecutive days, employee-manager hierarchies. Try each problem yourself before watching the solution.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "ZML_EJrBhnY",
+          "role": "best",
+          "title": "Top 10 SQL Interview Queries | Popular SQL Queries for SQL Interview",
+          "channel": "techTFQ",
+          "length": "36:33",
+          "why": "The ten query patterns that come up most often, each solved and explained."
+        },
+        {
+          "kind": "v",
+          "id": "aE623ff7zkM",
+          "role": "next",
+          "title": "Solving SQL Interview Queries | Tricky SQL Interview Queries",
+          "channel": "techTFQ",
+          "length": "37:22",
+          "why": "Harder problems that need several techniques combined."
+        },
+        {
+          "kind": "v",
+          "id": "xN2PRAd8IZQ",
+          "role": "deeper",
+          "title": "REAL SQL Interview Question by a FAANG company | SQL Interview Query and Solution",
+          "channel": "techTFQ",
+          "length": "46:47",
+          "why": "One real company problem worked from scratch, showing how to think aloud in an interview."
+        }
+      ]
+    },
+    {
+      "key": "adv",
+      "name": "Advanced SQL Features",
+      "mcq": "../mcq/#/d/sql/adv",
+      "note": "Recursive CTEs for hierarchies, views and materialized views, triggers, stored procedures and constraints.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "7hZYh9qXxe4",
+          "role": "best",
+          "title": "Recursive SQL Queries Tutorial | Learn to write SQL Queries using Recursion",
+          "channel": "techTFQ",
+          "length": "33:52",
+          "why": "Recursive CTEs from the base case up, applied to org charts and number series."
+        },
+        {
+          "kind": "v",
+          "id": "s9iRD-zrxS0",
+          "role": "next",
+          "title": "11-04-triggers-intro.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "15:27",
+          "why": "What triggers are, when they fire, and row- vs statement-level semantics.",
+          "label": "Triggers: Introduction (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "EGeDJzdh--o",
+          "role": "next",
+          "title": "11 02 constraints part1",
+          "channel": "Stanford Dbclass",
+          "length": "25:29",
+          "why": "NOT NULL, key, CHECK and referential-integrity constraints, and what the database enforces.",
+          "label": "Constraints (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "xEDZQtAHpX8",
+          "role": "deeper",
+          "title": "Modern SQL: A lot has changed since SQL-92 by Markus Winand",
+          "channel": "Devoxx",
+          "length": "55:06",
+          "hn": 2,
+          "why": "The author of Use The Index, Luke! on LATERAL, WITH RECURSIVE, FILTER, window functions and other features most people never learn."
+        },
+        {
+          "kind": "v",
+          "id": "NrBJmtD0kEw",
+          "role": "quick",
+          "title": "Advanced SQL Tutorial | Stored Procedures + Use Cases",
+          "channel": "Alex The Analyst",
+          "length": "6:15",
+          "why": "Stored procedures with parameters in six minutes."
+        }
+      ]
+    },
+    {
+      "key": "index",
+      "name": "Indexing",
+      "mcq": "../mcq/#/d/sql/index",
+      "note": "Why indexes speed up reads and slow down writes, B-tree vs B+tree, clustered vs non-clustered, composite indexes and the leftmost-prefix rule.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "3G293is403I",
+          "role": "best",
+          "title": "How do indexes make databases read faster?",
+          "channel": "Arpit Bhayani",
+          "length": "23:25",
+          "why": "Starts from disk blocks and counts the reads a query makes with and without an index. Makes \"how does an index work\" answerable from first principles."
+        },
+        {
+          "kind": "v",
+          "id": "UzHl2VzyZS4",
+          "role": "next",
+          "title": "B-tree vs B+ tree in Database Systems",
+          "channel": "Hussein Nasser",
+          "length": "31:50",
+          "why": "Why databases use B+trees: linked leaves for range scans and higher fan-out, plus what Postgres and MySQL do differently."
+        },
+        {
+          "kind": "v",
+          "id": "scUtG_6M_lU",
+          "role": "deeper",
+          "title": "#08 - Tree Indexes: B+Trees (CMU Intro to Database Systems)",
+          "channel": "CMU Database Group",
+          "length": "1:22:15",
+          "why": "Insert, split, merge, clustered indexes and composite keys, as a database implements them."
+        },
+        {
+          "kind": "v",
+          "id": "K1a2Bk8NrYQ",
+          "role": "quick",
+          "title": "Understanding B-Trees: The Data Structure Behind Modern Databases",
+          "channel": "Spanning Tree",
+          "length": "12:39",
+          "why": "Animated B-tree search, insert and split."
+        }
+      ]
+    },
+    {
+      "key": "norm",
+      "name": "Normalization",
+      "mcq": "../mcq/#/d/sql/norm",
+      "note": "Update, insert and delete anomalies; functional dependencies; 1NF to BCNF; lossless and dependency-preserving decomposition. Practise closure and candidate-key questions in the MCQs.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "GFQaEYEc8_8",
+          "role": "best",
+          "title": "Learn Database Normalization - 1NF, 2NF, 3NF, 4NF, 5NF",
+          "channel": "Decomplexify",
+          "length": "28:34",
+          "why": "Every normal form on one evolving example, each motivated by the anomaly it removes. The clearest normalization video there is."
+        },
+        {
+          "kind": "v",
+          "id": "VWnKUKH4tLg",
+          "role": "next",
+          "title": "Learn Boyce-Codd Normal Form (BCNF)",
+          "channel": "Decomplexify",
+          "length": "13:37",
+          "why": "Where 3NF and BCNF differ, which is a favourite follow-up question."
+        },
+        {
+          "kind": "v",
+          "id": "Mkm1h5AtsXI",
+          "role": "deeper",
+          "title": "07-02-functional-dependencies.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "27:54",
+          "why": "Functional dependencies formally: closure, keys and the rules behind decomposition.",
+          "label": "Functional Dependencies (Stanford, Jennifer Widom)"
+        }
+      ]
+    },
+    {
+      "key": "txn",
+      "name": "Transactions & Concurrency",
+      "mcq": "../mcq/#/d/sql/txn",
+      "note": "ACID; dirty, non-repeatable and phantom reads; the four isolation levels; serializability; two-phase locking vs MVCC; deadlocks in databases.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "aNCpEC0-VVs",
+          "role": "best",
+          "title": "12-02-transactions-properties.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "12:59",
+          "why": "ACID defined precisely, with what each property actually promises.",
+          "label": "Transaction Properties (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "kTxxh-XPUK4",
+          "role": "next",
+          "title": "12-03-isolation-levels.mp4",
+          "channel": "Stanford Dbclass",
+          "length": "17:41",
+          "why": "The isolation levels and exactly which anomalies each allows.",
+          "label": "Isolation Levels (Stanford, Jennifer Widom)"
+        },
+        {
+          "kind": "v",
+          "id": "bXpkEt5P_Js",
+          "role": "deeper",
+          "title": "#17 - Two-Phase Locking Concurrency Control (CMU Intro to Database Systems)",
+          "channel": "CMU Database Group",
+          "length": "1:05:22",
+          "why": "How 2PL guarantees serializability, cascading aborts and strict 2PL, and deadlock handling."
+        },
+        {
+          "kind": "v",
+          "id": "tUFha9-DuSk",
+          "role": "deeper",
+          "title": "#20 - MVCC: Multi-Version Concurrency Control (CMU Intro to Database Systems)",
+          "channel": "CMU Database Group",
+          "length": "1:23:20",
+          "why": "How Postgres and MySQL let readers and writers avoid blocking each other."
+        },
+        {
+          "kind": "v",
+          "id": "5ZjhNTM8XU8",
+          "role": "deeper",
+          "title": "\"Transactions: myths, surprises and opportunities\" by Martin Kleppmann",
+          "channel": "Strange Loop Conference",
+          "length": "41:08",
+          "hn": 2,
+          "why": "What isolation levels really guarantee in Postgres, MySQL and Oracle, including write skew, which \"repeatable read\" doesn't prevent. Changes how you answer isolation questions."
+        },
+        {
+          "kind": "v",
+          "id": "GAe5oB742dw",
+          "role": "quick",
+          "title": "ACID Properties in Databases With Examples",
+          "channel": "ByteByteGo",
+          "length": "4:57",
+          "why": "ACID in five minutes for revision."
+        }
+      ]
+    },
+    {
+      "key": "nosql",
+      "name": "NoSQL & Distributed Databases",
+      "mcq": "../mcq/#/d/sql/nosql",
+      "note": "Document, key-value, column and graph stores; replication (leader-follower, quorums); sharding; CAP and eventual consistency; when to pick SQL vs NoSQL.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "qI_g07C_Q5I",
+          "role": "best",
+          "title": "Introduction to NoSQL • Martin Fowler • GOTO 2012",
+          "channel": "GOTO Conferences",
+          "length": "54:52",
+          "hn": 11,
+          "why": "Martin Fowler on why NoSQL appeared, the aggregate-oriented data models (key-value, document, column-family), graph databases, and how consistency trades against distribution. Recommended by 11 HN users and the best answer to \"SQL or NoSQL?\""
+        },
+        {
+          "kind": "v",
+          "id": "mBUCF1WGI_I",
+          "role": "next",
+          "title": "Distributed Systems 5.1: Replication",
+          "channel": "Martin Kleppmann",
+          "length": "25:21",
+          "why": "Cambridge lecture by the author of Designing Data-Intensive Applications: why replicas diverge and how systems reconcile them. The right depth for CAP questions."
+        },
+        {
+          "kind": "v",
+          "id": "uNxl3BFcKSA",
+          "role": "next",
+          "title": "Distributed Systems 5.2: Quorums",
+          "channel": "Martin Kleppmann",
+          "length": "9:37",
+          "why": "Read/write quorums (R + W > N), the mechanism behind tunable consistency in Cassandra and Dynamo."
+        },
+        {
+          "kind": "l",
+          "id": "PLeKd45zvjcDFUEv_ohr_HdUFe97RItdiB",
+          "thumb": "mBUCF1WGI_I",
+          "role": "deeper",
+          "title": "Distributed Systems lecture series",
+          "channel": "Martin Kleppmann",
+          "length": "23 videos",
+          "hn": 3,
+          "why": "The full course: time, broadcast, replication, consensus and consistency models. Recommended by several HN users."
+        },
+        {
+          "kind": "v",
+          "id": "BHqjEjzAicA",
+          "role": "quick",
+          "title": "CAP Theorem Simplified",
+          "channel": "ByteByteGo",
+          "length": "5:33",
+          "why": "CAP in five minutes, including why \"pick two\" is misleading."
+        }
+      ]
+    }
+  ]
+}

@@ -1,20 +1,423 @@
 {
-  "os": {
-    "name": "Operating Systems",
-    "hn_terms": ["operating systems", "operating system course", "os lectures", "xv6", "linux kernel", "kernel", "scheduler", "virtual memory", "page table", "paging", "tlb", "mutex", "semaphore", "deadlock", "concurrency", "threads", "file system", "filesystem", "fork", "system calls", "syscall", "context switch", "6.828", "6.s081", "cs162", "ostep", "remzi", "virtualization", "hypervisor", "io_uring", "raid", "ssd"],
-    "subtopics": {
-      "basics": {"name": "OS Basics & Kernel", "yt": ["what is an operating system kernel lecture", "system calls user mode kernel mode explained", "operating systems course lecture 1 introduction"]},
-      "proc": {"name": "Processes & fork()", "yt": ["process abstraction fork exec lecture", "fork system call explained", "process control block context switch lecture"]},
-      "ipc": {"name": "Inter-Process Communication", "yt": ["inter process communication pipes shared memory lecture", "unix pipes explained", "ipc message passing shared memory operating system"]},
-      "threads": {"name": "Threads", "yt": ["threads vs processes lecture", "user level vs kernel level threads lecture", "threads operating systems lecture"]},
-      "sched": {"name": "CPU Scheduling", "yt": ["cpu scheduling lecture operating systems", "multilevel feedback queue scheduling", "linux completely fair scheduler explained"]},
-      "sync": {"name": "Process Synchronization", "yt": ["locks mutex semaphores lecture", "condition variables monitors lecture", "producer consumer problem semaphore", "race condition critical section lecture"]},
-      "deadlock": {"name": "Deadlocks", "yt": ["deadlock lecture operating systems", "bankers algorithm explained", "deadlock prevention avoidance detection"]},
-      "mem": {"name": "Memory Management & Paging", "yt": ["paging lecture operating systems", "page tables multilevel paging explained", "segmentation vs paging lecture", "tlb translation lookaside buffer"]},
-      "vm": {"name": "Virtual Memory & Page Replacement", "yt": ["virtual memory lecture", "page replacement algorithms lru lecture", "demand paging page fault thrashing"]},
-      "fs": {"name": "File Systems", "yt": ["file systems lecture inode", "file system implementation lecture", "journaling file system crash consistency"]},
-      "disk": {"name": "Disk Scheduling & RAID", "yt": ["disk scheduling algorithms lecture", "raid explained lecture", "hard disk drives and ssd lecture operating systems"]},
-      "virt": {"name": "Virtualization & Linux", "yt": ["virtual machines hypervisor lecture", "containers vs virtual machines namespaces cgroups", "linux kernel explained"]}
-    }
+ "os": {
+  "name": "Operating Systems",
+  "hn_terms": [
+   "operating systems",
+   "operating system course",
+   "os lectures",
+   "xv6",
+   "linux kernel",
+   "kernel",
+   "scheduler",
+   "virtual memory",
+   "page table",
+   "paging",
+   "tlb",
+   "mutex",
+   "semaphore",
+   "deadlock",
+   "concurrency",
+   "threads",
+   "file system",
+   "filesystem",
+   "fork",
+   "system calls",
+   "syscall",
+   "context switch",
+   "6.828",
+   "6.s081",
+   "cs162",
+   "ostep",
+   "remzi",
+   "virtualization",
+   "hypervisor",
+   "io_uring",
+   "raid",
+   "ssd"
+  ],
+  "subtopics": {
+   "basics": {
+    "name": "OS Basics & Kernel",
+    "yt": [
+     "what is an operating system kernel lecture",
+     "system calls user mode kernel mode explained",
+     "operating systems course lecture 1 introduction"
+    ]
+   },
+   "proc": {
+    "name": "Processes & fork()",
+    "yt": [
+     "process abstraction fork exec lecture",
+     "fork system call explained",
+     "process control block context switch lecture"
+    ]
+   },
+   "ipc": {
+    "name": "Inter-Process Communication",
+    "yt": [
+     "inter process communication pipes shared memory lecture",
+     "unix pipes explained",
+     "ipc message passing shared memory operating system"
+    ]
+   },
+   "threads": {
+    "name": "Threads",
+    "yt": [
+     "threads vs processes lecture",
+     "user level vs kernel level threads lecture",
+     "threads operating systems lecture"
+    ]
+   },
+   "sched": {
+    "name": "CPU Scheduling",
+    "yt": [
+     "cpu scheduling lecture operating systems",
+     "multilevel feedback queue scheduling",
+     "linux completely fair scheduler explained"
+    ]
+   },
+   "sync": {
+    "name": "Process Synchronization",
+    "yt": [
+     "locks mutex semaphores lecture",
+     "condition variables monitors lecture",
+     "producer consumer problem semaphore",
+     "race condition critical section lecture"
+    ]
+   },
+   "deadlock": {
+    "name": "Deadlocks",
+    "yt": [
+     "deadlock lecture operating systems",
+     "bankers algorithm explained",
+     "deadlock prevention avoidance detection"
+    ]
+   },
+   "mem": {
+    "name": "Memory Management & Paging",
+    "yt": [
+     "paging lecture operating systems",
+     "page tables multilevel paging explained",
+     "segmentation vs paging lecture",
+     "tlb translation lookaside buffer"
+    ]
+   },
+   "vm": {
+    "name": "Virtual Memory & Page Replacement",
+    "yt": [
+     "virtual memory lecture",
+     "page replacement algorithms lru lecture",
+     "demand paging page fault thrashing"
+    ]
+   },
+   "fs": {
+    "name": "File Systems",
+    "yt": [
+     "file systems lecture inode",
+     "file system implementation lecture",
+     "journaling file system crash consistency"
+    ]
+   },
+   "disk": {
+    "name": "Disk Scheduling & RAID",
+    "yt": [
+     "disk scheduling algorithms lecture",
+     "raid explained lecture",
+     "hard disk drives and ssd lecture operating systems"
+    ]
+   },
+   "virt": {
+    "name": "Virtualization & Linux",
+    "yt": [
+     "virtual machines hypervisor lecture",
+     "containers vs virtual machines namespaces cgroups",
+     "linux kernel explained"
+    ]
+   }
   }
+ },
+ "networks": {
+  "name": "Computer Networks",
+  "hn_terms": [
+   "computer networks",
+   "networking course",
+   "networking lecture",
+   "tcp",
+   "tcp/ip",
+   "udp",
+   "congestion control",
+   "bbr",
+   "dns",
+   "bgp",
+   "routing",
+   "ip address",
+   "subnet",
+   "ethernet",
+   "wifi",
+   "http/2",
+   "http/3",
+   "quic",
+   "tls",
+   "ssl",
+   "handshake",
+   "nat",
+   "ipv6",
+   "packet",
+   "osi model",
+   "network stack",
+   "sockets",
+   "cs144",
+   "kurose",
+   "load balancer",
+   "cdn",
+   "wireshark"
+  ],
+  "subtopics": {
+   "models": {
+    "name": "OSI & TCP/IP Models",
+    "yt": [
+     "osi model vs tcp ip model lecture",
+     "computer networks lecture 1 introduction layering",
+     "internet protocol stack layering explained"
+    ]
+   },
+   "datalink": {
+    "name": "Physical & Data Link Layer",
+    "yt": [
+     "data link layer lecture ethernet mac",
+     "csma cd csma ca explained",
+     "switches vs hubs vs routers mac address arp"
+    ]
+   },
+   "error": {
+    "name": "Error Detection & Correction",
+    "yt": [
+     "crc cyclic redundancy check explained",
+     "hamming code error correction explained",
+     "checksum parity error detection lecture"
+    ]
+   },
+   "flow": {
+    "name": "Flow Control & ARQ",
+    "yt": [
+     "stop and wait go back n selective repeat lecture",
+     "sliding window protocol explained",
+     "reliable data transfer rdt lecture"
+    ]
+   },
+   "ip": {
+    "name": "IP Addressing & Subnetting",
+    "yt": [
+     "subnetting explained",
+     "cidr ip addressing lecture",
+     "ip address subnet mask explained"
+    ]
+   },
+   "netlayer": {
+    "name": "NAT, IPv6, ICMP & Fragmentation",
+    "yt": [
+     "nat network address translation explained",
+     "ipv6 explained lecture",
+     "ip fragmentation icmp lecture"
+    ]
+   },
+   "routing": {
+    "name": "Routing Algorithms & Protocols",
+    "yt": [
+     "distance vector link state routing lecture",
+     "bgp explained",
+     "ospf rip routing protocols lecture"
+    ]
+   },
+   "transport": {
+    "name": "TCP & UDP",
+    "yt": [
+     "tcp vs udp explained",
+     "tcp three way handshake lecture",
+     "transport layer lecture tcp"
+    ]
+   },
+   "congestion": {
+    "name": "TCP Flow & Congestion Control",
+    "yt": [
+     "tcp congestion control lecture",
+     "slow start congestion avoidance aimd",
+     "tcp flow control receive window"
+    ]
+   },
+   "http": {
+    "name": "HTTP & Web Protocols",
+    "yt": [
+     "http explained lecture",
+     "http/2 http/3 quic explained",
+     "what happens when you type a url"
+    ]
+   },
+   "appproto": {
+    "name": "DNS, DHCP, Email & FTP",
+    "yt": [
+     "dns explained how dns works",
+     "dhcp explained",
+     "smtp email protocol explained"
+    ]
+   },
+   "security": {
+    "name": "Network Security",
+    "yt": [
+     "tls handshake explained",
+     "public key cryptography explained",
+     "firewalls vpn network security lecture"
+    ]
+   },
+   "perf": {
+    "name": "Delays & Performance",
+    "yt": [
+     "transmission delay propagation delay queuing delay",
+     "bandwidth vs latency throughput explained",
+     "bandwidth delay product"
+    ]
+   },
+   "infra": {
+    "name": "Web Infrastructure & Scenarios",
+    "yt": [
+     "load balancer explained",
+     "cdn content delivery network explained",
+     "reverse proxy vs forward proxy"
+    ]
+   }
+  }
+ },
+ "dbms": {
+  "name": "DBMS & SQL",
+  "hn_terms": [
+   "database course",
+   "database lecture",
+   "databases",
+   "sql",
+   "postgres",
+   "postgresql",
+   "sqlite",
+   "mysql",
+   "query optimizer",
+   "b-tree",
+   "btree",
+   "b+ tree",
+   "lsm tree",
+   "index",
+   "indexes",
+   "transactions",
+   "acid",
+   "isolation level",
+   "mvcc",
+   "normalization",
+   "join",
+   "window functions",
+   "cmu 15-445",
+   "andy pavlo",
+   "database internals",
+   "nosql",
+   "cap theorem",
+   "distributed database",
+   "sharding",
+   "replication"
+  ],
+  "subtopics": {
+   "fund": {
+    "name": "DBMS Fundamentals & Keys",
+    "yt": [
+     "relational model keys primary foreign candidate lecture",
+     "er model entity relationship lecture",
+     "relational algebra lecture"
+    ]
+   },
+   "basics": {
+    "name": "SQL Basics & NULL Handling",
+    "yt": [
+     "sql tutorial for beginners",
+     "sql null handling three valued logic",
+     "sql select where order by explained"
+    ]
+   },
+   "agg": {
+    "name": "Aggregation & GROUP BY",
+    "yt": [
+     "sql group by having explained",
+     "sql aggregate functions tutorial"
+    ]
+   },
+   "joins": {
+    "name": "Joins",
+    "yt": [
+     "sql joins explained",
+     "inner join left join explained",
+     "join algorithms hash join merge join lecture"
+    ]
+   },
+   "subq": {
+    "name": "Subqueries & Set Operations",
+    "yt": [
+     "sql subqueries correlated subquery explained",
+     "sql union intersect except",
+     "sql cte common table expression"
+    ]
+   },
+   "window": {
+    "name": "Window Functions",
+    "yt": [
+     "sql window functions explained",
+     "rank dense_rank row_number sql",
+     "sql window functions tutorial"
+    ]
+   },
+   "classic": {
+    "name": "Classic Interview Queries",
+    "yt": [
+     "sql interview questions",
+     "nth highest salary sql",
+     "sql interview problems solved"
+    ]
+   },
+   "adv": {
+    "name": "Advanced SQL Features",
+    "yt": [
+     "advanced sql lecture",
+     "sql recursive cte",
+     "stored procedures triggers views sql"
+    ]
+   },
+   "index": {
+    "name": "Indexing",
+    "yt": [
+     "database indexing explained",
+     "b+ tree index lecture",
+     "how database indexes work"
+    ]
+   },
+   "norm": {
+    "name": "Normalization",
+    "yt": [
+     "database normalization 1nf 2nf 3nf bcnf",
+     "functional dependencies lecture",
+     "normalization explained"
+    ]
+   },
+   "txn": {
+    "name": "Transactions & Concurrency",
+    "yt": [
+     "acid transactions lecture",
+     "isolation levels explained",
+     "two phase locking mvcc lecture",
+     "concurrency control database lecture"
+    ]
+   },
+   "nosql": {
+    "name": "NoSQL & Distributed Databases",
+    "yt": [
+     "sql vs nosql explained",
+     "cap theorem explained",
+     "database sharding replication explained"
+    ]
+   }
+  }
+ }
 }

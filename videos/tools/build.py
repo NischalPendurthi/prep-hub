@@ -9,6 +9,7 @@ Topic order and the list of planned topics come from videos/content/index.json.
 """
 import json
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -27,11 +28,13 @@ def oembed_title(p):
     url = ("https://www.youtube.com/watch?v=" if p["kind"] == "v" else "https://www.youtube.com/playlist?list=") + p["id"]
     req = urllib.request.Request("https://www.youtube.com/oembed?format=json&url=" + urllib.parse.quote(url, safe=""),
                                  headers={"User-Agent": "prep-hub-video-check/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return json.load(r).get("title")
-    except Exception:  # noqa: BLE001
-        return None
+    for attempt in range(3):  # YouTube occasionally fails a request; only a repeated failure counts
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.load(r).get("title")
+        except Exception:  # noqa: BLE001
+            time.sleep(2 * (attempt + 1))
+    return None
 
 
 def main():
