@@ -83,7 +83,7 @@
 .hubbar .hub-menu-btn { display: none; margin-right: 6px; }
 .hubbar svg { width: 16px; height: 16px; }
 
-@media (max-width: 900px) {
+@media (max-width: 1040px) {
   .hubbar .hub-menu-btn { display: inline-grid; }
   .hubbar .hub-links {
     display: none; position: absolute; top: calc(var(--hub-bar-h) - 1px); left: 0; right: 0;
@@ -94,3 +94,36 @@
   .hubbar .hub-links a { padding: 10px 12px; font-size: 15px; }
 }
 @media print { .hubbar { display: none; } }
+
+/* ---------- sign-in ---------- */
+:root[data-hub-auth="out"] [data-private] { display: none !important; }
+:root[data-hub-auth="out"][data-hub-private] body > :not(.hubbar):not(.hub-gate):not(.hub-signin):not(script) { display: none !important; }
+.hubbar .hub-auth-btn { width: auto; padding: 0 10px; margin-right: 6px; white-space: nowrap; font-size: 13px; }
+.hub-primary {
+  min-height: 38px; padding: 0 16px; border: 0; border-radius: var(--hub-radius-sm); cursor: pointer;
+  background: var(--hub-accent); color: var(--hub-accent-ink); font: 600 15px/1 var(--hub-sans);
+}
+.hub-primary:hover { filter: brightness(1.08); }
+.hub-primary:disabled { opacity: .6; cursor: default; }
+.hub-gate { max-width: 480px; margin: 0 auto; padding: 72px 16px; text-align: center; font-family: var(--hub-sans); color: var(--hub-ink); }
+.hub-gate h1 { margin: 0 0 8px; font-size: 1.6rem; letter-spacing: -.02em; }
+.hub-gate p { margin: 0 0 20px; color: var(--hub-ink-2); }
+.hub-signin {
+  width: min(440px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--hub-line); border-radius: var(--hub-radius);
+  background: var(--hub-surface); color: var(--hub-ink); font: 15px/1.5 var(--hub-sans); box-shadow: var(--hub-shadow-lg);
+}
+.hub-signin::backdrop { background: rgba(0, 0, 0, .45); }
+.hub-signin h2 { margin: 0 0 8px; font-size: 1.2rem; }
+.hub-signin p { margin: 0 0 10px; color: var(--hub-ink-2); }
+.hub-signin a { color: var(--hub-accent); }
+.hub-signin label { display: grid; gap: 4px; font-size: .84rem; font-weight: 600; color: var(--hub-ink-2); }
+.hub-signin input {
+  box-sizing: border-box; width: 100%; height: 38px; padding: 0 10px; font: 16px var(--hub-mono); color: var(--hub-ink);
+  border: 1px solid var(--hub-line); border-radius: var(--hub-radius-sm); background: var(--hub-bg);
+}
+.hub-signin .hub-signin-err { margin: 10px 0 0; color: var(--hub-bad); font-size: .88rem; }
+.hub-signin-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.hub-cancel {
+  min-height: 38px; padding: 0 14px; border: 1px solid var(--hub-line); border-radius: var(--hub-radius-sm); cursor: pointer;
+  background: transparent; color: var(--hub-ink-2); font: 500 15px/1 var(--hub-sans);
+}

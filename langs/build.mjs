@@ -41,6 +41,7 @@ const LANGS = {
   cpp: { name: "C++", hl: "cpp", file: () => "main.cpp", cmd: () => "g++ -std=c++20 -O1 -Wall -pthread -o main main.cpp && ./main" },
   bash: { name: "Bash", hl: "bash", file: () => "main.sh", cmd: () => "bash main.sh" },
 };
+if (SITE && SITE.langs) Object.assign(LANGS, SITE.langs);
 const PLAIN = new Set(["text", "txt", "console", "output", "plain"]);
 const HL_ALIAS = { shell: "bash", sh: "bash", asm: "x86asm" };
 

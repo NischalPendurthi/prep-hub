@@ -46,6 +46,10 @@ python3 tools/build.py    # must pass
 cd .. && git add -A && git commit -m "atlas: log <problem>" && git push
 ```
 
+## Sign-in
+
+The hub bar has a GitHub sign-in. You paste a GitHub token, and `shared/hub.js` asks GitHub whose it is; only the account in `OWNER` counts as signed in. Signed out, the Applications and Counter pages, their tabs and cards, and the landing page's progress are hidden. Add `data-private` to an element, or to a page's `hub.js` script tag, to hide more. This only hides things in the UI: the site is static and its code is public, so keep private data in localStorage or a private Gist, never in the repo.
+
 ## Applications
 
 The list is kept in the browser's localStorage. `applications/seed.json` is gitignored, so the list never reaches the public repo or site: a local build fills an empty tracker from it, and on the published site you load it once with **Import**. Export writes the same format.

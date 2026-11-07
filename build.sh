@@ -22,6 +22,13 @@ cp -r topics/dist _site/topics
 rm -f _site/counter/README.md
 touch _site/.nojekyll
 
+# Optional private material: gitignored, so it exists only in local builds.
+if [[ -f projects/site.mjs ]]; then
+  node langs/build.mjs --root projects
+  cp -r projects/dist _site/projects
+  python3 projects/wire.py _site
+fi
+
 echo "built _site/ ($(du -sh _site | cut -f1))"
 if [[ "${1:-}" == "--serve" ]]; then
   python3 -m http.server -d _site 8000
