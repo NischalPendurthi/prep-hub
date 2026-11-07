@@ -17,7 +17,8 @@
     { id: "videos", name: "Videos", href: "videos/" },
     { id: "atlas", name: "CP Atlas", href: "atlas/" },
     { id: "ladder", name: "Ladder", href: "ladder/" },
-    { id: "counter", name: "Counter", href: "counter/" }
+    { id: "counter", name: "Counter", href: "counter/" },
+    { id: "applications", name: "Applications", href: "applications/" }
   ];
 
   function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }

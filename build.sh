@@ -13,7 +13,7 @@ python3 videos/tools/build.py
 rm -rf _site
 mkdir -p _site/mcq _site/atlas _site/videos
 cp index.html _site/
-cp -r shared guide ladder counter _site/
+cp -r shared guide ladder counter applications _site/
 cp -r mcq/index.html mcq/css mcq/js mcq/data _site/mcq/
 cp -r atlas/site/. _site/atlas/
 cp videos/index.html videos/app.js videos/style.css videos/data.js _site/videos/

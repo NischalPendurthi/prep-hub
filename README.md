@@ -13,6 +13,7 @@ One site for placement and interview prep, published at **https://nischalpendurt
 | `/atlas/` | CP Atlas: pattern map, templates, problem log, revision queue | `atlas/` (built from `atlas/content/`) |
 | `/ladder/` | Codeforces 2000–2400 ladder, hard drill, segment tree & BIT, PYQ tracker | `ladder/` |
 | `/counter/` | Practice counter with GitHub Gist sync | `counter/` |
+| `/applications/` | Applied companies and roles with status tags, saved in the browser | `applications/` |
 
 ## Shared look
 `shared/hub.css` defines the colour, font and radius tokens for light and dark themes, and the hub bar.
@@ -44,6 +45,10 @@ python3 tools/add.py <url> sol.cpp -v <variant-id> -i "the one-line trick"
 python3 tools/build.py    # must pass
 cd .. && git add -A && git commit -m "atlas: log <problem>" && git push
 ```
+
+## Applications
+
+The list is kept in the browser's localStorage. `applications/seed.json` is gitignored, so the list never reaches the public repo or site: a local build fills an empty tracker from it, and on the published site you load it once with **Import**. Export writes the same format.
 
 ## Video picks
 

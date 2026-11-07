@@ -83,7 +83,7 @@
 .hubbar .hub-menu-btn { display: none; margin-right: 6px; }
 .hubbar svg { width: 16px; height: 16px; }
 
-@media (max-width: 720px) {
+@media (max-width: 900px) {
   .hubbar .hub-menu-btn { display: inline-grid; }
   .hubbar .hub-links {
     display: none; position: absolute; top: calc(var(--hub-bar-h) - 1px); left: 0; right: 0;
