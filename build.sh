@@ -14,6 +14,8 @@ rm -rf _site
 mkdir -p _site/mcq _site/atlas _site/videos
 cp index.html _site/
 cp -r shared guide ladder counter applications _site/
+mkdir -p _site/projects
+cp private-shell/projects.html _site/projects/index.html
 cp -r mcq/index.html mcq/css mcq/js mcq/data _site/mcq/
 cp -r atlas/site/. _site/atlas/
 cp videos/index.html videos/app.js videos/style.css videos/data.js _site/videos/
@@ -22,9 +24,10 @@ cp -r topics/dist _site/topics
 rm -f _site/counter/README.md
 touch _site/.nojekyll
 
-# Optional private material: gitignored, so it exists only in local builds.
+# Private guides are gitignored here and live in a private repo. A local build serves them directly.
 if [[ -f projects/site.mjs ]]; then
   node langs/build.mjs --root projects
+  rm -rf _site/projects
   cp -r projects/dist _site/projects
   python3 projects/wire.py _site
 fi

@@ -48,7 +48,9 @@ cd .. && git add -A && git commit -m "atlas: log <problem>" && git push
 
 ## Sign-in
 
-The hub bar has a GitHub sign-in. You paste a GitHub token, and `shared/hub.js` asks GitHub whose it is; only the account in `OWNER` counts as signed in. Signed out, the Applications and Counter pages, their tabs and cards, and the landing page's progress are hidden. Add `data-private` to an element, or to a page's `hub.js` script tag, to hide more. This only hides things in the UI: the site is static and its code is public, so keep private data in localStorage or a private Gist, never in the repo.
+The hub bar has a GitHub sign-in. You paste a GitHub token, and `shared/hub.js` asks GitHub whose it is; only the account in `OWNER` counts as signed in. Signed out, Atlas, Ladder, Counter, Applications and Projects are hidden, and the Guide, Languages, Topics, MCQ and Videos stay public. Add `data-private` to an element, or to a page's `hub.js` script tag, to hide more.
+
+**This hides things on screen. It isn't access control.** Everything in this repo is public, including the Atlas and Ladder pages. Truly private material must stay out of this repo: `/projects/` is only a loader, and its content lives in a private repo that GitHub serves only to a token with access.
 
 ## Applications
 

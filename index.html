@@ -66,6 +66,7 @@ a { color: inherit; }
 .t-counter { --tint: #0e8a8a; }
 .t-videos { --tint: #c2410c; }
 .t-applications { --tint: #5f3dc4; }
+.t-projects { --tint: #a8327a; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .t-guide { --tint: #a99bff; }
   :root:not([data-theme="light"]) .t-langs { --tint: #f08a5d; }
@@ -160,7 +161,7 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
       <span class="open">Start watching →</span>
     </a>
 
-    <a class="card t-atlas" href="atlas/">
+    <a class="card t-atlas" href="atlas/" data-private>
       <div class="card-top">
         <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg></span>
         <div><h2>CP Atlas</h2><div class="kind">Pattern map · spaced repetition</div></div>
@@ -171,7 +172,7 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
       <span class="open">Open atlas →</span>
     </a>
 
-    <a class="card t-ladder" href="ladder/">
+    <a class="card t-ladder" href="ladder/" data-private>
       <div class="card-top">
         <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 2v20M17 2v20M7 7h10M7 12h10M7 17h10"/></svg></span>
         <div><h2>Ladder</h2><div class="kind">Problem sheets · 257 problems</div></div>
@@ -202,6 +203,15 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
       <div class="chips"><span class="chip">Rejected</span><span class="chip">Hope</span><span class="chip">Interview</span><span class="chip">Offered</span></div>
       <div class="stat" data-private data-stat="applications" hidden></div>
       <span class="open">Open tracker →</span>
+    </a>
+
+    <a class="card t-projects" href="projects/" data-private>
+      <div class="card-top">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
+        <div><h2>My Projects</h2><div class="kind">Private study guides</div></div>
+      </div>
+      <p>How each of my projects works, from design down to code. Loaded from a private repo after sign-in.</p>
+      <span class="open">Open projects →</span>
     </a>
   </section>
 </main>
@@ -277,7 +287,7 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
   } catch (e) {}
 
   try {
-    var NAMES = { guide: "C++ / OS Guide", langs: "Language Internals", topics: "Topics", mcq: "MCQ Prep", videos: "Video Picks", atlas: "CP Atlas", ladder: "Ladder", counter: "Practice Counter", applications: "Applications" };
+    var NAMES = { guide: "C++ / OS Guide", langs: "Language Internals", topics: "Topics", mcq: "MCQ Prep", videos: "Video Picks", atlas: "CP Atlas", ladder: "Ladder", counter: "Practice Counter", applications: "Applications", projects: "My Projects" };
     var last = read("hub-last");
     if (last && NAMES[last.tool]) {
       var c = document.getElementById("continue");

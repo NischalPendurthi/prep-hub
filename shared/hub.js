@@ -14,12 +14,13 @@
      a client secret kept on a server. You paste a GitHub token, GitHub says whose it is, and
      only the owner counts as signed in. This hides things in the UI. It isn't access control:
      all code here is public, so never put private data in the repo. Personal data lives in
-     localStorage or a private Gist. The token is shared with the counter's Gist sync. */
+     localStorage, a private Gist or a private repo, which GitHub itself protects with the token.
+     The token is shared with the counter's Gist sync. */
   var OWNER = "NischalPendurthi";
   var TOKEN_KEY = "cp_counter_gh_token_v2";
   var GIST_KEY = "cp_counter_gist_id_v2";
   var USER_KEY = "hub-user";
-  var TOKEN_URL = "https://github.com/settings/tokens/new?description=Prep+Hub&scopes=gist";
+  var TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
 
   var TOOLS = [
     { id: "guide", name: "C++ / OS Guide", href: "guide/" },
@@ -27,10 +28,11 @@
     { id: "topics", name: "Topics", href: "topics/" },
     { id: "mcq", name: "MCQ Prep", href: "mcq/" },
     { id: "videos", name: "Videos", href: "videos/" },
-    { id: "atlas", name: "CP Atlas", href: "atlas/" },
-    { id: "ladder", name: "Ladder", href: "ladder/" },
+    { id: "atlas", name: "CP Atlas", href: "atlas/", private: true },
+    { id: "ladder", name: "Ladder", href: "ladder/", private: true },
     { id: "counter", name: "Counter", href: "counter/", private: true },
-    { id: "applications", name: "Applications", href: "applications/", private: true }
+    { id: "applications", name: "Applications", href: "applications/", private: true },
+    { id: "projects", name: "Projects", href: "projects/", private: true }
   ];
 
   function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -81,7 +83,7 @@
       d.innerHTML =
         '<form method="dialog"><h2>Sign in with GitHub</h2>' +
         '<p>Paste a GitHub token. It stays in this browser and is only sent to GitHub.</p>' +
-        '<p><a href="' + TOKEN_URL + '" target="_blank" rel="noopener">Create a token on GitHub</a></p>' +
+        '<p><a href="' + TOKEN_URL + '" target="_blank" rel="noopener">Create a fine-grained token on GitHub</a>, with <strong>prep-hub-private: Contents read-only</strong> and <strong>Gists: read and write</strong>.</p>' +
         '<label>Token <input type="password" autocomplete="off" spellcheck="false" required></label>' +
         '<p class="hub-signin-err" role="alert" hidden></p>' +
         '<div class="hub-signin-actions"><button type="button" class="hub-cancel">Cancel</button>' +

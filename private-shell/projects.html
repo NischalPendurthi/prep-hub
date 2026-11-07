@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="../shared/hub.css">
+<script src="../shared/hub.js" data-tool="projects" data-private></script>
+<title>My Projects</title>
+<style>
+body { margin: 0; background: var(--hub-bg); color: var(--hub-ink); font: 16px/1.55 var(--hub-sans); }
+main { max-width: 640px; margin: 0 auto; padding: 48px 16px; }
+main a { color: var(--hub-accent); }
+</style>
+</head>
+<body>
+<nav class="hubbar" id="hubbar"></nav>
+<main id="status">Loading…</main>
+<script>
+/* This page holds no guide content. The guides live in a private GitHub repo, and only a token with
+   read access to it can fetch them, so GitHub enforces the access and not this script. */
+(function () {
+  "use strict";
+  if (document.documentElement.getAttribute("data-hub-auth") !== "in") return;
+
+  var REPO = "NischalPendurthi/prep-hub-private";
+  var status = document.getElementById("status");
+  function show(html) { status.innerHTML = html; }
+
+  var token = null;
+  try { token = localStorage.getItem("cp_counter_gh_token_v2"); } catch (e) {}
+  var p = new URLSearchParams(location.search).get("p");
+  var isGuide = !!p && /^[a-z0-9-]+$/.test(p);
+  var path = isGuide ? "dist/" + p + "/index.html" : "dist/index.html";
+
+  fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, {
+    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.raw+json" },
+    cache: "no-cache"
+  }).then(function (r) {
+    if (r.status === 404 && isGuide) {
+      show('That guide was not found. <a href="./">See all projects</a>.');
+      return null;
+    }
+    if (r.status === 401 || r.status === 403 || r.status === 404) {
+      show("<p>Your token can't read the private guides.</p>" +
+        '<p><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token</a> ' +
+        "with <strong>prep-hub-private</strong> selected, <strong>Contents: Read-only</strong>, and <strong>Gists: Read and write</strong> " +
+        "so the Counter's sync keeps working. Then sign out and sign in with it.</p>");
+      return null;
+    }
+    if (!r.ok) { show("GitHub returned " + r.status + ". Try again in a moment."); return null; }
+    return r.text();
+  }).then(function (html) {
+    if (html == null) return;
+    html = html.replace('data-tool="projects"', 'data-tool="projects" data-private');
+    if (isGuide) {
+      html = html.split("../../shared/").join("../shared/")
+        .replace('href="../reader.css"', 'href="../langs/reader.css"')
+        .replace('href="../theme.css"', 'href="../langs/theme.css"')
+        .replace('src="../reader.js"', 'src="../langs/reader.js"');
+    } else {
+      html = html.replace(/class="card" href="([a-z0-9-]+)\/"/g, 'class="card" href="?p=$1"');
+    }
+    document.open();
+    document.write(html);
+    document.close();
+  }).catch(function () {
+    show("Couldn't reach GitHub. Check your connection and reload.");
+  });
+})();
+</script>
+</body>
+</html>
