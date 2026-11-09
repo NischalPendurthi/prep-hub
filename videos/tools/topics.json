@@ -419,5 +419,340 @@
     ]
    }
   }
+ },
+ "oop": {
+  "name": "OOP & C++",
+  "hn_terms": [
+   "c++",
+   "cppcon",
+   "stroustrup",
+   "herb sutter",
+   "scott meyers",
+   "move semantics",
+   "rvalue",
+   "raii",
+   "smart pointer",
+   "unique_ptr",
+   "vtable",
+   "virtual function",
+   "template metaprogramming",
+   "undefined behavior",
+   "c++ memory model",
+   "atomic weapons",
+   "design patterns",
+   "solid principles",
+   "object oriented programming",
+   "inheritance vs composition",
+   "type erasure",
+   "chandler carruth",
+   "sean parent",
+   "arthur o'dwyer",
+   "klaus iglberger"
+  ],
+  "subtopics": {
+   "courses": {
+    "name": "Full courses",
+    "yt": [
+     "c++ full lecture course university",
+     "cppcon back to basics playlist",
+     "modern c++ course lectures bonn",
+     "The Cherno C++ series"
+    ]
+   },
+   "oop": {
+    "name": "OOP Foundations",
+    "yt": [
+     "object oriented programming lecture university encapsulation inheritance polymorphism",
+     "cppcon back to basics object oriented programming",
+     "Bjarne Stroustrup object oriented programming talk",
+     "why inheritance is the base class of evil Sean Parent"
+    ]
+   },
+   "dispatch": {
+    "name": "Virtual Dispatch & Object Layout",
+    "yt": [
+     "c++ vtable virtual function implementation cppcon",
+     "c++ object layout vptr multiple inheritance deep dive",
+     "virtual functions cost devirtualization talk",
+     "back to basics virtual dispatch cppcon"
+    ]
+   },
+   "lifetime": {
+    "name": "Object Lifetime, RAII & Special Members",
+    "yt": [
+     "cppcon back to basics RAII and the rule of zero",
+     "back to basics the special member functions Klaus Iglberger",
+     "c++ object lifetime talk cppcon",
+     "c++ copy elision RVO talk"
+    ]
+   },
+   "values": {
+    "name": "Move Semantics & Value Categories",
+    "yt": [
+     "cppcon back to basics move semantics",
+     "c++ rvalue references move semantics Scott Meyers",
+     "value categories c++ lvalue rvalue talk",
+     "perfect forwarding universal references Scott Meyers"
+    ]
+   },
+   "deduce": {
+    "name": "Type Deduction",
+    "yt": [
+     "Scott Meyers type deduction and why you care",
+     "back to basics type deduction cppcon",
+     "auto decltype c++ deep dive talk"
+    ]
+   },
+   "smart": {
+    "name": "Smart Pointers & Ownership",
+    "yt": [
+     "cppcon back to basics smart pointers",
+     "Herb Sutter leak freedom in c++ by default",
+     "unique_ptr shared_ptr control block implementation talk",
+     "GotW smart pointer ownership herb sutter talk"
+    ]
+   },
+   "templates": {
+    "name": "Templates, Concepts & Metaprogramming",
+    "yt": [
+     "cppcon back to basics templates",
+     "Walter Brown modern template metaprogramming a compendium",
+     "c++ concepts talk cppcon",
+     "SFINAE constexpr template metaprogramming talk"
+    ]
+   },
+   "stl": {
+    "name": "STL Containers, Iterators & Algorithms",
+    "yt": [
+     "cppcon stl algorithms 105 algorithms in less than an hour",
+     "Stephan T Lavavej STL lecture core c++",
+     "CppCon hash table flat map design talk",
+     "Sean Parent c++ seasoning no raw loops",
+     "back to basics iterators cppcon"
+    ]
+   },
+   "alloc": {
+    "name": "Memory & Allocators",
+    "yt": [
+     "cppcon how memory allocators work c++",
+     "back to basics pointers and memory cppcon",
+     "What Has My Compiler Done for Me Lately",
+     "Andrei Alexandrescu std allocator is to allocation what vector is to vexation"
+    ]
+   },
+   "concurrency": {
+    "name": "Concurrency, Atomics & the Memory Model",
+    "yt": [
+     "Herb Sutter atomic weapons",
+     "Fedor Pikus c++ atomics from basic to advanced",
+     "back to basics concurrency cppcon Arthur O'Dwyer",
+     "lock free programming cppcon Herb Sutter"
+    ]
+   },
+   "ub": {
+    "name": "Undefined Behaviour & the Compilation Model",
+    "yt": [
+     "Chandler Carruth garbage in garbage out undefined behavior",
+     "undefined behavior c++ talk cppcon",
+     "back to basics c++ compilation linking translation units",
+     "how c++ linking works talk",
+     "c++ one definition rule talk"
+    ]
+   },
+   "errors": {
+    "name": "Exceptions & Error Handling",
+    "yt": [
+     "back to basics exceptions cppcon",
+     "Andrei Alexandrescu systematic error handling in c++",
+     "c++ exception handling implementation unwinding talk",
+     "Herb Sutter zero overhead exceptions"
+    ]
+   },
+   "design": {
+    "name": "Design Principles & Patterns",
+    "yt": [
+     "Klaus Iglberger back to basics design patterns",
+     "Klaus Iglberger breaking dependencies single responsibility principle",
+     "Sean Parent inheritance is the base class of evil",
+     "Design Patterns facts and misconceptions klaus iglberger",
+     "SOLID principles Uncle Bob lecture",
+     "type erasure c++ Klaus Iglberger"
+    ]
+   },
+   "perf": {
+    "name": "Performance-Minded C++",
+    "yt": [
+     "Chandler Carruth efficiency with algorithms performance with data structures",
+     "Mike Acton data oriented design and c++",
+     "Fedor Pikus design for performance",
+     "Matt Godbolt c++ performance talk"
+    ]
+   }
+  }
+ },
+ "comp-arch": {
+  "name": "Computer Architecture",
+  "hn_terms": [
+   "computer architecture",
+   "onur mutlu",
+   "patterson hennessy",
+   "6.004",
+   "cs61c",
+   "pipeline",
+   "branch prediction",
+   "out-of-order execution",
+   "tomasulo",
+   "cpu cache",
+   "false sharing",
+   "cache coherence",
+   "mesi",
+   "memory consistency",
+   "spectre",
+   "meltdown",
+   "simd",
+   "avx",
+   "numa",
+   "dram",
+   "superscalar",
+   "microarchitecture",
+   "risc-v",
+   "tlb",
+   "performance counters"
+  ],
+  "subtopics": {
+   "courses": {
+    "name": "Full courses",
+    "yt": [
+     "Onur Mutlu computer architecture ETH Zurich full course",
+     "Onur Mutlu digital design and computer architecture course",
+     "MIT 6.004 computation structures lectures",
+     "CS 61C great ideas in computer architecture Berkeley lectures",
+     "CMU 18-447 introduction to computer architecture lectures"
+    ]
+   },
+   "isa": {
+    "name": "ISA, Microarchitecture & Performance",
+    "yt": [
+     "Onur Mutlu instruction set architecture microarchitecture lecture",
+     "computer architecture lecture ISA tradeoffs",
+     "iron law of processor performance lecture",
+     "David Patterson a new golden age for computer architecture"
+    ]
+   },
+   "pipe": {
+    "name": "Pipelining & Hazards",
+    "yt": [
+     "Onur Mutlu pipelining lecture",
+     "Onur Mutlu pipelining data dependence handling lecture",
+     "pipeline hazards forwarding stall lecture MIT 6.004",
+     "Matt Godbolt path of running code cpu pipeline"
+    ]
+   },
+   "branch": {
+    "name": "Branch Prediction",
+    "yt": [
+     "Onur Mutlu branch prediction lecture",
+     "branch prediction TAGE perceptron lecture",
+     "Matt Godbolt branch predictor",
+     "Why is processing a sorted array faster branch prediction talk"
+    ]
+   },
+   "ooo": {
+    "name": "Out-of-Order & Superscalar Execution",
+    "yt": [
+     "Onur Mutlu out of order execution lecture",
+     "Tomasulo algorithm reorder buffer lecture",
+     "Onur Mutlu superscalar execution lecture",
+     "Matt Godbolt CPU out of order the bits between the bits"
+    ]
+   },
+   "cache": {
+    "name": "Caches",
+    "yt": [
+     "Onur Mutlu memory hierarchy and caches lecture",
+     "Scott Meyers CPU caches and why you care",
+     "cache replacement write policies lecture",
+     "advanced caches multi level lecture Onur Mutlu"
+    ]
+   },
+   "vm": {
+    "name": "Virtual Memory & TLBs in Hardware",
+    "yt": [
+     "Onur Mutlu virtual memory lecture",
+     "David Black-Schaffer virtual memory TLB",
+     "virtually indexed physically tagged cache lecture"
+    ]
+   },
+   "prefetch": {
+    "name": "Prefetching",
+    "yt": [
+     "Onur Mutlu prefetching lecture",
+     "hardware prefetching lecture computer architecture"
+    ]
+   },
+   "coherence": {
+    "name": "Cache Coherence & False Sharing",
+    "yt": [
+     "Onur Mutlu cache coherence lecture",
+     "MESI protocol lecture",
+     "false sharing talk cppcon",
+     "directory based coherence lecture"
+    ]
+   },
+   "consistency": {
+    "name": "Memory Consistency",
+    "yt": [
+     "Onur Mutlu memory ordering consistency lecture",
+     "sequential consistency total store order lecture",
+     "x86 TSO memory model talk",
+     "Herb Sutter atomic weapons hardware memory model"
+    ]
+   },
+   "simd": {
+    "name": "SIMD, Vector & GPU Architecture",
+    "yt": [
+     "Onur Mutlu SIMD vector processors GPUs lecture",
+     "Onur Mutlu GPU architecture lecture",
+     "SIMD programming talk AVX cppcon",
+     "GPU architecture lecture"
+    ]
+   },
+   "multi": {
+    "name": "Multicore, Interconnects & NUMA",
+    "yt": [
+     "Onur Mutlu multiprocessors lecture",
+     "Onur Mutlu interconnection networks lecture",
+     "NUMA performance talk",
+     "parallel computer architecture CMU 15-418 lecture"
+    ]
+   },
+   "dram": {
+    "name": "DRAM & Memory Controllers",
+    "yt": [
+     "Onur Mutlu DRAM lecture",
+     "Onur Mutlu memory controllers lecture",
+     "RowHammer lecture Onur Mutlu",
+     "how DRAM works animation"
+    ]
+   },
+   "security": {
+    "name": "Microarchitectural Security",
+    "yt": [
+     "Spectre Meltdown lecture explained",
+     "Spectre meltdown talk Paul Kocher",
+     "Meltdown spectre Chandler Carruth cppcon",
+     "side channel attacks computer architecture lecture"
+    ]
+   },
+   "perf": {
+    "name": "Profiling & Performance Engineering",
+    "yt": [
+     "Denis Bakhvalov performance analysis top down",
+     "perf linux performance counters talk Brendan Gregg",
+     "MIT 6.172 performance engineering lectures",
+     "Emery Berger performance matters"
+    ]
+   }
+  }
  }
 }

@@ -58,7 +58,9 @@
 
   function signOut() {
     del(TOKEN_KEY); del(GIST_KEY); del(USER_KEY);
-    location.reload();
+    function done() { location.reload(); }
+    if (window.caches) caches.delete("projects-v1").then(done, done);    /* stored private guides */
+    else done();
   }
 
   /* Recheck on each load, which also picks up a token saved by the counter. A network failure

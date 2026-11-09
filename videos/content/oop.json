@@ -1,0 +1,805 @@
+{
+ "id": "oop",
+ "name": "OOP & C++",
+ "blurb": "Full-length talks and lectures, chosen for mastery: how C++ objects, ownership, templates and concurrency really work, from people who write the compilers, libraries and the standard. Expect about an hour per best pick.",
+ "method": "<ul><li><b>Best pick</b>: the most thorough correct treatment of the subtopic, usually a 50–70 minute CppCon talk. Length was not held against a video; ten-minute summaries could not be best picks.</li><li><b>Then watch</b>: the talk that completes the subject, such as part two or the mechanism underneath.</li><li><b>Go deeper</b>: expert material past the usual interview line: standard-library implementers, compiler engineers and language designers.</li><li><b>Quick / visual</b>: short refreshers for after you know the material, never a substitute for it.</li><li>Candidates came from YouTube links in Hacker News comments plus YouTube search for every subtopic. Popular beginner tutorials and one-shot crash courses lost to talks that show the mechanism. Picks were chosen from speaker, topic, length and recommendations; they were not all watched end to end.</li></ul>",
+ "subtopics": [
+  {
+   "key": "courses",
+   "name": "Full courses",
+   "note": "Pick one structured course for the language, then use the subtopics below for depth. The CppCon track is the spine of this page.",
+   "picks": [
+    {
+     "kind": "l",
+     "id": "PLgnQpQtFTOGRM59sr3nSL8BmeMZR9GCIA",
+     "thumb": "sZK6ouwREXA",
+     "role": "course",
+     "title": "Modern C++ (Lecture & Tutorials, 2020, Vizzo & Stachniss)",
+     "channel": "Cyrill Stachniss",
+     "length": "19 videos",
+     "why": "University of Bonn's Modern C++ course with lectures and tutorials: build systems, memory, classes, templates, the STL and tooling. The most complete university-style C++ course here."
+    },
+    {
+     "kind": "l",
+     "id": "PLvv0ScY6vfd8j-tlhYVPYgiIyXduu6m-L",
+     "thumb": "LGOgNqkRMs0",
+     "role": "deeper",
+     "title": "The C++ Programming Language",
+     "channel": "Mike Shah",
+     "length": "256 videos",
+     "why": "Mike Shah's long-running series, one concept per episode, through modern features and how they behave. Use it as a reference when a single topic needs another explanation."
+    },
+    {
+     "kind": "l",
+     "id": "PLHTh1InhhwT4TJaHBVWzvBOYhp27UO7mI",
+     "thumb": "Bt3zcJZIalk",
+     "role": "deeper",
+     "title": "CppCon 2021 - Back To Basics",
+     "channel": "CppCon",
+     "length": "20 videos",
+     "why": "CppCon's 2021 Back to Basics track. The name undersells it: each talk is an hour on one core feature, given by a practising expert."
+    },
+    {
+     "kind": "l",
+     "id": "PLlrATfBNZ98dudnM48yfGUldqGD0S4FFb",
+     "thumb": "18c3MTX0PK0",
+     "role": "quick",
+     "title": "C++",
+     "channel": "The Cherno",
+     "length": "115 videos",
+     "why": "The Cherno's short episodes. Good for a first look or a fast refresher, not enough on their own for mastery.",
+     "hn": 2
+    }
+   ]
+  },
+  {
+   "key": "oop",
+   "name": "OOP Foundations",
+   "note": "Encapsulation, inheritance, polymorphism and abstraction, then the harder question: when is a class hierarchy the wrong tool, and what do you pay for it?",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "32tDTD9UJCE",
+     "role": "best",
+     "title": "Back to Basics: Object-Oriented Programming - Jon Kalb - CppCon 2019",
+     "channel": "CppCon",
+     "length": "59:58",
+     "why": "Inheritance, virtual functions, overriding and the rules that trip people up in C++, taught from the language's actual semantics instead of animal analogies."
+    },
+    {
+     "kind": "v",
+     "id": "motLOioLJfg",
+     "role": "next",
+     "title": "Back to Basics: Designing Classes (part 1 of 2) - Klaus Iglberger - CppCon 2021",
+     "channel": "CppCon",
+     "length": "1:01:02",
+     "why": "How to design a class that stays correct: invariants, ownership of resources, what belongs inside and what doesn't. Part one of two."
+    },
+    {
+     "kind": "v",
+     "id": "O65lEiYkkbc",
+     "role": "next",
+     "title": "Back to Basics: Designing Classes (part 2 of 2) - Klaus Iglberger - CppCon 2021",
+     "channel": "CppCon",
+     "length": "1:02:24",
+     "why": "Part two: the design of interfaces, data members and class hierarchies."
+    },
+    {
+     "kind": "v",
+     "id": "86xWVb4XIyE",
+     "role": "deeper",
+     "title": "Bjarne Stroustrup - The Essence of C++",
+     "channel": "The University of Edinburgh",
+     "length": "1:39:10",
+     "why": "Bjarne Stroustrup on what C++ is for: resource management, abstraction without overhead, and where object orientation fits among the styles it supports."
+    },
+    {
+     "kind": "v",
+     "id": "QGcVXgEVMJg",
+     "role": "deeper",
+     "title": "Better Code: Runtime Polymorphism - Sean Parent",
+     "channel": "NDC Conferences",
+     "length": "57:33",
+     "why": "Sean Parent's case that inheritance should be an implementation detail, building runtime polymorphism on value types. The talk that changes how you see the first three."
+    },
+    {
+     "kind": "v",
+     "id": "wo84LFzx5nI",
+     "role": "deeper",
+     "title": "Casey Muratori – The Big OOPs: Anatomy of a Thirty-five-year Mistake – BSC 2025",
+     "channel": "Better Software Conference",
+     "length": "2:27:33",
+     "why": "Casey Muratori's historical critique of compile-time class hierarchies. Long and opinionated. Useful for answering \"what are the downsides of OOP?\" from evidence.",
+     "hn": 4
+    }
+   ]
+  },
+  {
+   "key": "dispatch",
+   "name": "Virtual Dispatch & Object Layout",
+   "note": "What a vtable and vptr actually are, object layout under single and multiple inheritance, how dynamic_cast finds its answer, and what a virtual call costs.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "gWinNE5rd6Q",
+     "role": "best",
+     "title": "C++ Under the Hood: Internal Class Mechanisms - Chris Ryan - CppCon 2024",
+     "channel": "CppCon",
+     "length": "57:43",
+     "why": "Walks through how classes are laid out and how internal class mechanisms such as virtual calls work underneath."
+    },
+    {
+     "kind": "v",
+     "id": "QzJL-8WbpuU",
+     "role": "next",
+     "title": "CppCon 2017: Arthur O'Dwyer “dynamic_cast From Scratch”",
+     "channel": "CppCon",
+     "length": "58:48",
+     "why": "Rebuilds dynamic_cast by hand, which forces you through RTTI, vtable contents and base-class offsets."
+    },
+    {
+     "kind": "v",
+     "id": "gTNJXVmuRRA",
+     "role": "deeper",
+     "title": "Using Modern C++ to Eliminate Virtual Functions - Jonathan Gopel - CppCon 2022",
+     "channel": "CppCon",
+     "length": "1:01:29",
+     "why": "Compile-time alternatives to virtual functions and what they trade away. Know these before claiming virtual calls should be avoided."
+    }
+   ]
+  },
+  {
+   "key": "lifetime",
+   "name": "Object Lifetime, RAII & Special Members",
+   "note": "When the compiler generates each special member, the rules of zero, three and five, construction and destruction order, and copy elision.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "9BM5LAvNtus",
+     "role": "best",
+     "title": "Back To Basics: The Special Member Functions - Klaus Iglberger - CppCon 2021",
+     "channel": "CppCon",
+     "length": "1:02:14",
+     "why": "All six special member functions: when each is generated, suppressed or deleted, and how to write them correctly."
+    },
+    {
+     "kind": "v",
+     "id": "7Qgd9B1KuMQ",
+     "role": "next",
+     "title": "Back to Basics: RAII and the Rule of Zero - Arthur O'Dwyer - CppCon 2019",
+     "channel": "CppCon",
+     "length": "1:02:18",
+     "why": "RAII from first principles, why the rule of three exists, and how the rule of zero removes the problem."
+    },
+    {
+     "kind": "v",
+     "id": "uQyT-5iWUow",
+     "role": "deeper",
+     "title": "CppCon 2018: Jason Turner “Surprises in Object Lifetime”",
+     "channel": "CppCon",
+     "length": "1:01:28",
+     "why": "Lifetime extension, temporaries and dangling references, through examples that look correct and are not."
+    },
+    {
+     "kind": "v",
+     "id": "WyxUilrR6fU",
+     "role": "deeper",
+     "title": "C++ RVO: Return Value Optimization for Performance in Bloomberg C++ Codebases - Michelle Fae D'Souza",
+     "channel": "CppCon",
+     "length": "1:01:17",
+     "why": "Return value optimization in a large production codebase: when it applies and which code silently loses it."
+    },
+    {
+     "kind": "v",
+     "id": "HNYOx-Vh_VA",
+     "role": "quick",
+     "title": "Return Value Optimization and Copy Elision in C++",
+     "channel": "mCoding",
+     "length": "9:53",
+     "why": "A ten-minute refresher on RVO and copy elision."
+    }
+   ]
+  },
+  {
+   "key": "values",
+   "name": "Move Semantics & Value Categories",
+   "note": "lvalues, xvalues and prvalues; rvalue references; what a moved-from object may do; and how std::move and std::forward differ. Interviewers probe this one hard.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "St0MNEU5b0o",
+     "role": "best",
+     "title": "Back to Basics: Move Semantics (part 1 of 2) -  Klaus Iglberger - CppCon 2019",
+     "channel": "CppCon",
+     "length": "55:17",
+     "why": "The careful treatment of rvalue references and how to write move operations. Part one of two.",
+     "hn": 2
+    },
+    {
+     "kind": "v",
+     "id": "pIzaZbKUw2s",
+     "role": "next",
+     "title": "Back to Basics: Move Semantics (part 2 of 2) - Klaus Iglberger - CppCon 2019",
+     "channel": "CppCon",
+     "length": "53:49",
+     "why": "Part two: perfect forwarding, forwarding references and the conditions under which moves are generated."
+    },
+    {
+     "kind": "v",
+     "id": "XS2JddPq7GQ",
+     "role": "next",
+     "title": "Back to Basics: Understanding Value Categories - Ben Saks - CppCon 2019",
+     "channel": "CppCon",
+     "length": "53:47",
+     "why": "Value categories explained properly, which makes the rules in the move talks follow from something."
+    },
+    {
+     "kind": "v",
+     "id": "PNRju6_yn3o",
+     "role": "deeper",
+     "title": "CppCon 2017: Nicolai Josuttis “The Nightmare of Move Semantics for Trivial Classes”",
+     "channel": "CppCon",
+     "length": "57:16",
+     "why": "Standard-committee member Nicolai Josuttis on how moves go wrong even for simple classes."
+    },
+    {
+     "kind": "v",
+     "id": "FUsQPIoYoRM",
+     "role": "deeper",
+     "title": "Moved-from Objects in C++ - Jon Kalb - CppCon 2024",
+     "channel": "CppCon",
+     "length": "1:07:19",
+     "why": "What state a moved-from object is in, and what your types should promise about it."
+    },
+    {
+     "kind": "v",
+     "id": "ehMg6zvXuMY",
+     "role": "quick",
+     "title": "Move Semantics in C++",
+     "channel": "The Cherno",
+     "length": "13:10",
+     "why": "A thirteen-minute introduction. Watch it first if rvalue references are new."
+    }
+   ]
+  },
+  {
+   "key": "deduce",
+   "name": "Type Deduction",
+   "note": "The template, auto and decltype deduction rules. Most surprising C++ behaviour around references and const comes from here.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "wQxj20X-tIU",
+     "role": "best",
+     "title": "CppCon 2014: Scott Meyers \"Type Deduction and Why You Care\"",
+     "channel": "CppCon",
+     "length": "1:09:34",
+     "why": "Scott Meyers lays out the deduction rules for templates, auto, lambda captures and decltype, and why each differs."
+    },
+    {
+     "kind": "v",
+     "id": "xnqTKD8uD64",
+     "role": "deeper",
+     "title": "CppCon 2014: Herb Sutter \"Back to the Basics! Essentials of Modern C++ Style\"",
+     "channel": "CppCon",
+     "length": "1:40:26",
+     "why": "Herb Sutter's guidance on auto, smart pointers and parameter passing in modern C++, including when the common advice is wrong.",
+     "hn": 4
+    },
+    {
+     "kind": "v",
+     "id": "E5L66fkNlpE",
+     "role": "quick",
+     "title": "C++ Weekly - Ep 344 - decltype(auto): An Overview of How, Why and Where",
+     "channel": "C++ Weekly With Jason Turner",
+     "length": "9:05",
+     "why": "A short overview of decltype(auto) for revision."
+    }
+   ]
+  },
+  {
+   "key": "smart",
+   "name": "Smart Pointers & Ownership",
+   "note": "unique_ptr, shared_ptr and weak_ptr semantics, the control block and its atomic reference count, and how to express ownership in an interface.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "xGDLkt-jBJ4",
+     "role": "best",
+     "title": "CppCon 2019: Arthur O'Dwyer “Back to Basics: Smart Pointers”",
+     "channel": "CppCon",
+     "length": "1:00:50",
+     "why": "Arthur O'Dwyer on how the standard smart pointers behave and how they are built."
+    },
+    {
+     "kind": "v",
+     "id": "YokY6HzLkXs",
+     "role": "next",
+     "title": "Back to Basics: C++ Smart Pointers - David Olsen - CppCon 2022",
+     "channel": "CppCon",
+     "length": "49:07",
+     "why": "A second full treatment focused on using each pointer type correctly and choosing between them."
+    },
+    {
+     "kind": "v",
+     "id": "JfmTagWcqoE",
+     "role": "deeper",
+     "title": "CppCon 2016: Herb Sutter “Leak-Freedom in C++... By Default.”",
+     "channel": "CppCon",
+     "length": "1:39:25",
+     "why": "Herb Sutter works up from simple ownership to cycles and graph structures, showing how far smart pointers can go without leaks.",
+     "hn": 4
+    },
+    {
+     "kind": "v",
+     "id": "UOB7-B2MfwA",
+     "role": "quick",
+     "title": "SMART POINTERS in C++ (std::unique_ptr, std::shared_ptr, std::weak_ptr)",
+     "channel": "The Cherno",
+     "length": "11:37",
+     "why": "A twelve-minute introduction to the three types."
+    }
+   ]
+  },
+  {
+   "key": "templates",
+   "name": "Templates, Concepts & Metaprogramming",
+   "note": "Instantiation, specialisation, SFINAE, concepts, variadics and type erasure: the machinery behind the standard library.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "HqsEHG0QJXU",
+     "role": "best",
+     "title": "Back to Basics: Templates in C++ - Nicolai Josuttis - CppCon 2022",
+     "channel": "CppCon",
+     "length": "1:01:49",
+     "why": "Function and class templates from Nicolai Josuttis, including the instantiation rules behind the error messages."
+    },
+    {
+     "kind": "v",
+     "id": "jzwqTi7n-rg",
+     "role": "next",
+     "title": "Back to Basics: Concepts in C++ - Nicolai Josuttis - CppCon 2024",
+     "channel": "CppCon",
+     "length": "1:01:14",
+     "why": "Concepts: how constraints replace SFINAE and what they do to overload resolution."
+    },
+    {
+     "kind": "v",
+     "id": "tbUCHifyT24",
+     "role": "next",
+     "title": "Back to Basics: Type Erasure - Arthur O'Dwyer - CppCon 2019",
+     "channel": "CppCon",
+     "length": "49:16",
+     "why": "Type erasure built up from scratch, the technique behind std::function and std::any."
+    },
+    {
+     "kind": "v",
+     "id": "Am2is2QCvxY",
+     "role": "deeper",
+     "title": "CppCon 2014: Walter E. Brown \"Modern Template Metaprogramming: A Compendium, Part I\"",
+     "channel": "CppCon",
+     "length": "59:51",
+     "why": "Walter Brown's compendium of metaprogramming technique. Part one of the standard reference talk."
+    },
+    {
+     "kind": "v",
+     "id": "a0FliKwcwXE",
+     "role": "deeper",
+     "title": "CppCon 2014: Walter E. Brown \"Modern Template Metaprogramming: A Compendium, Part II\"",
+     "channel": "CppCon",
+     "length": "58:48",
+     "why": "Part two: void_t and the detection idioms the standard library uses."
+    },
+    {
+     "kind": "v",
+     "id": "dR64GQb4AGo",
+     "role": "quick",
+     "title": "C++ Weekly - Ep 194 - From SFINAE To Concepts With C++20",
+     "channel": "C++ Weekly With Jason Turner",
+     "length": "12:55",
+     "why": "Thirteen minutes comparing the same constraint written with SFINAE and with concepts."
+    }
+   ]
+  },
+  {
+   "key": "stl",
+   "name": "STL Containers, Iterators & Algorithms",
+   "note": "Iterator categories and invalidation, complexity guarantees, what each container costs in memory and cache misses, and the algorithms that replace hand-written loops.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "26aW6aBVpk0",
+     "role": "best",
+     "title": "Back to Basics: Iterators in C++ - Nicolai Josuttis - CppCon 2023",
+     "channel": "CppCon",
+     "length": "1:02:22",
+     "why": "Iterators from Nicolai Josuttis: categories, validity rules and how to use them without undefined behaviour."
+    },
+    {
+     "kind": "v",
+     "id": "2olsGf6JIkU",
+     "role": "next",
+     "title": "CppCon 2018: Jonathan Boccara “105 STL Algorithms in Less Than an Hour”",
+     "channel": "CppCon",
+     "length": "57:46",
+     "why": "A structured map of the standard algorithms so you recognise which one a problem needs."
+    },
+    {
+     "kind": "v",
+     "id": "ncHmEUmJZf4",
+     "role": "deeper",
+     "title": "CppCon 2017: Matt Kulukundis “Designing a Fast, Efficient, Cache-friendly Hash Table, Step by Step”",
+     "channel": "CppCon",
+     "length": "59:33",
+     "why": "Designing Google's flat hash table step by step. Covers why std::unordered_map is slow and how cache-friendly tables are built.",
+     "hn": 11
+    },
+    {
+     "kind": "v",
+     "id": "kPR8h4-qZdk",
+     "role": "deeper",
+     "title": "CppCon 2016: Nicholas Ormrod “The strange details of std::string at Facebook\"",
+     "channel": "CppCon",
+     "length": "31:18",
+     "why": "How std::string is implemented at Facebook, with small-string optimisation and the bugs from changing it.",
+     "hn": 5
+    },
+    {
+     "kind": "v",
+     "id": "sWgDk-o-6ZE",
+     "role": "deeper",
+     "title": "CppCon 2015: Sean Parent \"Better Code: Data Structures\"",
+     "channel": "CppCon",
+     "length": "1:04:00",
+     "why": "Sean Parent on data structures as a design decision and the relationships that containers encode.",
+     "hn": 4
+    },
+    {
+     "kind": "v",
+     "id": "W2tWOdzgXHA",
+     "role": "deeper",
+     "title": "GoingNative 2013 C++ Seasoning",
+     "channel": "25msr",
+     "length": "1:17:12",
+     "why": "The source of \"no raw loops\": rewriting real code around algorithms.",
+     "hn": 2
+    }
+   ]
+  },
+  {
+   "key": "alloc",
+   "name": "Memory & Allocators",
+   "note": "Stack and heap, how new and malloc get memory, allocator interfaces, arenas and pools, and why allocation dominates so many profiles.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "kSWfushlvB8",
+     "role": "best",
+     "title": "CppCon 2017: Bob Steagall “How to Write a Custom Allocator”",
+     "channel": "CppCon",
+     "length": "1:03:40",
+     "why": "Writing a standard-conforming custom allocator, which requires understanding the whole allocator model."
+    },
+    {
+     "kind": "v",
+     "id": "nZNd5FjSquk",
+     "role": "deeper",
+     "title": "CppCon 2017: John Lakos “Local ('Arena') Memory Allocators (part 1 of 2)”",
+     "channel": "CppCon",
+     "length": "1:00:05",
+     "why": "John Lakos with measurements of when local arena allocators help and when they do not. Part one of two."
+    },
+    {
+     "kind": "v",
+     "id": "LIb3L4vKZ7U",
+     "role": "deeper",
+     "title": "CppCon 2015: Andrei Alexandrescu “std::allocator...”",
+     "channel": "CppCon",
+     "length": "1:12:27",
+     "why": "Andrei Alexandrescu critiques the std::allocator design and composes better allocators from small parts.",
+     "hn": 3
+    },
+    {
+     "kind": "v",
+     "id": "GZ6PuLikw84",
+     "role": "quick",
+     "title": "Allocators, Explained Simply",
+     "channel": "Nic Barker",
+     "length": "10:36",
+     "why": "Ten minutes on what an allocator is, for orientation."
+    }
+   ]
+  },
+  {
+   "key": "concurrency",
+   "name": "Concurrency, Atomics & the Memory Model",
+   "note": "std::thread and mutexes, atomics, memory orders and happens-before, lock-free structures and what the hardware does beneath them.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "F6Ipn7gCOsY",
+     "role": "best",
+     "title": "Back to Basics: Concurrency - Arthur O'Dwyer - CppCon 2020",
+     "channel": "CppCon",
+     "length": "1:04:28",
+     "why": "The C++ concurrency toolkit: threads, mutexes, condition variables, atomics and the mistakes each invites."
+    },
+    {
+     "kind": "v",
+     "id": "ZQFzMfHIxng",
+     "role": "next",
+     "title": "CppCon 2017: Fedor Pikus “C++ atomics, from basic to advanced.  What do they really do?”",
+     "channel": "CppCon",
+     "length": "1:14:22",
+     "why": "Fedor Pikus on what atomics actually do, including cost and the meaning of the memory orders.",
+     "hn": 2
+    },
+    {
+     "kind": "v",
+     "id": "A8eCGOqgvH4",
+     "role": "deeper",
+     "title": "C++ and Beyond 2012: Herb Sutter - atomic Weapons 1 of 2",
+     "channel": "alexsmail",
+     "length": "1:21:12",
+     "why": "Herb Sutter's definitive memory-model lecture, part one: sequential consistency, acquire and release, and the transformations compilers and CPUs make.",
+     "hn": 4
+    },
+    {
+     "kind": "v",
+     "id": "KeLBd2EJLOU",
+     "role": "deeper",
+     "title": "C++ and Beyond 2012: Herb Sutter - atomic Weapons 2 of 2",
+     "channel": "alexsmail",
+     "length": "1:32:33",
+     "why": "Part two: the same model across x86, ARM and POWER, and what compilers emit.",
+     "hn": 4
+    },
+    {
+     "kind": "v",
+     "id": "c1gO9aB9nbs",
+     "role": "deeper",
+     "title": "CppCon 2014: Herb Sutter \"Lock-Free Programming (or, Juggling Razor Blades), Part I\"",
+     "channel": "CppCon",
+     "length": "1:00:23",
+     "why": "Lock-free programming from Herb Sutter: reasoning about correctness when there is no lock. Part one of two."
+    },
+    {
+     "kind": "v",
+     "id": "K3P_Lmq6pw0",
+     "role": "deeper",
+     "title": "Single Producer Single Consumer Lock-free FIFO From the Ground Up - Charles Frasch - CppCon 2023",
+     "channel": "CppCon",
+     "length": "1:03:44",
+     "why": "Builds a single-producer single-consumer queue step by step, including its cache behaviour. A common low-latency exercise."
+    }
+   ]
+  },
+  {
+   "key": "ub",
+   "name": "Undefined Behaviour & the Compilation Model",
+   "note": "Translation units, the one-definition rule, linking and symbols, startup, and what undefined behaviour licenses an optimiser to do.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "cpkDQaYttR4",
+     "role": "best",
+     "title": "Back to Basics: Compiling and Linking - Ben Saks - CppCon 2021",
+     "channel": "CppCon",
+     "length": "1:03:19",
+     "why": "What the compiler and linker each do, and how declarations, definitions and linkage produce the errors you see."
+    },
+    {
+     "kind": "v",
+     "id": "yG1OZ69H_-o",
+     "role": "next",
+     "title": "CppCon 2016: Chandler Carruth “Garbage In, Garbage Out: Arguing about Undefined Behavior...\"",
+     "channel": "CppCon",
+     "length": "57:39",
+     "why": "Chandler Carruth, an LLVM optimiser engineer, on what undefined behaviour means and why it exists.",
+     "hn": 11
+    },
+    {
+     "kind": "v",
+     "id": "dOfucXtyEsU",
+     "role": "deeper",
+     "title": "CppCon 2018: Matt Godbolt “The Bits Between the Bits: How We Get to main()”",
+     "channel": "CppCon",
+     "length": "1:03:33",
+     "why": "Matt Godbolt traces how a program gets to main(): the linker, global constructors and the loader.",
+     "hn": 3
+    },
+    {
+     "kind": "v",
+     "id": "bSkpMdDe4g4",
+     "role": "deeper",
+     "title": "CppCon 2017: Matt Godbolt “What Has My Compiler Done for Me Lately? Unbolting the Compiler's Lid”",
+     "channel": "CppCon",
+     "length": "1:15:45",
+     "why": "Godbolt reads compiler output to show which optimisations you get for free and which abstractions cost nothing.",
+     "hn": 4
+    },
+    {
+     "kind": "v",
+     "id": "H4s55GgAg0I",
+     "role": "quick",
+     "title": "How the C++ Linker Works",
+     "channel": "The Cherno",
+     "length": "15:52",
+     "why": "Sixteen minutes on what the linker does, for orientation."
+    }
+   ]
+  },
+  {
+   "key": "errors",
+   "name": "Exceptions & Error Handling",
+   "note": "Stack unwinding, the basic, strong and nothrow guarantees, noexcept and how it affects moves, and the alternatives to exceptions.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "0ojB8c0xUd8",
+     "role": "best",
+     "title": "Back to Basics: Exceptions - Klaus Iglberger - CppCon 2020",
+     "channel": "CppCon",
+     "length": "1:01:44",
+     "why": "How exceptions behave and how to write code with correct exception guarantees."
+    },
+    {
+     "kind": "v",
+     "id": "W7fIy_54y-w",
+     "role": "next",
+     "title": "CppCon 2014: Jon Kalb \"Exception-Safe Code, Part I\"",
+     "channel": "CppCon",
+     "length": "1:00:30",
+     "why": "The start of Jon Kalb's three-part course on exception-safe code, the most thorough treatment of the guarantees."
+    },
+    {
+     "kind": "v",
+     "id": "_Ivd3qzgT7U",
+     "role": "deeper",
+     "title": "CppCon 2017: Dave Watson “C++ Exceptions and Stack Unwinding”",
+     "channel": "CppCon",
+     "length": "51:12",
+     "why": "What happens at runtime when an exception is thrown, down to unwind tables and where the cost goes."
+    },
+    {
+     "kind": "v",
+     "id": "ARYP83yNAWk",
+     "role": "deeper",
+     "title": "De-fragmenting C++: Making Exceptions and RTTI More Affordable and Usable - Herb Sutter  CppCon 2019",
+     "channel": "CppCon",
+     "length": "1:33:12",
+     "why": "Herb Sutter on why exceptions and RTTI are costly and how the language could change that.",
+     "hn": 6
+    },
+    {
+     "kind": "v",
+     "id": "PH4WBuE1BHI",
+     "role": "deeper",
+     "title": "CppCon 2018: Andrei Alexandrescu “Expect the expected”",
+     "channel": "CppCon",
+     "length": "58:58",
+     "why": "Andrei Alexandrescu on expected-style error handling as an alternative to throwing."
+    }
+   ]
+  },
+  {
+   "key": "design",
+   "name": "Design Principles & Patterns",
+   "note": "SOLID applied to real code, the classic patterns and what each one is for, and how value-based design replaces deep hierarchies.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "Ntraj80qN2k",
+     "role": "best",
+     "title": "Breaking Dependencies: The SOLID Principles - Klaus Iglberger - CppCon 2020",
+     "channel": "CppCon",
+     "length": "1:03:21",
+     "why": "All five SOLID principles as tools for managing dependencies, in C++ with concrete refactorings."
+    },
+    {
+     "kind": "v",
+     "id": "OvO2NR7pXjg",
+     "role": "next",
+     "title": "Design Patterns: Facts and Misconceptions - Klaus Iglberger - CppCon 2021",
+     "channel": "CppCon",
+     "length": "50:42",
+     "why": "What patterns are and are not, and the misconceptions about them that lead to poor answers."
+    },
+    {
+     "kind": "v",
+     "id": "qn6OqefuH08",
+     "role": "next",
+     "title": "Breaking Dependencies - C++ Type Erasure - The Implementation Details - Klaus Iglberger  CppCon 2022",
+     "channel": "CppCon",
+     "length": "1:00:35",
+     "why": "Type erasure as a design pattern, with the implementation details that matter."
+    },
+    {
+     "kind": "v",
+     "id": "_BpMYeUFXv8",
+     "role": "deeper",
+     "title": "Sean Parent: Value Semantics and Concepts-based Polymorphism",
+     "channel": "CppNow",
+     "length": "1:43:10",
+     "why": "Sean Parent's fuller lecture on value semantics and concept-based polymorphism."
+    },
+    {
+     "kind": "v",
+     "id": "pmdwAf6hCWg",
+     "role": "deeper",
+     "title": "C++ Design Patterns - The Most Common Misconceptions (2 of N) - Klaus Iglberger - CppCon 2024",
+     "channel": "CppCon",
+     "length": "1:01:03",
+     "why": "More common misconceptions about specific patterns from Klaus Iglberger."
+    }
+   ]
+  },
+  {
+   "key": "perf",
+   "name": "Performance-Minded C++",
+   "note": "Data structures chosen for the memory hierarchy, benchmarking, and writing C++ with latency in mind.",
+   "picks": [
+    {
+     "kind": "v",
+     "id": "fHNmRkzxHWs",
+     "role": "best",
+     "title": "CppCon 2014: Chandler Carruth \"Efficiency with Algorithms, Performance with Data Structures\"",
+     "channel": "CppCon",
+     "length": "1:13:41",
+     "why": "Chandler Carruth on why cache behaviour usually matters more than the algorithm on paper, and how to choose data structures accordingly.",
+     "hn": 9
+    },
+    {
+     "kind": "v",
+     "id": "rX0ItVEVjHc",
+     "role": "next",
+     "title": "CppCon 2014: Mike Acton \"Data-Oriented Design and C++\"",
+     "channel": "CppCon",
+     "length": "1:27:46",
+     "why": "Mike Acton's data-oriented design talk, the most-linked C++ video on Hacker News in this search (47 users). Argues that the data's shape should drive the code.",
+     "hn": 47
+    },
+    {
+     "kind": "v",
+     "id": "rHIkrotSwcc",
+     "role": "deeper",
+     "title": "CppCon 2019: Chandler Carruth “There Are No Zero-cost Abstractions”",
+     "channel": "CppCon",
+     "length": "59:52",
+     "why": "Shows measured costs of abstractions that are advertised as free.",
+     "hn": 13
+    },
+    {
+     "kind": "v",
+     "id": "NH1Tta7purM",
+     "role": "deeper",
+     "title": "CppCon 2017: Carl Cook “When a Microsecond Is an Eternity: High Performance Trading Systems in C++”",
+     "channel": "CppCon",
+     "length": "1:00:07",
+     "why": "Techniques from low-latency trading systems: hot paths, branch handling, allocation and cache warming.",
+     "hn": 4
+    },
+    {
+     "kind": "v",
+     "id": "sX2nF1fW7kI",
+     "role": "deeper",
+     "title": "When Nanoseconds Matter: Ultrafast Trading Systems in C++ - David Gross - CppCon 2024",
+     "channel": "CppCon",
+     "length": "1:28:51",
+     "why": "A more recent low-latency talk on queues, order books and measuring nanoseconds.",
+     "hn": 2
+    },
+    {
+     "kind": "v",
+     "id": "g-WPhYREFjk",
+     "role": "deeper",
+     "title": "Branchless Programming in C++ - Fedor Pikus - CppCon 2021",
+     "channel": "CppCon",
+     "length": "1:03:56",
+     "why": "Fedor Pikus on when removing branches pays off, with measurements."
+    }
+   ]
+  }
+ ]
+}

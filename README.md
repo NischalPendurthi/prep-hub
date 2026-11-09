@@ -54,7 +54,7 @@ The hub bar has a GitHub sign-in. You paste a GitHub token, and `shared/hub.js` 
 
 ## Applications
 
-The list is kept in the browser's localStorage. `applications/seed.json` is gitignored, so the list never reaches the public repo or site: a local build fills an empty tracker from it, and on the published site you load it once with **Import**. Export writes the same format.
+The list is kept in the browser's localStorage. `applications/seed.json` is gitignored, so the list never reaches the public repo or site. Each browser merges it in once: a local build reads the file directly, and the published site reads a copy from the private repo after sign-in (`projects/publish.sh` uploads it). Merging keeps any tag you've set and doesn't bring back entries you removed. Export and Import use the same format.
 
 ## Video picks
 

@@ -1,9 +1,12 @@
-/* Application tracker. The list lives in localStorage. On first run it is filled from seed.json
-   when that file exists; seed.json is gitignored, so the public site starts empty and the list
-   comes in through Import. Export and Import use the same format as seed.json. */
+/* Application tracker. The list lives in localStorage. seed.json (gitignored) holds the applied jobs:
+   a local build serves it directly, and the published site reads the same list from the private repo
+   after sign-in, so it never reaches the public repo. Export and Import use the same format. */
 (function () {
   "use strict";
   var KEY = "applications.v1";
+  /* Bump the suffix when the seed list should be merged in again. */
+  var SEED_DONE = "applications.seeded.v1";
+  var PRIVATE_SEED = "https://api.github.com/repos/NischalPendurthi/prep-hub-private/contents/applications.json";
   var STATUSES = [
     { id: "rejected", name: "Rejected" },
     { id: "hope", name: "Hope" },
@@ -213,21 +216,46 @@
     render();
   });
 
-  var stored = read();
-  if (stored) {
-    apps = stored;
+  function seeded() {
+    try { return !!localStorage.getItem(SEED_DONE); } catch (e) { return true; }
+  }
+
+  function json(r) { return r.ok ? r.json() : null; }
+
+  function fetchPrivateSeed() {
+    if (document.documentElement.getAttribute("data-hub-auth") !== "in") return null;
+    var token;
+    try { token = localStorage.getItem("cp_counter_gh_token_v2"); } catch (e) { return null; }
+    return fetch(PRIVATE_SEED, {
+      headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.raw+json" },
+      cache: "no-cache"
+    }).then(json);
+  }
+
+  /* Runs once per browser, so a removed entry stays removed and a tag you chose is kept.
+     Entries that are missing are added, and untagged ones take the tag from the seed. */
+  function mergeSeed(data) {
+    var seed = clean(data);
+    if (!seed) return;
+    var byKey = new Map(apps.map(function (a) { return [keyOf(a), a]; }));
+    seed.forEach(function (d) {
+      var have = byKey.get(keyOf(d));
+      if (!have) { apps.push(d); byKey.set(keyOf(d), d); }
+      else if (!have.status) have.status = d.status;
+    });
+    save();
+    try { localStorage.setItem(SEED_DONE, "1"); } catch (e) {}
     render();
-  } else {
-    render();
+  }
+
+  apps = read() || [];
+  render();
+  if (!seeded()) {
     fetch("seed.json")
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (data) {
-        var seed = clean(data);
-        if (!seed || read() || apps.length) return;
-        apps = seed;
-        save();
-        render();
-      })
+      .then(json)
+      .catch(function () { return null; })
+      .then(function (local) { return local || fetchPrivateSeed(); })
+      .then(mergeSeed)
       .catch(function () {});
   }
 })();

@@ -33,25 +33,37 @@ main a { color: var(--hub-accent); }
   var isGuide = !!p && /^[a-z0-9-]+$/.test(p);
   var path = isGuide ? "dist/" + p + "/index.html" : "dist/index.html";
 
-  fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, {
-    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.raw+json" },
-    cache: "no-cache"
-  }).then(function (r) {
-    if (r.status === 404 && isGuide) {
-      show('That guide was not found. <a href="./">See all projects</a>.');
-      return null;
-    }
-    if (r.status === 401 || r.status === 403 || r.status === 404) {
-      show("<p>Your token can't read the private guides.</p>" +
-        '<p><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token</a> ' +
-        "with <strong>prep-hub-private</strong> selected, <strong>Contents: Read-only</strong>, and <strong>Gists: Read and write</strong> " +
-        "so the Counter's sync keeps working. Then sign out and sign in with it.</p>");
-      return null;
-    }
-    if (!r.ok) { show("GitHub returned " + r.status + ". Try again in a moment."); return null; }
-    return r.text();
-  }).then(function (html) {
-    if (html == null) return;
+  /* GitHub takes from half a second to several seconds per page, so every page is kept in the
+     Cache API and shown from there at once. Each open still checks GitHub in the background.
+     hub.js deletes this cache on sign-out. */
+  var CACHE = "projects-v1";
+  function key(path) { return new URL("__cache__/" + path, location.href).href; }
+  function cacheGet(path) {
+    if (!window.caches) return Promise.resolve(null);
+    return caches.open(CACHE)
+      .then(function (c) { return c.match(key(path)); })
+      .then(function (r) { return r ? r.text() : null; })
+      .catch(function () { return null; });
+  }
+  function cachePut(path, html) {
+    if (!window.caches) return Promise.resolve();
+    return caches.open(CACHE)
+      .then(function (c) { return c.put(key(path), new Response(html, { headers: { "Content-Type": "text/html" } })); })
+      .catch(function () {});
+  }
+  function cacheDrop(path) {
+    if (!window.caches) return Promise.resolve();
+    return caches.open(CACHE).then(function (c) { return c.delete(key(path)); }).catch(function () {});
+  }
+
+  function download(path) {
+    return fetch("https://api.github.com/repos/" + REPO + "/contents/" + path, {
+      headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.raw+json" },
+      cache: "no-cache"
+    });
+  }
+
+  function render(html) {
     html = html.replace('data-tool="projects"', 'data-tool="projects" data-private');
     if (isGuide) {
       html = html.split("../../shared/").join("../shared/")
@@ -64,8 +76,61 @@ main a { color: var(--hub-accent); }
     document.open();
     document.write(html);
     document.close();
-  }).catch(function () {
-    show("Couldn't reach GitHub. Check your connection and reload.");
+  }
+
+  /* Download the guides not stored yet, one at a time, so the first click on each is instant too. */
+  function warm(index) {
+    var slugs = [], m, re = /class="card" href="([a-z0-9-]+)\/"/g;
+    while ((m = re.exec(index))) slugs.push(m[1]);
+    slugs.reduce(function (chain, slug) {
+      var path = "dist/" + slug + "/index.html";
+      return chain.then(function () { return cacheGet(path); }).then(function (have) {
+        if (have != null) return null;
+        return download(path).then(function (r) {
+          return r.ok ? r.text().then(function (t) { return cachePut(path, t); }) : null;
+        });
+      });
+    }, Promise.resolve()).catch(function () {});
+  }
+
+  function showError(r) {
+    if (r.status === 404 && isGuide) {
+      show('That guide was not found. <a href="./">See all projects</a>.');
+    } else if (r.status === 401 || r.status === 403 || r.status === 404) {
+      show("<p>Your token can't read the private guides.</p>" +
+        '<p><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token</a> ' +
+        "with <strong>prep-hub-private</strong> selected, <strong>Contents: Read-only</strong>, and <strong>Gists: Read and write</strong> " +
+        "so the Counter's sync keeps working. Then sign out and sign in with it.</p>");
+    } else {
+      show("GitHub returned " + r.status + ". Try again in a moment.");
+    }
+  }
+
+  cacheGet(path).then(function (cached) {
+    if (cached != null) {
+      render(cached);
+      if (!isGuide) warm(cached);
+    }
+    return download(path).then(function (r) {
+      if (!r.ok) {
+        if (cached == null) { showError(r); return; }
+        /* access was revoked or the guide is gone: drop it and let the reload show why */
+        if (r.status === 401 || r.status === 403 || r.status === 404) {
+          return cacheDrop(path).then(function () { location.reload(); });
+        }
+        return;                              /* GitHub is having trouble: keep showing the stored page */
+      }
+      return r.text().then(function (html) {
+        if (html === cached) return;
+        return cachePut(path, html).then(function () {
+          if (cached != null) { location.reload(); return; }
+          render(html);
+          if (!isGuide) warm(html);
+        });
+      });
+    }).catch(function () {
+      if (cached == null) show("Couldn't reach GitHub. Check your connection and reload.");
+    });
   });
 })();
 </script>
