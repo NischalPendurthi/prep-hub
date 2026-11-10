@@ -1,43 +1,53 @@
 {
   "id": "dbms",
   "name": "DBMS & SQL",
-  "blurb": "One best video per subtopic, drawn from Stanford's database course, CMU's database course and the best SQL teachers on YouTube, each with a deeper and a quicker alternative. Watch the best pick, then do that subtopic's MCQs.",
-  "method": "<ul><li><b>Best pick</b>: the clearest correct explanation at interview depth. For SQL and theory most come from Jennifer Widom's Stanford course (short, exact lectures); for design, joins and normalization from Decomplexify; for interview-style queries from techTFQ.</li><li><b>Go deeper</b>: Andy Pavlo's CMU 15-445 lectures on how a database actually implements indexes, joins and concurrency control, and Martin Kleppmann (author of <i>Designing Data-Intensive Applications</i>) on distributed data.</li><li><b>Quick / visual</b>: short refreshers for revision.</li><li>Candidates came from Hacker News comments that link YouTube plus YouTube search for every subtopic. High-view exam channels lost when an English lecture explained the same idea more precisely; FD closure and candidate-key numericals are covered by the linked MCQs.</li></ul>",
+  "blurb": "Short videos only: every pick is 20 minutes or less and covers one or two ideas, ordered so each subtopic is a sequence you can finish in sittings. Subtopics follow CS631 (Silberschatz 7e, chapters 10 and 12–23) after the SQL and design basics.",
+  "method": "<ul><li><b>Length</b>: hard cap of 20 minutes per video. Depth comes from a sequence of short lectures rather than one long one.</li><li><b>Order</b>: picks in a subtopic are in watching order; the first is the starting point.</li><li><b>Sources</b>: university courses published in short parts: Berkeley CS186, Jens Dittrich (Saarland), TU Kaiserslautern, Stanford's Jennifer Widom and Martin Kleppmann (Cambridge), plus single-concept explainers where those courses have gaps (Thomas' write rule, validation, snapshot isolation).</li><li><b>Coverage</b>: chapters follow the CS631 syllabus; topics stressed in the 2024 and 2025 endsems (partitioning, validation, semijoins, RAID, bitmaps, ARIES, 2PC) each have their own video.</li></ul>",
   "subtopics": [
     {
       "key": "courses",
-      "name": "Full courses",
-      "note": "CMU 15-445 is the best database course online, but it teaches how to build a database. For interviews, use it for indexing and transactions and the picks below for everything else.",
+      "name": "Short-video courses",
+      "note": "Every video on this page is 20 minutes or less and covers one or two ideas, so a chapter is a sequence of short sittings. These series are where most of them come from; each is worth following end to end.",
       "picks": [
         {
           "kind": "l",
-          "id": "PLSE8ODhjZXjYDBpQnSymaectKjxCy6BYq",
-          "thumb": "7NPIENPr-zk",
+          "id": "PLC4UZxBVGKtdKBV0C9oD9UEDUeRoX-IfK",
+          "thumb": "RAgCa_IDCNQ",
           "role": "course",
-          "title": "CMU Intro to Database Systems (15-445/645 - Fall 2024)",
-          "channel": "CMU Database Group",
-          "length": "26 videos",
-          "why": "Andy Pavlo's course: storage, buffer pools, B+trees, hashing, join algorithms, query optimisation, two-phase locking, MVCC, recovery and distributed databases. The most-recommended database course on Hacker News (13 users linked its 2019 edition)."
+          "title": "Indexing",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "14 videos",
+          "why": "Jens Dittrich (Saarland University): indexing as numbered 10–20 minute videos. His sibling playlists Hardware and Storage, Data Layouts, Query Processing Algorithms, Query Planning and Recovery cover chapters 12–16 and 19 the same way."
         },
         {
           "kind": "l",
-          "id": "PLNITTkCQVxeXryTQvY0JBWTyN9ynxxPH8",
-          "thumb": "GFQaEYEc8_8",
-          "role": "quick",
-          "title": "Relational database (RDBMS)",
-          "channel": "Decomplexify",
-          "length": "8 videos",
-          "why": "Keys, ER diagrams, joins and normal forms with clear examples: the design half of DBMS interviews."
+          "id": "PLzzVuDSjP25T_5nRkp-QDjoqGTGIH_XOq",
+          "thumb": "A6GDLuJgPRc",
+          "role": "course",
+          "title": "Transactions and Concurrency II",
+          "channel": "CS186Berkeley",
+          "length": "11 videos",
+          "why": "Berkeley CS186 publishes every lecture as 2–10 minute parts. This one is locking and deadlocks; the channel has a playlist per lecture, from disks and B+trees to recovery and distributed transactions."
         },
         {
           "kind": "l",
-          "id": "PLQnljOFTspQXjD0HOzN7P2tgzu7scWpl2",
-          "thumb": "pomxJOFVcQs",
-          "role": "deeper",
-          "title": "Database Engineering",
-          "channel": "Hussein Nasser",
-          "length": "118 videos",
-          "why": "A backend engineer on how Postgres and MySQL behave in practice: indexes, isolation, locks, replication and sharding. Dip in by topic; don't watch it all."
+          "id": "PL1EOurBatQDWR_ZBcNzUzsUIx_p2EKcmr",
+          "thumb": "vzR2QIKJh4U",
+          "role": "course",
+          "title": "Database Systems Lecture at TU Kaiserslautern Winter Term 2020/21",
+          "channel": "dbislab",
+          "length": "74 videos",
+          "why": "TU Kaiserslautern's database systems course in 10–20 minute pieces: joins, histograms and sketches, join ordering, hashing, recovery and serializability theory. Skip the few over 20 minutes."
+        },
+        {
+          "kind": "l",
+          "id": "PLeKd45zvjcDFUEv_ohr_HdUFe97RItdiB",
+          "thumb": "UEAMfLPZZhE",
+          "role": "course",
+          "title": "Distributed Systems lecture series",
+          "channel": "Martin Kleppmann",
+          "length": "23 videos",
+          "why": "Martin Kleppmann's Cambridge distributed systems course, 10–20 minutes a video: replication, quorums, consensus, two-phase commit, linearizability and Spanner."
         }
       ]
     },
@@ -45,44 +55,84 @@
       "key": "fund",
       "name": "DBMS Fundamentals & Keys",
       "mcq": "../mcq/#/d/sql/fund",
-      "note": "Super, candidate, primary, foreign and surrogate keys; ER modelling and cardinality; relational algebra (selection, projection, joins, division).",
+      "note": "Relational model, super/candidate/primary/foreign keys, ER modelling (cardinality, participation, weak entities), mapping ER to tables, and relational algebra.",
       "picks": [
         {
           "kind": "v",
-          "id": "8wUUMOKAK-c",
+          "id": "spQ7IFksP9g",
           "role": "best",
-          "title": "Database Keys Made Easy - Primary, Foreign, Candidate, Surrogate, & Many More",
-          "channel": "Decomplexify",
-          "length": "23:19",
-          "why": "Every kind of key on one running example, with the reasoning for choosing a primary key, natural vs surrogate."
+          "title": "02-01-relational-model.mp4",
+          "label": "The Relational Model (Stanford, Jennifer Widom)",
+          "channel": "Stanford Dbclass",
+          "length": "8:50",
+          "why": "Relations, attributes, tuples, schemas and keys, defined exactly."
         },
         {
           "kind": "v",
-          "id": "LowjDtiNlk4",
+          "id": "p3yJZH8_bsc",
           "role": "next",
-          "title": "Entity Relationship Diagrams",
-          "channel": "Decomplexify",
-          "length": "20:32",
-          "why": "Entities, relationships and cardinality, then turning the diagram into tables."
+          "title": "Concept of Keys in DBMS - Super, Primary, Candidate, Foreign Key, etc",
+          "channel": "Studytonight with Abhishek",
+          "length": "9:16",
+          "why": "Super, candidate, primary, alternate and foreign keys with one running example."
+        },
+        {
+          "kind": "v",
+          "id": "G5uZwldBzG4",
+          "role": "next",
+          "title": "Mapping Cardinality in ER Diagram",
+          "channel": "Neso Academy",
+          "length": "7:39",
+          "why": "One-to-one, one-to-many and many-to-many relationships in ER diagrams."
+        },
+        {
+          "kind": "v",
+          "id": "nUKRBWVDNlA",
+          "role": "next",
+          "title": "Participation Constraints in DBMS",
+          "channel": "Neso Academy",
+          "length": "9:31",
+          "why": "Total vs partial participation and how it combines with cardinality."
+        },
+        {
+          "kind": "v",
+          "id": "8L-PKidIH-U",
+          "role": "next",
+          "title": "Lecture 16 Part 8 Weak Entities",
+          "label": "Weak Entities (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "2:37",
+          "why": "Weak entity sets and identifying relationships."
+        },
+        {
+          "kind": "v",
+          "id": "XhVS97buHi8",
+          "role": "next",
+          "title": "Lecture 16 Part 14 Converting ER to Relational",
+          "label": "Converting ER to Relational (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:22",
+          "why": "Turning entities, relationships and constraints into tables."
         },
         {
           "kind": "v",
           "id": "tii7xcFilOA",
           "role": "next",
           "title": "05-01-relational-algebra-1.mp4",
+          "label": "Relational Algebra, Part 1 (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
           "length": "18:05",
-          "why": "Jennifer Widom (Stanford) on select, project, product and join, with the exact semantics SQL is built on.",
-          "label": "Relational Algebra (Stanford, Jennifer Widom)"
+          "why": "Select, project, cross product, natural and theta join, with queries built step by step."
         },
         {
           "kind": "v",
-          "id": "7NPIENPr-zk",
-          "role": "deeper",
-          "title": "#01 - Relational Model & Algebra (CMU Intro to Database Systems)",
-          "channel": "CMU Database Group",
-          "length": "1:14:50",
-          "why": "Why the relational model won, and relational algebra as a database actually executes it."
+          "id": "GkBf2dZAES0",
+          "role": "next",
+          "title": "05-02-relational-algebra-2.mp4",
+          "label": "Relational Algebra, Part 2 (Stanford, Jennifer Widom)",
+          "channel": "Stanford Dbclass",
+          "length": "19:44",
+          "why": "Set operators, rename, and the equivalent ways to write the same query."
         }
       ]
     },
@@ -90,36 +140,37 @@
       "key": "basics",
       "name": "SQL Basics & NULL Handling",
       "mcq": "../mcq/#/d/sql/basics",
-      "note": "SELECT/WHERE/ORDER BY semantics, the logical order a query is evaluated in, and three-valued logic: why `= NULL` never matches and how NULL breaks NOT IN.",
+      "note": "SELECT-FROM-WHERE, ordering, duplicates, NULLs and three-valued logic, and INSERT/UPDATE/DELETE.",
       "picks": [
         {
           "kind": "v",
           "id": "4IxirOdp6bw",
           "role": "best",
           "title": "06-02-basic-select-statement.mp4",
+          "label": "Basic SELECT Statement (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
           "length": "9:57",
-          "why": "The SELECT-FROM-WHERE block with its precise meaning, demonstrated live: a ten-minute foundation for every query after it.",
-          "label": "The Basic SELECT Statement (Stanford, Jennifer Widom)"
+          "why": "The basic SELECT statement and how it maps to relational algebra."
         },
         {
           "kind": "v",
           "id": "qdR2z_Ws56k",
           "role": "next",
           "title": "06-07-null-values.mp4",
+          "label": "NULL Values (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
           "length": "6:25",
-          "why": "How NULL behaves in comparisons, WHERE and aggregates: the source of most \"what does this query return?\" traps.",
-          "label": "NULL Values (Stanford, Jennifer Widom)"
+          "why": "How NULL behaves in comparisons, WHERE and aggregates: three-valued logic."
         },
         {
           "kind": "v",
-          "id": "HXV3zeQKqGY",
-          "role": "deeper",
-          "title": "SQL Tutorial - Full Database Course for Beginners",
-          "channel": "freeCodeCamp.org",
-          "length": "4:20:39",
-          "why": "A complete hands-on SQL course if you've never written queries. Skip it if you have."
+          "id": "qKNb8YQYTZg",
+          "role": "next",
+          "title": "06-08-data-modification-statements.mp4",
+          "label": "Data Modification Statements (Stanford, Jennifer Widom)",
+          "channel": "Stanford Dbclass",
+          "length": "14:34",
+          "why": "INSERT, DELETE and UPDATE, including the subquery forms."
         }
       ]
     },
@@ -127,35 +178,44 @@
       "key": "agg",
       "name": "Aggregation & GROUP BY",
       "mcq": "../mcq/#/d/sql/agg",
-      "note": "What GROUP BY does to rows, which columns you may select, WHERE vs HAVING, COUNT(*) vs COUNT(col), and ROLLUP/CUBE.",
+      "note": "Aggregate functions, GROUP BY, HAVING vs WHERE, and ROLLUP/CUBE.",
       "picks": [
         {
           "kind": "v",
-          "id": "428B57dOxcE",
-          "role": "best",
-          "title": "06-06-aggregation.mp4",
-          "channel": "Stanford Dbclass",
-          "length": "25:18",
-          "why": "Aggregates, GROUP BY and HAVING demonstrated query by query, including the cases that surprise people.",
-          "label": "Aggregation (Stanford, Jennifer Widom)"
-        },
-        {
-          "kind": "v",
-          "id": "Ccye_H34hBo",
-          "role": "deeper",
-          "title": "GROUPING SETS vs ROLLUP vs CUBE in SQL | Advanced SQL Tutorial with Examples",
-          "channel": "techTFQ",
-          "length": "33:40",
-          "why": "Multi-level subtotals, which come up in analytics-role SQL rounds."
-        },
-        {
-          "kind": "v",
           "id": "VQf0V6Wwbf4",
-          "role": "quick",
+          "role": "best",
           "title": "GROUP BY and HAVING Clause in SQL",
           "channel": "Neso Academy",
           "length": "7:57",
-          "why": "WHERE vs HAVING in eight minutes for revision."
+          "why": "GROUP BY and HAVING with the order in which a query is evaluated."
+        },
+        {
+          "kind": "v",
+          "id": "nNrgRVIzeHg",
+          "role": "next",
+          "title": "Advanced Aggregate Functions in SQL (GROUP BY, HAVING vs. WHERE)",
+          "channel": "Becoming a Data Scientist",
+          "length": "6:00",
+          "why": "WHERE vs HAVING and combining aggregates."
+        },
+        {
+          "kind": "v",
+          "id": "jcl0unn73RY",
+          "role": "next",
+          "title": "16 01 olap part1",
+          "label": "OLAP, CUBE and ROLLUP (Stanford, Jennifer Widom)",
+          "channel": "Stanford Dbclass",
+          "length": "14:22",
+          "why": "OLAP, star schemas, and the CUBE and ROLLUP operators."
+        },
+        {
+          "kind": "v",
+          "id": "x2_mOJ3skSc",
+          "role": "quick",
+          "title": "SQL Group By: An Explanation and How To Use It",
+          "channel": "Database Star",
+          "length": "5:05",
+          "why": "Refresher on what GROUP BY does to rows."
         }
       ]
     },
@@ -163,34 +223,44 @@
       "key": "joins",
       "name": "Joins",
       "mcq": "../mcq/#/d/sql/joins",
-      "note": "Inner, left, right, full and cross joins, self joins, how duplicates and NULLs multiply rows, and how databases execute joins (nested loop, hash, sort-merge).",
+      "note": "Inner, left, right and full outer joins, self joins, and what each returns with NULLs.",
       "picks": [
         {
           "kind": "v",
-          "id": "nivyaiCeWjs",
+          "id": "Yh4CrPHVBdE",
           "role": "best",
-          "title": "Learn SQL Joins",
-          "channel": "Decomplexify",
-          "length": "21:39",
-          "why": "Every join type explained with row-level pictures instead of misleading Venn diagrams, including self joins."
+          "title": "6 SQL Joins you MUST know! (Animated + Practice)",
+          "channel": "Anton Putra",
+          "length": "9:47",
+          "why": "Six join types animated on the same two tables, with practice queries."
         },
         {
           "kind": "v",
-          "id": "xUsY2jWQa1w",
+          "id": "K9Y8P3X45kE",
           "role": "next",
-          "title": "SQL JOINS Interview Question | What does different SQL Joins return?",
-          "channel": "techTFQ",
-          "length": "25:17",
-          "why": "The classic interview question: row counts for each join when keys repeat or are NULL."
+          "title": "SQL JOINs | INNER vs LEFT vs RIGHT vs FULL OUTER | Clearly Explained | Beginners Start Here!",
+          "channel": "Maven Analytics",
+          "length": "9:19",
+          "why": "Inner vs left vs right vs full outer, with the NULL rows each one produces."
         },
         {
           "kind": "v",
-          "id": "MFazkaZKs1s",
-          "role": "deeper",
-          "title": "#12 - Join Algorithms: Hash, Sort-Merge, Nested Loop Joins (CMU Intro to Database Systems)",
-          "channel": "CMU Database Group",
-          "length": "1:14:23",
-          "why": "How the database actually runs a join and what each algorithm costs. Answers \"why is my join slow?\""
+          "id": "jftR-zw8xWE",
+          "role": "next",
+          "title": "Lec 9 Part 4 Joins",
+          "label": "Joins in Relational Algebra (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "4:32",
+          "why": "Joins as relational algebra: theta, equi and natural join."
+        },
+        {
+          "kind": "v",
+          "id": "-htbah3eCYg",
+          "role": "next",
+          "title": "How nested loop, hash, and merge joins work.",
+          "channel": "Arpit Bhayani",
+          "length": "11:08",
+          "why": "How the database executes a join (nested loop, hash, merge). Covered fully under Query Processing."
         }
       ]
     },
@@ -198,46 +268,45 @@
       "key": "subq",
       "name": "Subqueries & Set Operations",
       "mcq": "../mcq/#/d/sql/subq",
-      "note": "Scalar, IN/EXISTS and correlated subqueries; subqueries in FROM and SELECT; CTEs; UNION vs UNION ALL, INTERSECT, EXCEPT.",
+      "note": "Subqueries in WHERE, FROM and SELECT, correlated subqueries, EXISTS/IN/ANY/ALL, UNION/INTERSECT/EXCEPT, and CTEs.",
       "picks": [
         {
           "kind": "v",
-          "id": "IJPXosPGLTU",
+          "id": "5K7x946qvgA",
           "role": "best",
-          "title": "06-04-subqueries-in-where.mp4",
-          "channel": "Stanford Dbclass",
-          "length": "20:14",
-          "why": "IN, EXISTS, ALL and ANY, and when a subquery equals a join and when it doesn't (duplicates).",
-          "label": "Subqueries in WHERE (Stanford, Jennifer Widom)"
+          "title": "Independent vs Correlated Subquery | Advanced SQL Tutorial For Beginners",
+          "channel": "Ankit Bansal",
+          "length": "13:55",
+          "why": "Independent vs correlated subqueries, and how the correlated one runs row by row."
         },
         {
           "kind": "v",
           "id": "8OCAxk1Rybg",
           "role": "next",
           "title": "06-05-subqueries-in-from-select.mp4",
+          "label": "Subqueries in FROM and SELECT (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
           "length": "8:02",
-          "why": "Derived tables and scalar subqueries in SELECT.",
-          "label": "Subqueries in FROM and SELECT (Stanford, Jennifer Widom)"
+          "why": "Subqueries in FROM and SELECT clauses."
         },
         {
           "kind": "v",
           "id": "thcqxTlSAmw",
           "role": "next",
           "title": "06 03 table variables set operators",
+          "label": "Table Variables and Set Operators (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
           "length": "10:33",
-          "why": "UNION, INTERSECT and EXCEPT, with set vs bag semantics.",
-          "label": "Table Variables and Set Operators (Stanford, Jennifer Widom)"
+          "why": "Table variables and UNION, INTERSECT and EXCEPT, with duplicate semantics."
         },
         {
           "kind": "v",
-          "id": "QNfnuK-1YYY",
-          "role": "deeper",
-          "title": "SQL WITH Clause | How to write SQL Queries using WITH Clause | SQL CTE (Common Table Expression)",
-          "channel": "techTFQ",
-          "length": "24:48",
-          "why": "Rewriting nested subqueries as CTEs, which is how good interview answers are usually written."
+          "id": "LJC8277LONg",
+          "role": "next",
+          "title": "SQL WITH Clause | Clearly Explained | CTEs vs Subqueries vs Temp Tables | Recursive CTEs",
+          "channel": "Maven Analytics",
+          "length": "13:15",
+          "why": "WITH clauses: CTEs vs subqueries vs temp tables, and a first recursive CTE."
         }
       ]
     },
@@ -245,34 +314,43 @@
       "key": "window",
       "name": "Window Functions",
       "mcq": "../mcq/#/d/sql/window",
-      "note": "OVER, PARTITION BY and ORDER BY; ROW_NUMBER vs RANK vs DENSE_RANK; LEAD/LAG; running totals and frame clauses. Very common in SQL rounds.",
+      "note": "OVER, PARTITION BY, ORDER BY; ROW_NUMBER, RANK, DENSE_RANK; LAG/LEAD; frames (ROWS vs RANGE).",
       "picks": [
         {
           "kind": "v",
-          "id": "Ww71knvhQ-s",
-          "role": "best",
-          "title": "SQL Window Function | How to write SQL Query using RANK, DENSE RANK, LEAD/LAG | SQL Queries Tutorial",
-          "channel": "techTFQ",
-          "length": "24:55",
-          "why": "The window functions that matter for interviews, each used to solve a real query."
-        },
-        {
-          "kind": "v",
-          "id": "zAmJPdZu8Rg",
-          "role": "deeper",
-          "title": "SQL Window Function | How to write SQL Query using Frame Clause, CUME_DIST | SQL Queries Tutorial",
-          "channel": "techTFQ",
-          "length": "54:31",
-          "why": "Frame clauses (ROWS vs RANGE) and FIRST_VALUE/LAST_VALUE: the part most people get wrong."
-        },
-        {
-          "kind": "v",
           "id": "rIcB4zMYMas",
-          "role": "quick",
+          "role": "best",
           "title": "SQL Window Functions | Clearly Explained | PARTITION BY, ORDER BY, ROW_NUMBER, RANK, DENSE_RANK",
           "channel": "Maven Analytics",
           "length": "7:52",
-          "why": "Eight-minute visual refresher."
+          "why": "What a window is: PARTITION BY and ORDER BY inside OVER, and the ranking functions."
+        },
+        {
+          "kind": "v",
+          "id": "xMWEVFC4FOk",
+          "role": "next",
+          "title": "RANK, DENSE_RANK, ROW_NUMBER SQL Analytical Functions Simplified",
+          "channel": "Ankit Bansal",
+          "length": "9:43",
+          "why": "RANK vs DENSE_RANK vs ROW_NUMBER on ties, with interview-style queries."
+        },
+        {
+          "kind": "v",
+          "id": "speKIs60TRs",
+          "role": "next",
+          "title": "Lead/Lag Window Analytical functions in SQL | Advance SQL concepts",
+          "channel": "Ankit Bansal",
+          "length": "10:34",
+          "why": "LAG and LEAD for comparing a row with its neighbours."
+        },
+        {
+          "kind": "v",
+          "id": "P6pVqmIzymI",
+          "role": "next",
+          "title": "Window FRAMES in SQL | Difference in ROWS and RANGE | SQL Intermediate Level Interview Question",
+          "channel": "Select Star",
+          "length": "5:11",
+          "why": "Window frames: ROWS vs RANGE and the default frame."
         }
       ]
     },
@@ -280,34 +358,52 @@
       "key": "classic",
       "name": "Classic Interview Queries",
       "mcq": "../mcq/#/d/sql/classic",
-      "note": "Nth highest salary, duplicates, top-N per group, consecutive days, employee-manager hierarchies. Try each problem yourself before watching the solution.",
+      "note": "Nth highest salary, top-N per group, duplicates, running totals, hierarchies.",
       "picks": [
         {
           "kind": "v",
-          "id": "ZML_EJrBhnY",
+          "id": "fvPddKyHxpQ",
           "role": "best",
-          "title": "Top 10 SQL Interview Queries | Popular SQL Queries for SQL Interview",
-          "channel": "techTFQ",
-          "length": "36:33",
-          "why": "The ten query patterns that come up most often, each solved and explained."
+          "title": "Part 1   How to find nth highest salary in sql",
+          "channel": "kudvenkat",
+          "length": "11:45",
+          "why": "Nth highest salary with subqueries, TOP/LIMIT and DENSE_RANK."
         },
         {
           "kind": "v",
-          "id": "aE623ff7zkM",
+          "id": "FSSKteJmWMs",
           "role": "next",
-          "title": "Solving SQL Interview Queries | Tricky SQL Interview Queries",
-          "channel": "techTFQ",
-          "length": "37:22",
-          "why": "Harder problems that need several techniques combined."
+          "title": "Learn SQL - SQL Interview Question - Second Highest Salary",
+          "channel": "NeetCode",
+          "length": "6:14",
+          "why": "Second highest salary, including the NULL-when-missing edge case."
         },
         {
           "kind": "v",
-          "id": "xN2PRAd8IZQ",
-          "role": "deeper",
-          "title": "REAL SQL Interview Question by a FAANG company | SQL Interview Query and Solution",
-          "channel": "techTFQ",
-          "length": "46:47",
-          "why": "One real company problem worked from scratch, showing how to think aloud in an interview."
+          "id": "LXtzOYwMUmA",
+          "role": "next",
+          "title": "SQL Query to find highest salary in each department | Most important SQL interview Question",
+          "channel": "AWS Made Easy",
+          "length": "6:01",
+          "why": "Highest salary in each department: the top-N-per-group pattern."
+        },
+        {
+          "kind": "v",
+          "id": "ewmEHQSQYRM",
+          "role": "next",
+          "title": "Recursive CTE | Leetcode Hard SQL Problem 5 | Complex SQL 12",
+          "channel": "Ankit Bansal",
+          "length": "12:34",
+          "why": "A hard problem solved with a recursive CTE."
+        },
+        {
+          "kind": "v",
+          "id": "tNXliLTlrV8",
+          "role": "next",
+          "title": "Step-by-step Approach to Solving Any Data Science SQL Interview Question (Twitch)",
+          "channel": "StrataScratch",
+          "length": "17:16",
+          "why": "A step-by-step method for approaching any SQL interview question."
         }
       ]
     },
@@ -315,46 +411,76 @@
       "key": "adv",
       "name": "Advanced SQL Features",
       "mcq": "../mcq/#/d/sql/adv",
-      "note": "Recursive CTEs for hierarchies, views and materialized views, triggers, stored procedures and constraints.",
+      "note": "Recursive queries, constraints and referential integrity, triggers, views and materialized views, authorization.",
       "picks": [
         {
           "kind": "v",
-          "id": "7hZYh9qXxe4",
+          "id": "Yceqbp_DKbA",
           "role": "best",
-          "title": "Recursive SQL Queries Tutorial | Learn to write SQL Queries using Recursion",
-          "channel": "techTFQ",
-          "length": "33:52",
-          "why": "Recursive CTEs from the base case up, applied to org charts and number series."
+          "title": "15-01-basic-recursive-with-statement.mp4",
+          "label": "Basic Recursive WITH (Stanford, Jennifer Widom)",
+          "channel": "Stanford Dbclass",
+          "length": "11:54",
+          "why": "The recursive WITH statement: how the fixpoint is computed."
+        },
+        {
+          "kind": "v",
+          "id": "zFeSglmrY78",
+          "role": "next",
+          "title": "11 03 referential integrity part1",
+          "label": "Referential Integrity, Part 1 (Stanford, Jennifer Widom)",
+          "channel": "Stanford Dbclass",
+          "length": "3:34",
+          "why": "What referential integrity means and when it is violated."
+        },
+        {
+          "kind": "v",
+          "id": "8IBQdb8IwBA",
+          "role": "next",
+          "title": "11 03 referential integrity part3",
+          "label": "Referential Integrity, Part 3 (Stanford, Jennifer Widom)",
+          "channel": "Stanford Dbclass",
+          "length": "15:32",
+          "why": "Cascade, set null and restrict, shown on live examples."
         },
         {
           "kind": "v",
           "id": "s9iRD-zrxS0",
           "role": "next",
           "title": "11-04-triggers-intro.mp4",
+          "label": "Introduction to Triggers (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
           "length": "15:27",
-          "why": "What triggers are, when they fire, and row- vs statement-level semantics.",
-          "label": "Triggers: Introduction (Stanford, Jennifer Widom)"
+          "why": "Triggers: events, conditions, actions, row vs statement level."
         },
         {
           "kind": "v",
-          "id": "EGeDJzdh--o",
+          "id": "x81SX-zqZIc",
           "role": "next",
-          "title": "11 02 constraints part1",
+          "title": "13-01-defining-using-views.mp4",
+          "label": "Defining and Using Views (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
-          "length": "25:29",
-          "why": "NOT NULL, key, CHECK and referential-integrity constraints, and what the database enforces.",
-          "label": "Constraints (Stanford, Jennifer Widom)"
+          "length": "14:05",
+          "why": "Defining and querying views, and why they exist."
         },
         {
           "kind": "v",
-          "id": "xEDZQtAHpX8",
-          "role": "deeper",
-          "title": "Modern SQL: A lot has changed since SQL-92 by Markus Winand",
-          "channel": "Devoxx",
-          "length": "55:06",
-          "hn": 2,
-          "why": "The author of Use The Index, Luke! on LATERAL, WITH RECURSIVE, FILTER, window functions and other features most people never learn."
+          "id": "sOEVAXskgno",
+          "role": "next",
+          "title": "Difference Between SQL Views vs Materialized Views | Frequently Asked SQL Interview Question",
+          "channel": "Ankit Bansal",
+          "length": "13:52",
+          "why": "Views vs materialized views: storage, refresh and when to use each."
+        },
+        {
+          "kind": "v",
+          "id": "0JMmifkP4K8",
+          "role": "next",
+          "title": "14-01-authorization.mp4",
+          "label": "Authorization (Stanford, Jennifer Widom)",
+          "channel": "Stanford Dbclass",
+          "length": "10:58",
+          "why": "GRANT, REVOKE and privileges on views."
         },
         {
           "kind": "v",
@@ -363,51 +489,7 @@
           "title": "Advanced SQL Tutorial | Stored Procedures + Use Cases",
           "channel": "Alex The Analyst",
           "length": "6:15",
-          "why": "Stored procedures with parameters in six minutes."
-        }
-      ]
-    },
-    {
-      "key": "index",
-      "name": "Indexing",
-      "mcq": "../mcq/#/d/sql/index",
-      "note": "Why indexes speed up reads and slow down writes, B-tree vs B+tree, clustered vs non-clustered, composite indexes and the leftmost-prefix rule.",
-      "picks": [
-        {
-          "kind": "v",
-          "id": "3G293is403I",
-          "role": "best",
-          "title": "How do indexes make databases read faster?",
-          "channel": "Arpit Bhayani",
-          "length": "23:25",
-          "why": "Starts from disk blocks and counts the reads a query makes with and without an index. Makes \"how does an index work\" answerable from first principles."
-        },
-        {
-          "kind": "v",
-          "id": "UzHl2VzyZS4",
-          "role": "next",
-          "title": "B-tree vs B+ tree in Database Systems",
-          "channel": "Hussein Nasser",
-          "length": "31:50",
-          "why": "Why databases use B+trees: linked leaves for range scans and higher fan-out, plus what Postgres and MySQL do differently."
-        },
-        {
-          "kind": "v",
-          "id": "scUtG_6M_lU",
-          "role": "deeper",
-          "title": "#08 - Tree Indexes: B+Trees (CMU Intro to Database Systems)",
-          "channel": "CMU Database Group",
-          "length": "1:22:15",
-          "why": "Insert, split, merge, clustered indexes and composite keys, as a database implements them."
-        },
-        {
-          "kind": "v",
-          "id": "K1a2Bk8NrYQ",
-          "role": "quick",
-          "title": "Understanding B-Trees: The Data Structure Behind Modern Databases",
-          "channel": "Spanning Tree",
-          "length": "12:39",
-          "why": "Animated B-tree search, insert and split."
+          "why": "Stored procedures with use cases."
         }
       ]
     },
@@ -415,16 +497,85 @@
       "key": "norm",
       "name": "Normalization",
       "mcq": "../mcq/#/d/sql/norm",
-      "note": "Update, insert and delete anomalies; functional dependencies; 1NF to BCNF; lossless and dependency-preserving decomposition. Practise closure and candidate-key questions in the MCQs.",
+      "note": "Functional dependencies, Armstrong's axioms, attribute closure, candidate keys, canonical cover, lossless join and dependency preservation, BCNF and 3NF decomposition, MVDs and 4NF.",
       "picks": [
         {
           "kind": "v",
-          "id": "GFQaEYEc8_8",
+          "id": "wJ8UBBItM1Q",
           "role": "best",
-          "title": "Learn Database Normalization - 1NF, 2NF, 3NF, 4NF, 5NF",
-          "channel": "Decomplexify",
-          "length": "28:34",
-          "why": "Every normal form on one evolving example, each motivated by the anomaly it removes. The clearest normalization video there is."
+          "title": "Lecture 17 Part 1 Functional Dependencies",
+          "label": "Functional Dependencies (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "7:19",
+          "why": "Functional dependencies and why they cause redundancy."
+        },
+        {
+          "kind": "v",
+          "id": "rB9ISweGWK4",
+          "role": "next",
+          "title": "Lecture 17 Part 3 Armstrongs Axioms",
+          "label": "Armstrong's Axioms (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:11",
+          "why": "Armstrong's axioms and the derived rules."
+        },
+        {
+          "kind": "v",
+          "id": "nRSLvVsacxQ",
+          "role": "next",
+          "title": "Lecture 17 Part 4 Attribute Closures",
+          "label": "Attribute Closures (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "6:22",
+          "why": "Attribute closure and using it to find keys."
+        },
+        {
+          "kind": "v",
+          "id": "FUf5tWelnQM",
+          "role": "next",
+          "title": "Understanding Canonical Cover (Minimal Cover) for a Set of FDs",
+          "channel": "Edredo for Learners",
+          "length": "5:56",
+          "why": "Canonical (minimal) cover step by step."
+        },
+        {
+          "kind": "v",
+          "id": "hxEb-0MrhS4",
+          "role": "next",
+          "title": "Lecture 17 Part 5 BCNF and other Normal Forms",
+          "label": "BCNF and Other Normal Forms (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:44",
+          "why": "BCNF and how it relates to 3NF."
+        },
+        {
+          "kind": "v",
+          "id": "CSqsjqLnfVo",
+          "role": "next",
+          "title": "Lecture 17 Part 6 Lossless Join Decompositions",
+          "label": "Lossless Join Decompositions (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "10:42",
+          "why": "Lossless-join decomposition and the test for it."
+        },
+        {
+          "kind": "v",
+          "id": "o4ptqIwDGXk",
+          "role": "next",
+          "title": "Lecture 17 Part 7 Dependency Preservation and BCNF Decomposition",
+          "label": "Dependency Preservation and BCNF Decomposition (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "12:25",
+          "why": "Dependency preservation and the BCNF decomposition algorithm."
+        },
+        {
+          "kind": "v",
+          "id": "Xslub-nHVss",
+          "role": "next",
+          "title": "UHCL 30a Graduate Database Course - Bernsteins Synthesis Algorithm",
+          "channel": "GaryBoetticher",
+          "length": "10:00",
+          "why": "3NF synthesis (Bernstein's algorithm) from a minimal cover."
         },
         {
           "kind": "v",
@@ -433,73 +584,624 @@
           "title": "Learn Boyce-Codd Normal Form (BCNF)",
           "channel": "Decomplexify",
           "length": "13:37",
-          "why": "Where 3NF and BCNF differ, which is a favourite follow-up question."
+          "why": "BCNF with an intuitive worked example."
         },
         {
           "kind": "v",
-          "id": "Mkm1h5AtsXI",
-          "role": "deeper",
-          "title": "07-02-functional-dependencies.mp4",
+          "id": "A6VGW1_1UHA",
+          "role": "next",
+          "title": "07 04 multivalued dependencies part1",
+          "label": "Multivalued Dependencies (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
-          "length": "27:54",
-          "why": "Functional dependencies formally: closure, keys and the rules behind decomposition.",
-          "label": "Functional Dependencies (Stanford, Jennifer Widom)"
+          "length": "6:24",
+          "why": "Multivalued dependencies and the motivation for 4NF."
+        }
+      ]
+    },
+    {
+      "key": "storage",
+      "name": "Physical Storage: Disks, SSDs & RAID",
+      "note": "Ch 12. Storage hierarchy, disk geometry and access time, sequential vs random I/O, RAID 0/1/4/5/6 and nested RAID, flash and SSDs. RAID appears on most past endsems.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "3vCLgS9xaQk",
+          "role": "best",
+          "title": "14.100 Storage Hierarchy",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "16:48",
+          "why": "The storage hierarchy: capacity, latency and cost at each level, and why databases care."
+        },
+        {
+          "kind": "v",
+          "id": "Cj8-WNjaGuM",
+          "role": "next",
+          "title": "14.113 Hard Disks, Sectors, Zone Bit Recording, Sectors vs Blocks, CHS, LBA, Sparing",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "15:41",
+          "why": "Hard disk geometry: sectors, zone bit recording, CHS vs LBA, sparing."
+        },
+        {
+          "kind": "v",
+          "id": "IvVZ7jf8wqw",
+          "role": "next",
+          "title": "14.114 Hard Disks, Sequential Versus Random Access",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "13:10",
+          "why": "Seek, rotational latency and transfer time; why sequential I/O wins."
+        },
+        {
+          "kind": "v",
+          "id": "G62vnX1pHXU",
+          "role": "next",
+          "title": "14.121 Hard Disk Failures and RAID 0; 1; 4; 5; 6",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "13:04",
+          "why": "Disk failures and RAID 0, 1, 4, 5 and 6: capacity, reliability, small-write cost."
+        },
+        {
+          "kind": "v",
+          "id": "4prsQsZ8v4g",
+          "role": "next",
+          "title": "14.122 Nested RAID Levels 1+0; 10; 0+1; 01",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "7:57",
+          "why": "Nested RAID: 1+0 vs 0+1 and which survives more failures."
+        },
+        {
+          "kind": "v",
+          "id": "yT5Lx6vU7ks",
+          "role": "next",
+          "title": "14.125 Flash Memory and Solid State Drives (SSDs)",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "14:19",
+          "why": "Flash and SSDs: pages vs erase blocks, out-of-place writes, wear."
+        },
+        {
+          "kind": "v",
+          "id": "wtdnatmVdIg",
+          "role": "quick",
+          "title": "How do Hard Disk Drives Work?  💻💿🛠",
+          "channel": "Branch Education",
+          "length": "15:16",
+          "why": "3D teardown of a hard drive, to make the geometry concrete."
+        }
+      ]
+    },
+    {
+      "key": "files",
+      "name": "File Organization, Pages & Buffer Manager",
+      "note": "Ch 13. Mapping relations to files, slotted pages (as in toydb), record layout, the buffer manager and replacement policies, row vs column layout.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "K1VVIbvIo9U",
+          "role": "best",
+          "title": "14.205 Mapping Relations to Devices",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "10:14",
+          "why": "How relations become files, pages and records on a device."
+        },
+        {
+          "kind": "v",
+          "id": "7OG-bb7iBgI",
+          "role": "next",
+          "title": "14.208 Slotted Pages: Basics",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "10:51",
+          "why": "Slotted pages: header, slot array, free space, record ids. The toydb design."
+        },
+        {
+          "kind": "v",
+          "id": "TeWuLyHYsTQ",
+          "role": "next",
+          "title": "14.209 Slotted Pages: Fixed-size versus Variable-size Components",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "7:35",
+          "why": "Fixed-size vs variable-size components inside a slotted page."
+        },
+        {
+          "kind": "v",
+          "id": "gcQgJMRr60Y",
+          "role": "next",
+          "title": "Lec 4 5 Part 4 Record Layout",
+          "label": "Record Layout (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:47",
+          "why": "Record layout for fixed and variable-length fields."
+        },
+        {
+          "kind": "v",
+          "id": "jJNNB_3Q4SQ",
+          "role": "next",
+          "title": "14.142 Pulling Up and Pushing Down Data, Database Buffer, Blocks, Spatial vs Temporal Locality",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "16:49",
+          "why": "The database buffer: pulling pages up, pushing down, and locality."
+        },
+        {
+          "kind": "v",
+          "id": "XOvBmLAmF7A",
+          "role": "next",
+          "title": "14.144 Methods of the Database Buffer, Costs, Implementation of GET",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "8:53",
+          "why": "Buffer manager operations, pinning and their costs."
+        },
+        {
+          "kind": "v",
+          "id": "cESKTl12Ulg",
+          "role": "next",
+          "title": "Lec 8 Part 8 LRU and Sequential Flooding",
+          "label": "LRU and Sequential Flooding (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:42",
+          "why": "Why LRU fails on repeated scans: sequential flooding."
+        },
+        {
+          "kind": "v",
+          "id": "bwTrNL_xKdw",
+          "role": "next",
+          "title": "Lec 8 Part 9 MRU and Repeated Scans",
+          "label": "MRU and Repeated Scans (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "2:44",
+          "why": "MRU as the fix for repeated scans."
+        },
+        {
+          "kind": "v",
+          "id": "I-jnZ22r7fY",
+          "role": "next",
+          "title": "14.216 Data Layouts: Row Layout vs Column Layout",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "13:42",
+          "why": "Row layout vs column layout and which workloads each suits."
+        },
+        {
+          "kind": "v",
+          "id": "vky1ClUOa4s",
+          "role": "next",
+          "title": "14.233 PAX, How to choose the optimal layout?",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "8:08",
+          "why": "PAX: column layout within a page, and choosing a layout."
+        }
+      ]
+    },
+    {
+      "key": "index",
+      "name": "Indexing: B+-Trees, Hashing, Bitmaps & LSM",
+      "mcq": "../mcq/#/d/sql/index",
+      "note": "Ch 14. Dense/sparse, clustered/unclustered, B+-tree search/insert/delete and bulk loading, covering and composite indices, static/extendible/linear hashing, bitmap indices, Bloom filters, LSM trees, R-trees.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "SeLsrq70UVw",
+          "role": "best",
+          "title": "14.300 Motivation for Index Structures, Selectivities, Scan vs. Index Access on Disk and Main Memory",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "16:39",
+          "why": "Why indexes: selectivity, and when a scan beats an index."
+        },
+        {
+          "kind": "v",
+          "id": "RAgCa_IDCNQ",
+          "role": "next",
+          "title": "14.305 Three Reasons for Using B-Tree Indexes, Intuition, Properties, find, ISAM, find_range",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "19:26",
+          "why": "B-tree properties, find and range queries, and ISAM."
+        },
+        {
+          "kind": "v",
+          "id": "DoUWf3ASwpQ",
+          "role": "next",
+          "title": "14.310 B-Tree insert, split, delete, merge",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "18:42",
+          "why": "B-tree insert with splits and delete with merges."
+        },
+        {
+          "kind": "v",
+          "id": "-Z0ktdahjwo",
+          "role": "next",
+          "title": "14.313 Clustered, Unclustered, Dense, Sparse, Coarse-Granular Index",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "14:55",
+          "why": "Clustered vs unclustered and dense vs sparse indices."
+        },
+        {
+          "kind": "v",
+          "id": "1h2jSzMPd20",
+          "role": "next",
+          "title": "14.316 Covering and Composite Index, Duplicates, Overflow Pages, Composite Keys",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "12:03",
+          "why": "Covering and composite indices, duplicates and overflow pages."
+        },
+        {
+          "kind": "v",
+          "id": "HJgXVxsO5YU",
+          "role": "next",
+          "title": "14.320 Bulk-loading B-Trees or other Tree-structured Indexes",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "11:00",
+          "why": "Bulk-loading a B+-tree bottom up."
+        },
+        {
+          "kind": "v",
+          "id": "TrkgH_PbF28",
+          "role": "next",
+          "title": "037 hashing intro and static hashing methods",
+          "label": "Static Hashing (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "13:49",
+          "why": "Static hashing and its overflow problem."
+        },
+        {
+          "kind": "v",
+          "id": "JrGL8IqvgOc",
+          "role": "next",
+          "title": "038 extendible hashing",
+          "label": "Extendible Hashing (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "18:34",
+          "why": "Extendible hashing: directory, global and local depth, splits."
+        },
+        {
+          "kind": "v",
+          "id": "Yw1ts57uL7c",
+          "role": "next",
+          "title": "UHCL 36a Graduate Database Course - Linear Hashing - Part 1",
+          "channel": "GaryBoetticher",
+          "length": "10:00",
+          "why": "Linear hashing: split pointer and rounds, worked through."
+        },
+        {
+          "kind": "v",
+          "id": "lC3AORwgqQY",
+          "role": "next",
+          "title": "14.360 Bitmaps",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "14:46",
+          "why": "Bitmap indices: building them and answering queries with AND/OR."
+        },
+        {
+          "kind": "v",
+          "id": "mMmleJNw0gY",
+          "role": "next",
+          "title": "14.370 Range-Encoded Bitmaps",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "12:42",
+          "why": "Range-encoded bitmaps for range predicates."
+        },
+        {
+          "kind": "v",
+          "id": "eBmCuFQgyEE",
+          "role": "next",
+          "title": "14.375 Approximate Bitmaps, Bloom Filters",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "11:16",
+          "why": "Bloom filters as approximate bitmaps."
+        },
+        {
+          "kind": "v",
+          "id": "9Plg3Oi1MT8",
+          "role": "next",
+          "title": "FAST database writes with LSM (Log-Structured Merge trees)",
+          "channel": "Ben Dicken",
+          "length": "15:03",
+          "why": "LSM trees: memtable, SSTables and compaction, for write-heavy workloads."
+        },
+        {
+          "kind": "v",
+          "id": "ZxfR_94zuno",
+          "role": "quick",
+          "title": "R-Tree Indexing Video",
+          "channel": "Ami",
+          "length": "10:34",
+          "why": "R-tree structure and search for spatial data."
+        }
+      ]
+    },
+    {
+      "key": "qproc",
+      "name": "Query Processing: Sorting, Joins & Pipelining",
+      "note": "Ch 15. Iterators and pipelining, external merge sort and replacement selection, nested-loop/block/indexed/sort-merge/hash joins with costs, external hashing, aggregation.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "1qZeNZvEgGg",
+          "role": "best",
+          "title": "Lecture 11 Part 1 Intro and Select",
+          "label": "Iterators and Selection (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "7:00",
+          "why": "The iterator model and how a plan is executed."
+        },
+        {
+          "kind": "v",
+          "id": "1dtIutGlSsQ",
+          "role": "next",
+          "title": "Lec 10 Part 5 External Sort",
+          "label": "External Sort (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "7:15",
+          "why": "External merge sort: runs, passes and the I/O cost formula."
+        },
+        {
+          "kind": "v",
+          "id": "m0v-trXc2yI",
+          "role": "next",
+          "title": "14.478 Replacement Selection",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "15:00",
+          "why": "Replacement selection: runs twice the size of memory."
+        },
+        {
+          "kind": "v",
+          "id": "WfuLUE7lccs",
+          "role": "next",
+          "title": "14.410 Applications of Join Algorithms, Nested-Loop Join, Index Nested-Loop Join",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "12:04",
+          "why": "Nested-loop and index nested-loop joins."
+        },
+        {
+          "kind": "v",
+          "id": "JGgwD05gM2A",
+          "role": "next",
+          "title": "010 block nested loop join index based nexted loop join",
+          "label": "Block and Index Nested-Loop Join (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "13:07",
+          "why": "Block nested-loop join and its cost."
+        },
+        {
+          "kind": "v",
+          "id": "HyZtBGXLN00",
+          "role": "next",
+          "title": "14.416 Sort-Merge Join, Co-Grouping",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "18:31",
+          "why": "Sort-merge join and co-grouping."
+        },
+        {
+          "kind": "v",
+          "id": "mlokdBiaMek",
+          "role": "next",
+          "title": "14.412 Simple Hash Join",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "8:57",
+          "why": "Simple hash join: build and probe."
+        },
+        {
+          "kind": "v",
+          "id": "ev3UHuDIiDg",
+          "role": "next",
+          "title": "Lec 10 Part 6 External Hashing",
+          "label": "External Hashing (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "10:37",
+          "why": "External hashing: partition, then rehash. The basis of Grace hash join."
+        },
+        {
+          "kind": "v",
+          "id": "Ue4u1Sm1AqA",
+          "role": "next",
+          "title": "Lecture 11 Part 11 Hash Join Costs",
+          "label": "Hash Join Costs (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:55",
+          "why": "Grace and hybrid hash join costs."
+        },
+        {
+          "kind": "v",
+          "id": "IShTWgVM4bA",
+          "role": "next",
+          "title": "14.471 Implementing Grouping and Aggregation",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "12:07",
+          "why": "Implementing grouping and aggregation by sorting or hashing."
+        }
+      ]
+    },
+    {
+      "key": "qopt",
+      "name": "Query Optimization: Equivalences, Statistics & Join Order",
+      "note": "Ch 16. Equivalence rules and heuristics, statistics and histograms, selectivity and join-size estimation, System R dynamic programming with interesting orders, materialized views.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "ZqKTBrolJ00",
+          "role": "best",
+          "title": "14.500 Query Optimizer Overview",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "8:29",
+          "why": "What an optimizer does, from SQL to a physical plan."
+        },
+        {
+          "kind": "v",
+          "id": "ey3SldKMHFU",
+          "role": "next",
+          "title": "14.502 Challenges in Query Optimization: Rule-Based Optimization",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "13:57",
+          "why": "Rule-based optimization: pushing selections and projections."
+        },
+        {
+          "kind": "v",
+          "id": "jpJ5hFrYRkc",
+          "role": "next",
+          "title": "Lecture 12 Part 3 Algebra Equivalences",
+          "label": "Algebra Equivalences (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "4:22",
+          "why": "Relational algebra equivalences used for rewriting."
+        },
+        {
+          "kind": "v",
+          "id": "ya4iHo6btOw",
+          "role": "next",
+          "title": "Lecture 13 Part 4 Selectivity Estimation",
+          "label": "Selectivity Estimation (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "4:40",
+          "why": "Selectivity estimation for simple predicates."
+        },
+        {
+          "kind": "v",
+          "id": "alW9AaTI6DI",
+          "role": "next",
+          "title": "Lecture 13 Part 6 Using Histograms for Selectivity Estimation",
+          "label": "Histograms for Selectivity (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "7:27",
+          "why": "Using histograms to estimate selectivity."
+        },
+        {
+          "kind": "v",
+          "id": "fcbqn0bKLjI",
+          "role": "next",
+          "title": "015 equi width equi depth histograms queries",
+          "label": "Equi-Width and Equi-Depth Histograms (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "13:46",
+          "why": "Equi-width vs equi-depth histograms and answering queries with them."
+        },
+        {
+          "kind": "v",
+          "id": "Zz0FT5n0PPw",
+          "role": "next",
+          "title": "Lecture 13 Part 7 Selectivity for Join Queries",
+          "label": "Selectivity for Join Queries (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:23",
+          "why": "Estimating join sizes."
+        },
+        {
+          "kind": "v",
+          "id": "3ii6JxLdJXA",
+          "role": "next",
+          "title": "14.503 Challenges in Query Optimization: Join Order, Costs, and Index Access",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "14:53",
+          "why": "Why join order, costs and index access make optimization hard."
+        },
+        {
+          "kind": "v",
+          "id": "zcdfPb92pvs",
+          "role": "next",
+          "title": "14.516a Dynamic Programming: Core Idea, Requirements, Join Graph",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "12:08",
+          "why": "Dynamic programming for join ordering: core idea and the join graph."
+        },
+        {
+          "kind": "v",
+          "id": "TyAPLO53dCM",
+          "role": "next",
+          "title": "14.516b Dynamic Programming Example without Interesting Orders, Pseudo-Code",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "13:41",
+          "why": "A full DP example without interesting orders, plus pseudo-code."
+        },
+        {
+          "kind": "v",
+          "id": "8ChYwjAdN5I",
+          "role": "next",
+          "title": "14.516c Dynamic Programming Optimizations: Interesting Orders, Graph Structure",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "10:19",
+          "why": "Interesting orders and other DP refinements."
+        },
+        {
+          "kind": "v",
+          "id": "ypuW2aFZ9s0",
+          "role": "next",
+          "title": "028 multiple query optimization materialized views",
+          "label": "Materialized Views (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "16:43",
+          "why": "Multi-query optimization and materialized views."
         }
       ]
     },
     {
       "key": "txn",
-      "name": "Transactions & Concurrency",
+      "name": "Transactions: Serializability & Recoverability",
       "mcq": "../mcq/#/d/sql/txn",
-      "note": "ACID; dirty, non-repeatable and phantom reads; the four isolation levels; serializability; two-phase locking vs MVCC; deadlocks in databases.",
+      "note": "Ch 17. ACID, schedules, conflict and view serializability, precedence graphs, recoverable/cascadeless/strict schedules, isolation levels.",
       "picks": [
         {
           "kind": "v",
-          "id": "aNCpEC0-VVs",
+          "id": "FA85kHsJss4",
           "role": "best",
+          "title": "12-01-transactions-intro.mp4",
+          "label": "Introduction to Transactions (Stanford, Jennifer Widom)",
+          "channel": "Stanford Dbclass",
+          "length": "13:43",
+          "why": "Why transactions exist: concurrency and failures."
+        },
+        {
+          "kind": "v",
+          "id": "aNCpEC0-VVs",
+          "role": "next",
           "title": "12-02-transactions-properties.mp4",
+          "label": "Transaction Properties (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
           "length": "12:59",
-          "why": "ACID defined precisely, with what each property actually promises.",
-          "label": "Transaction Properties (Stanford, Jennifer Widom)"
+          "why": "ACID defined precisely."
+        },
+        {
+          "kind": "v",
+          "id": "h8Xzy6DANzw",
+          "role": "next",
+          "title": "Lec 18 Part 6 Conflict Serializability",
+          "label": "Conflict Serializability (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:22",
+          "why": "Conflicting operations and conflict serializability."
+        },
+        {
+          "kind": "v",
+          "id": "vzR2QIKJh4U",
+          "role": "next",
+          "title": "055 concurrency control conflict serializability conflict graph theorem",
+          "label": "Conflict Serializability and the Conflict Graph (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "18:13",
+          "why": "The conflict graph and the serializability theorem."
+        },
+        {
+          "kind": "v",
+          "id": "_voIH5W3NGE",
+          "role": "next",
+          "title": "Lecture 18 Part 8 View Serializability",
+          "label": "View Serializability (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:39",
+          "why": "View serializability and blind writes."
+        },
+        {
+          "kind": "v",
+          "id": "bem9ItPYHOs",
+          "role": "next",
+          "title": "058 concurrency control recovery rc aca strict",
+          "label": "Recoverability: RC, ACA, Strict (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "15:31",
+          "why": "Recoverable, cascadeless (ACA) and strict schedules."
         },
         {
           "kind": "v",
           "id": "kTxxh-XPUK4",
           "role": "next",
           "title": "12-03-isolation-levels.mp4",
+          "label": "Isolation Levels (Stanford, Jennifer Widom)",
           "channel": "Stanford Dbclass",
           "length": "17:41",
-          "why": "The isolation levels and exactly which anomalies each allows.",
-          "label": "Isolation Levels (Stanford, Jennifer Widom)"
-        },
-        {
-          "kind": "v",
-          "id": "bXpkEt5P_Js",
-          "role": "deeper",
-          "title": "#17 - Two-Phase Locking Concurrency Control (CMU Intro to Database Systems)",
-          "channel": "CMU Database Group",
-          "length": "1:05:22",
-          "why": "How 2PL guarantees serializability, cascading aborts and strict 2PL, and deadlock handling."
-        },
-        {
-          "kind": "v",
-          "id": "tUFha9-DuSk",
-          "role": "deeper",
-          "title": "#20 - MVCC: Multi-Version Concurrency Control (CMU Intro to Database Systems)",
-          "channel": "CMU Database Group",
-          "length": "1:23:20",
-          "why": "How Postgres and MySQL let readers and writers avoid blocking each other."
-        },
-        {
-          "kind": "v",
-          "id": "5ZjhNTM8XU8",
-          "role": "deeper",
-          "title": "\"Transactions: myths, surprises and opportunities\" by Martin Kleppmann",
-          "channel": "Strange Loop Conference",
-          "length": "41:08",
-          "hn": 2,
-          "why": "What isolation levels really guarantee in Postgres, MySQL and Oracle, including write skew, which \"repeatable read\" doesn't prevent. Changes how you answer isolation questions."
+          "why": "SQL isolation levels and the anomalies each allows."
         },
         {
           "kind": "v",
@@ -508,34 +1210,316 @@
           "title": "ACID Properties in Databases With Examples",
           "channel": "ByteByteGo",
           "length": "4:57",
-          "why": "ACID in five minutes for revision."
+          "why": "ACID in five minutes."
         }
       ]
     },
     {
-      "key": "nosql",
-      "name": "NoSQL & Distributed Databases",
-      "mcq": "../mcq/#/d/sql/nosql",
-      "note": "Document, key-value, column and graph stores; replication (leader-follower, quorums); sharding; CAP and eventual consistency; when to pick SQL vs NoSQL.",
+      "key": "cc",
+      "name": "Concurrency Control: Locking, Timestamps, Validation & MVCC",
+      "note": "Ch 18. 2PL and strict 2PL, deadlock prevention and detection, multiple granularity, timestamp ordering and Thomas' write rule, validation, multiversion schemes and snapshot isolation, phantoms and index locking.",
       "picks": [
         {
           "kind": "v",
-          "id": "qI_g07C_Q5I",
+          "id": "A6GDLuJgPRc",
           "role": "best",
-          "title": "Introduction to NoSQL • Martin Fowler • GOTO 2012",
-          "channel": "GOTO Conferences",
-          "length": "54:52",
-          "hn": 11,
-          "why": "Martin Fowler on why NoSQL appeared, the aggregate-oriented data models (key-value, document, column-family), graph databases, and how consistency trades against distribution. Recommended by 11 HN users and the best answer to \"SQL or NoSQL?\""
+          "title": "Lecture 19 Part 01 Two Phase Locking",
+          "label": "Two-Phase Locking (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:51",
+          "why": "Two-phase locking and why it guarantees conflict serializability."
         },
         {
           "kind": "v",
-          "id": "mBUCF1WGI_I",
+          "id": "zM2oOoDt1nY",
           "role": "next",
-          "title": "Distributed Systems 5.1: Replication",
-          "channel": "Martin Kleppmann",
-          "length": "25:21",
-          "why": "Cambridge lecture by the author of Designing Data-Intensive Applications: why replicas diverge and how systems reconcile them. The right depth for CAP questions."
+          "title": "Lecture 19 Part 2 Strict 2PL",
+          "label": "Strict 2PL (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "2:05",
+          "why": "Strict 2PL and cascading aborts."
+        },
+        {
+          "kind": "v",
+          "id": "GM3dym5ktI0",
+          "role": "next",
+          "title": "Lecture 19 Part 04 Lock Manager Implementation",
+          "label": "Lock Manager Implementation (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "4:37",
+          "why": "How a lock manager is implemented."
+        },
+        {
+          "kind": "v",
+          "id": "tmUJlB6Lpec",
+          "role": "next",
+          "title": "060 concurrency control properties of csr wait for graph deadlock handling",
+          "label": "Deadlock Handling (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "13:27",
+          "why": "Wait-for graphs and deadlock handling."
+        },
+        {
+          "kind": "v",
+          "id": "EgpsqS94Wm4",
+          "role": "next",
+          "title": "Lecture 19 Part 5 Deadlock Scenarios and Prevention",
+          "label": "Deadlock Prevention (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:28",
+          "why": "Deadlock prevention: wait-die and wound-wait."
+        },
+        {
+          "kind": "v",
+          "id": "URnDqCyxqJw",
+          "role": "next",
+          "title": "Lecture 19 Part 9 Intent Locks and Hierarchical Lock Protocol",
+          "label": "Intent Locks (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:57",
+          "why": "Intention locks and the hierarchical locking protocol."
+        },
+        {
+          "kind": "v",
+          "id": "5cjP6A79sQQ",
+          "role": "next",
+          "title": "DBS: 5.13. CC(6): Timestamp-Based Protocols",
+          "channel": "Ouldooz Baghban Karimi",
+          "length": "8:01",
+          "why": "Timestamp-ordering protocol: read and write rules."
+        },
+        {
+          "kind": "v",
+          "id": "MKIoDIuVsr4",
+          "role": "next",
+          "title": "DBMS - Thomas’s Write Rule",
+          "channel": "TutorialsPoint",
+          "length": "4:27",
+          "why": "Thomas' write rule: when an outdated write can be ignored."
+        },
+        {
+          "kind": "v",
+          "id": "gQ4AOjxT4C8",
+          "role": "next",
+          "title": "DBS: 5.14. CC(7): Validation-Based Protocols",
+          "channel": "Ouldooz Baghban Karimi",
+          "length": "8:51",
+          "why": "Validation (optimistic) protocol: read, validate, write phases. A past-endsem favourite."
+        },
+        {
+          "kind": "v",
+          "id": "VcHPMR58Ptg",
+          "role": "next",
+          "title": "DBS: 5.15. CC(8): Multi-Version, Multi-Granularity, Advanced Topics",
+          "channel": "Ouldooz Baghban Karimi",
+          "length": "6:23",
+          "why": "Multiversion schemes and multiple granularity, briefly."
+        },
+        {
+          "kind": "v",
+          "id": "TBmDBw1IIoY",
+          "role": "next",
+          "title": "PostgreSQL Internals in Action: MVCC",
+          "channel": "Denis Magda",
+          "length": "16:06",
+          "why": "MVCC as PostgreSQL implements it: xmin/xmax, visibility, vacuum."
+        },
+        {
+          "kind": "v",
+          "id": "Tgpa9TrxsfU",
+          "role": "next",
+          "title": "Snapshot Isolation | Systems Design Interview: 0 to 1 with Google Software Engineer",
+          "channel": "Jordan has no life",
+          "length": "7:08",
+          "why": "Snapshot isolation and what it prevents."
+        },
+        {
+          "kind": "v",
+          "id": "eym48yrObhY",
+          "role": "next",
+          "title": "Write Skew and Phantom Writes | Systems Design Interview: 0 to 1 with Google Software Engineer",
+          "channel": "Jordan has no life",
+          "length": "6:38",
+          "why": "Write skew and phantoms: what snapshot isolation still allows."
+        },
+        {
+          "kind": "v",
+          "id": "4TAKYRzm_dA",
+          "role": "next",
+          "title": "Serializable Snapshot Isolation | Systems Design Interview: 0 to 1 with Ex-Google SWE",
+          "channel": "Jordan has no life",
+          "length": "8:28",
+          "why": "Serializable snapshot isolation, as used by Postgres SERIALIZABLE."
+        },
+        {
+          "kind": "v",
+          "id": "_1Uk2ZzpmSc",
+          "role": "next",
+          "title": "Lecture 19 Part 10 FYI: Index Latching and Phantoms",
+          "label": "Index Latching and Phantoms (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:53",
+          "why": "Index latching and the phantom problem."
+        }
+      ]
+    },
+    {
+      "key": "recovery",
+      "name": "Recovery: Logging, Checkpoints & ARIES",
+      "note": "Ch 19. Steal/no-force, WAL, physical vs logical logging, LSNs and pageLSN, checkpoints, ARIES analysis/redo/undo and CLRs.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "gma8_w2HmDc",
+          "role": "best",
+          "title": "Lecture 20 Part 4 STEAL / NO FORCE, UNDO and REDO",
+          "label": "STEAL / NO FORCE (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "4:42",
+          "why": "Steal/no-force and why it needs both undo and redo."
+        },
+        {
+          "kind": "v",
+          "id": "grIcqzXfXuY",
+          "role": "next",
+          "title": "14.602 Log-Based Recovery, Stable Storage, Write-Ahead Logging (WAL)",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "12:44",
+          "why": "Log-based recovery, stable storage and the WAL rule."
+        },
+        {
+          "kind": "v",
+          "id": "MR-89Lq5jCo",
+          "role": "next",
+          "title": "What to log, Physical, Logical, and Physiological Logging, Trade-Offs...",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "17:54",
+          "why": "Physical, logical and physiological logging and their trade-offs."
+        },
+        {
+          "kind": "v",
+          "id": "AcNuEoVOUQQ",
+          "role": "next",
+          "title": "046 database recovery log entries pageLSN",
+          "label": "Log Entries and pageLSN (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "10:34",
+          "why": "Log entries, LSNs and pageLSN."
+        },
+        {
+          "kind": "v",
+          "id": "2eGK3wau4Mc",
+          "role": "next",
+          "title": "Lecture 20 Part 9 ARIES and Checkpointing",
+          "label": "ARIES and Checkpointing (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "7:47",
+          "why": "ARIES data structures and checkpointing."
+        },
+        {
+          "kind": "v",
+          "id": "wED22gICTd4",
+          "role": "next",
+          "title": "Lecture 20 Part 12 ARIES Recovery, Overview and Analysis Phase",
+          "label": "ARIES Analysis Phase (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "4:59",
+          "why": "ARIES analysis phase: rebuilding the transaction and dirty page tables."
+        },
+        {
+          "kind": "v",
+          "id": "p3THpcj7pi4",
+          "role": "next",
+          "title": "Lecture 20 Part 13: ARIES Recovery, REDO Phase",
+          "label": "ARIES Redo Phase (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:15",
+          "why": "ARIES redo phase: repeating history from the right LSN."
+        },
+        {
+          "kind": "v",
+          "id": "P82rvABGuPk",
+          "role": "next",
+          "title": "Lecture 20 Part 14 ARIES Recovery, UNDO Phase",
+          "label": "ARIES Undo Phase (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "4:07",
+          "why": "ARIES undo phase and compensation log records."
+        },
+        {
+          "kind": "v",
+          "id": "zx2DbpbqiHg",
+          "role": "next",
+          "title": "Fuzzy Checkpointing",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "13:04",
+          "why": "Fuzzy checkpointing."
+        },
+        {
+          "kind": "v",
+          "id": "DT1qrblURq4",
+          "role": "next",
+          "title": "Lecture 20 Part 15: Example Scenarios, Additional FAQs",
+          "label": "ARIES Example Scenarios (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:54",
+          "why": "Worked recovery scenarios and common questions."
+        }
+      ]
+    },
+    {
+      "key": "dist",
+      "name": "Parallel & Distributed Architectures and Storage",
+      "mcq": "../mcq/#/d/sql/nosql",
+      "note": "Ch 20–21. Shared-memory/disk/nothing, partitioning (round-robin, hash, range) and skew, replication and quorums, consistent hashing, distributed file systems, Dynamo-style key-value stores. Partitioning is the most-tested idea in past endsems.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "QpqwKdzikFs",
+          "role": "best",
+          "title": "Intro to Parallelism",
+          "label": "Intro to Parallelism (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "6:48",
+          "why": "Why parallel databases: speed-up vs scale-up."
+        },
+        {
+          "kind": "v",
+          "id": "HKJeW5lfdaI",
+          "role": "next",
+          "title": "Parallel Architectures and Software Structures",
+          "label": "Parallel Architectures (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:43",
+          "why": "Shared-memory, shared-disk and shared-nothing."
+        },
+        {
+          "kind": "v",
+          "id": "IzLRLMUlCIU",
+          "role": "next",
+          "title": "Parallel Data Acceess",
+          "label": "Parallel Data Access (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "4:46",
+          "why": "Round-robin, hash and range partitioning, and which queries each helps."
+        },
+        {
+          "kind": "v",
+          "id": "5faMjKuB9bc",
+          "role": "next",
+          "title": "What is DATABASE SHARDING?",
+          "channel": "Gaurav Sen",
+          "length": "8:56",
+          "why": "Sharding in practice: choosing keys and the hot-spot (skew) problem."
+        },
+        {
+          "kind": "v",
+          "id": "UF9Iqmg94tk",
+          "role": "next",
+          "title": "Consistent Hashing | Algorithms You Should Know #1",
+          "channel": "ByteByteGo",
+          "length": "8:04",
+          "why": "Consistent hashing and virtual nodes."
         },
         {
           "kind": "v",
@@ -544,18 +1528,270 @@
           "title": "Distributed Systems 5.2: Quorums",
           "channel": "Martin Kleppmann",
           "length": "9:37",
-          "why": "Read/write quorums (R + W > N), the mechanism behind tunable consistency in Cassandra and Dynamo."
+          "why": "Read and write quorums: why r + w > n works."
         },
         {
-          "kind": "l",
-          "id": "PLeKd45zvjcDFUEv_ohr_HdUFe97RItdiB",
-          "thumb": "mBUCF1WGI_I",
-          "role": "deeper",
-          "title": "Distributed Systems lecture series",
+          "kind": "v",
+          "id": "mlWOQuO55PE",
+          "role": "next",
+          "title": "Distributed Systems 5.3: State machine replication",
           "channel": "Martin Kleppmann",
-          "length": "23 videos",
-          "hn": 3,
-          "why": "The full course: time, broadcast, replication, consensus and consistency models. Recommended by several HN users."
+          "length": "10:15",
+          "why": "State machine replication."
+        },
+        {
+          "kind": "v",
+          "id": "DfLJaUIKlYY",
+          "role": "next",
+          "title": "020 nosql eventual consistency WARS model different configurations W R N",
+          "label": "Eventual Consistency, N/R/W (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "13:22",
+          "why": "Eventual consistency and N/R/W configurations."
+        },
+        {
+          "kind": "v",
+          "id": "nrIy2qR9gII",
+          "role": "next",
+          "title": "021 nosql eventual consistency vector clocks",
+          "label": "Vector Clocks (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "19:52",
+          "why": "Vector clocks for detecting conflicting versions."
+        },
+        {
+          "kind": "v",
+          "id": "ciz4QomnSs8",
+          "role": "next",
+          "title": "024 nosql replication in dynamo hinted handoff anti entropy rumor spreading",
+          "label": "Replication in Dynamo (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "13:48",
+          "why": "Replication in Dynamo: hinted handoff and anti-entropy."
+        },
+        {
+          "kind": "v",
+          "id": "eRgFNW4QFDc",
+          "role": "next",
+          "title": "Google File System - Paper that inspired Hadoop",
+          "channel": "Defog Tech",
+          "length": "12:26",
+          "why": "The Google File System: chunks, master and replication."
+        }
+      ]
+    },
+    {
+      "key": "pqp",
+      "name": "Parallel & Distributed Query Processing",
+      "note": "Ch 22. Kinds of parallelism, parallel sort, partitioned and broadcast joins, parallel aggregation, symmetric hash join, distributed joins and semijoins.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "ZazzP2r724k",
+          "role": "best",
+          "title": "Kinds of Query Parallelism",
+          "label": "Kinds of Query Parallelism (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:34",
+          "why": "Inter-query, inter-operator and intra-operator parallelism."
+        },
+        {
+          "kind": "v",
+          "id": "HDvJ259TncU",
+          "role": "next",
+          "title": "Lec 10 Part 10 parallel sort",
+          "label": "Parallel Sort (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "2:35",
+          "why": "Parallel sort with range partitioning."
+        },
+        {
+          "kind": "v",
+          "id": "QCTyOLvzR88",
+          "role": "next",
+          "title": "Parallel Hash Join",
+          "label": "Parallel Hash Join (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:47",
+          "why": "Parallel hash join: repartition then join locally."
+        },
+        {
+          "kind": "v",
+          "id": "zDj72vqypks",
+          "role": "next",
+          "title": "Parallel Sort-Merge Join",
+          "label": "Parallel Sort-Merge Join (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:22",
+          "why": "Parallel sort-merge join."
+        },
+        {
+          "kind": "v",
+          "id": "98p8O8ccVjc",
+          "role": "next",
+          "title": "One-Sided and Broadcast Join Patterns",
+          "label": "Broadcast Joins (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "1:35",
+          "why": "One-sided and broadcast join patterns (fragment-and-replicate)."
+        },
+        {
+          "kind": "v",
+          "id": "UgsGSHa_eiU",
+          "role": "next",
+          "title": "Parallel Grouping/Aggregation",
+          "label": "Parallel Aggregation (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:14",
+          "why": "Parallel grouping and aggregation."
+        },
+        {
+          "kind": "v",
+          "id": "jveohy_qhHU",
+          "role": "next",
+          "title": "Symmetric Hash Join",
+          "label": "Symmetric Hash Join (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:29",
+          "why": "Symmetric (pipelined) hash join."
+        },
+        {
+          "kind": "v",
+          "id": "F3ziGFCaahg",
+          "role": "next",
+          "title": "14.421 Generalized Co-Grouped Join (on Disk, NUMA, and distributed systems)",
+          "channel": "Prof. Dr. Jens Dittrich, Big Data Analytics",
+          "length": "17:05",
+          "why": "One join algorithm generalised to disk, NUMA and distributed systems."
+        },
+        {
+          "kind": "v",
+          "id": "Y-QTBX1nN80",
+          "role": "next",
+          "title": "L132: Distributed Query Processing | Simple Join, Semi Join Processing | Parallelism | DBMS Lectures",
+          "channel": "Easy Engineering Classes",
+          "length": "14:45",
+          "why": "Semijoin vs shipping whole relations, worked numerically. On most past endsems."
+        }
+      ]
+    },
+    {
+      "key": "dtxn",
+      "name": "Distributed Transactions, Commit & Consensus",
+      "note": "Ch 23. Distributed locking and deadlock, two-phase commit with logging and recovery, its blocking problem, consensus (Paxos, Raft), linearizability, eventual consistency, CAP and Spanner.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "PaMDNhVD-0U",
+          "role": "best",
+          "title": "Lecture 22 Part 1 Introduction to Distributed Transactions",
+          "label": "Distributed Transactions Intro (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:50",
+          "why": "What makes a transaction distributed."
+        },
+        {
+          "kind": "v",
+          "id": "_V87_wpYQbI",
+          "role": "next",
+          "title": "Lecture 22 Part 2 Distributed Locking",
+          "label": "Distributed Locking (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "2:27",
+          "why": "Distributed locking."
+        },
+        {
+          "kind": "v",
+          "id": "r0SN0GstUkY",
+          "role": "next",
+          "title": "Lecture 22 Part 3 Distributed Deadlock Detection",
+          "label": "Distributed Deadlock Detection (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "1:34",
+          "why": "Distributed deadlock detection."
+        },
+        {
+          "kind": "v",
+          "id": "-_rdWB9hN1c",
+          "role": "next",
+          "title": "Distributed Systems 7.1: Two-phase commit",
+          "channel": "Martin Kleppmann",
+          "length": "18:45",
+          "why": "Two-phase commit, its blocking problem, and fault-tolerant commit."
+        },
+        {
+          "kind": "v",
+          "id": "oIbMIu8sCEI",
+          "role": "next",
+          "title": "Lecture 22 Part 6 Full 2PC Including Logging (Presumed Abort)",
+          "label": "2PC with Logging (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:00",
+          "why": "2PC log records and presumed abort."
+        },
+        {
+          "kind": "v",
+          "id": "muGZV3Z0HeM",
+          "role": "next",
+          "title": "Lecture 22 Part 7 The Recovery Processes",
+          "label": "2PC Recovery (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "3:38",
+          "why": "How coordinator and participants recover after a crash."
+        },
+        {
+          "kind": "v",
+          "id": "rN6ma561tak",
+          "role": "next",
+          "title": "Distributed Systems 6.1: Consensus",
+          "channel": "Martin Kleppmann",
+          "length": "18:15",
+          "why": "Consensus: the problem, FLP, and what Paxos and Raft guarantee."
+        },
+        {
+          "kind": "v",
+          "id": "s8JqcZtvnsM",
+          "role": "next",
+          "title": "Paxos Agreement - Computerphile",
+          "channel": "Computerphile",
+          "length": "14:17",
+          "why": "Paxos agreement walked through with examples."
+        },
+        {
+          "kind": "v",
+          "id": "IujMVjKvWP4",
+          "role": "next",
+          "title": "Understand RAFT without breaking your brain",
+          "channel": "ankush",
+          "length": "8:51",
+          "why": "Raft: leader election and log replication."
+        },
+        {
+          "kind": "v",
+          "id": "noUNH3jDLC0",
+          "role": "next",
+          "title": "Distributed Systems 7.2: Linearizability",
+          "channel": "Martin Kleppmann",
+          "length": "18:44",
+          "why": "Linearizability vs serializability."
+        },
+        {
+          "kind": "v",
+          "id": "9uCP3qHNbWw",
+          "role": "next",
+          "title": "Distributed Systems 7.3: Eventual consistency",
+          "channel": "Martin Kleppmann",
+          "length": "14:59",
+          "why": "Eventual consistency and its weaker guarantees."
+        },
+        {
+          "kind": "v",
+          "id": "oeycOVX70aE",
+          "role": "next",
+          "title": "Distributed Systems 8.2: Google's Spanner",
+          "channel": "Martin Kleppmann",
+          "length": "18:41",
+          "why": "Spanner: Paxos groups, 2PC and TrueTime."
         },
         {
           "kind": "v",
@@ -564,7 +1800,123 @@
           "title": "CAP Theorem Simplified",
           "channel": "ByteByteGo",
           "length": "5:33",
-          "why": "CAP in five minutes, including why \"pick two\" is misleading."
+          "why": "CAP theorem refresher."
+        }
+      ]
+    },
+    {
+      "key": "bigdata",
+      "name": "Big Data: MapReduce, Spark & Streaming",
+      "note": "Ch 10. Distributed file systems, the MapReduce model and implementation, relational operators on MapReduce, Spark RDDs and DataFrames, data streams and windowed queries.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "c13Z_HeAS_M",
+          "role": "best",
+          "title": "Lecture 25 Part 1 Motivation for MapReduce",
+          "label": "Motivation for MapReduce (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "7:36",
+          "why": "Why MapReduce: the problem it solved."
+        },
+        {
+          "kind": "v",
+          "id": "8EcrGhkSE3I",
+          "role": "next",
+          "title": "Lecture 24 Part 2 MapReduce Data and Programming Model",
+          "label": "MapReduce Programming Model (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "9:03",
+          "why": "The MapReduce data and programming model."
+        },
+        {
+          "kind": "v",
+          "id": "grHcEj02fyk",
+          "role": "next",
+          "title": "Lecture 24 Part 3 MapReduce Implementation",
+          "label": "MapReduce Implementation (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:24",
+          "why": "How MapReduce runs: shuffle, stragglers, re-execution."
+        },
+        {
+          "kind": "v",
+          "id": "REr5kq_cVqs",
+          "role": "next",
+          "title": "Lecture 24 Part 4 Implementing Relational Operators",
+          "label": "Relational Operators in MapReduce (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "5:29",
+          "why": "Implementing select, group-by and join with MapReduce."
+        },
+        {
+          "kind": "v",
+          "id": "VmMJwFdbTto",
+          "role": "next",
+          "title": "070 map reduce introduction",
+          "label": "MapReduce Introduction (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "18:22",
+          "why": "MapReduce in depth with the distributed file system underneath."
+        },
+        {
+          "kind": "v",
+          "id": "6dBU5ftKm7I",
+          "role": "next",
+          "title": "Lecture 24 Part 5 Introduction to Spark",
+          "label": "Introduction to Spark (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "4:40",
+          "why": "Spark and RDDs: why in-memory."
+        },
+        {
+          "kind": "v",
+          "id": "6Y4e6qGX1XM",
+          "role": "next",
+          "title": "Lecture 24 Part 6 Programming in Spark",
+          "label": "Programming in Spark (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "7:15",
+          "why": "Transformations, actions and lazy evaluation in Spark."
+        },
+        {
+          "kind": "v",
+          "id": "0iWYu1B_Gxc",
+          "role": "next",
+          "title": "Lecture 24 Part 7 Spark Datasets and Conclusions",
+          "label": "Spark Datasets (Berkeley CS186)",
+          "channel": "CS186Berkeley",
+          "length": "2:50",
+          "why": "Spark Datasets/DataFrames."
+        },
+        {
+          "kind": "v",
+          "id": "wEVBvScdsaY",
+          "role": "next",
+          "title": "026 data streams intro",
+          "label": "Data Streams Intro (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "12:24",
+          "why": "Data streams: the model and why one pass matters."
+        },
+        {
+          "kind": "v",
+          "id": "7Crw2NeGtxw",
+          "role": "next",
+          "title": "033 data streams STREAM and CQL",
+          "label": "STREAM and CQL (TU Kaiserslautern)",
+          "channel": "dbislab",
+          "length": "19:40",
+          "why": "Stream query languages and windows (STREAM and CQL)."
+        },
+        {
+          "kind": "v",
+          "id": "cvhKoniK5Uo",
+          "role": "quick",
+          "title": "MapReduce - Computerphile",
+          "channel": "Computerphile",
+          "length": "6:41",
+          "why": "MapReduce word count, Computerphile."
         }
       ]
     }
