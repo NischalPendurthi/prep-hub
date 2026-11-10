@@ -1,0 +1,1148 @@
+{
+  "id": "ml",
+  "name": "ML & Deep Learning",
+  "blurb": "Short videos only: every pick is 20 minutes or less and covers one or two ideas, ordered as a sequence. Most come from Andrew Ng's Deep Learning Specialization, StatQuest and 3Blue1Brown.",
+  "method": "<ul><li><b>Length</b>: hard cap of 20 minutes per video; depth comes from a sequence.</li><li><b>Order</b>: picks in a subtopic are in watching order; the first is the starting point.</li><li><b>Sources</b>: Andrew Ng (DeepLearning.AI), StatQuest, 3Blue1Brown and ritvikmath; subtopics follow the <i>ML foundations</i> and <i>Deep learning</i> guides in Topics.</li></ul>",
+  "subtopics": [
+    {
+      "key": "courses",
+      "name": "Short-video courses",
+      "note": "Every video on this page is 20 minutes or less. Andrew Ng's specialization videos are 5–15 minutes each and supply most deep-learning picks; StatQuest covers classical ML.",
+      "picks": [
+        {
+          "kind": "l",
+          "id": "PLkDaE6sCZn6Ec-XTbcX1uRg2_u4xOEky0",
+          "thumb": "n1l-9lIMW7E",
+          "role": "course",
+          "title": "Neural Networks and Deep Learning (Course 1 of the Deep Learning Specialization)",
+          "channel": "DeepLearningAI",
+          "length": "43 videos",
+          "why": "Andrew Ng, Deep Learning Specialization course 1: logistic regression as a network, backprop, vectorization, deep networks."
+        },
+        {
+          "kind": "l",
+          "id": "PLkDaE6sCZn6Hn0vK8co82zjQtt3T2Nkqc",
+          "thumb": "SjQyLhQIXSM",
+          "role": "course",
+          "title": "Improving Deep Neural Networks: Hyperparameter Tuning, Regularization and Optimization (Course 2 of the Deep Learning Specialization)",
+          "channel": "DeepLearningAI",
+          "length": "34 videos",
+          "why": "Course 2: bias/variance, regularization, dropout, initialization, mini-batches, momentum, Adam, batch norm, tuning."
+        },
+        {
+          "kind": "l",
+          "id": "PLkDaE6sCZn6Gl29AoE31iwdVwSG-KnDzF",
+          "thumb": "XuD4C8vJzEQ",
+          "role": "course",
+          "title": "Convolutional Neural Networks (Course 4 of the Deep Learning Specialization)",
+          "channel": "DeepLearningAI",
+          "length": "42 videos",
+          "why": "Course 4: convolutions, padding and stride, pooling, ResNets, transfer learning, detection (IoU, NMS, anchors, YOLO)."
+        },
+        {
+          "kind": "l",
+          "id": "PLblh5JKOoLUICTaGLRoHQDuF_7q2GfuJF",
+          "thumb": "Gv9_4yMHFhI",
+          "role": "course",
+          "title": "Machine Learning",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "100 videos",
+          "why": "StatQuest's machine learning playlist. Most videos fit the cap; the long ones (XGBoost, full Python walkthroughs) are left out below."
+        },
+        {
+          "kind": "l",
+          "id": "PLkDaE6sCZn6FNC6YRfRQc_FbeQrF8BwGI",
+          "thumb": "vStJoetOxJg",
+          "role": "course",
+          "title": "Machine Learning Specialization by Andrew Ng",
+          "channel": "DeepLearningAI",
+          "length": "41 videos",
+          "why": "Andrew Ng's newer Machine Learning Specialization, course 1: linear and logistic regression, gradient descent, overfitting."
+        }
+      ]
+    },
+    {
+      "key": "math",
+      "name": "Probability, Statistics & Linear Algebra",
+      "note": "Bayes' rule and base rates, likelihood and MLE, the central limit theorem, p-values; eigenvectors, SVD and PCA.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "9wCnvr7Xw4E",
+          "role": "best",
+          "title": "Bayes' Theorem, Clearly Explained!!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "14:00",
+          "why": "Bayes' theorem from conditional probability."
+        },
+        {
+          "kind": "v",
+          "id": "HZGCoVF3YvM",
+          "role": "next",
+          "title": "Bayes theorem, the geometry of changing beliefs",
+          "channel": "3Blue1Brown",
+          "length": "15:11",
+          "why": "Bayes as updating beliefs, with the base-rate trap."
+        },
+        {
+          "kind": "v",
+          "id": "pYxNSUDSFH4",
+          "role": "next",
+          "title": "In Statistics, Probability is not Likelihood.",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "5:01",
+          "why": "Probability vs likelihood."
+        },
+        {
+          "kind": "v",
+          "id": "XepXtl9YKwc",
+          "role": "next",
+          "title": "Maximum Likelihood, clearly explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "6:12",
+          "why": "Maximum likelihood estimation."
+        },
+        {
+          "kind": "v",
+          "id": "YAlJCEDH2uY",
+          "role": "next",
+          "title": "The Central Limit Theorem, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "7:35",
+          "why": "The central limit theorem."
+        },
+        {
+          "kind": "v",
+          "id": "vemZtEM63GY",
+          "role": "next",
+          "title": "p-values: What they are and how to interpret them",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "11:21",
+          "why": "p-values and how to read them."
+        },
+        {
+          "kind": "v",
+          "id": "PFDu9oVAE-g",
+          "role": "next",
+          "title": "Eigenvectors and eigenvalues | Chapter 14, Essence of linear algebra",
+          "channel": "3Blue1Brown",
+          "length": "17:16",
+          "why": "Eigenvectors and eigenvalues, geometrically."
+        },
+        {
+          "kind": "v",
+          "id": "gXbThCXjZFM",
+          "role": "next",
+          "title": "Singular Value Decomposition (SVD): Overview",
+          "channel": "Steve Brunton",
+          "length": "6:44",
+          "why": "SVD overview."
+        },
+        {
+          "kind": "v",
+          "id": "nbBvuuNVfco",
+          "role": "next",
+          "title": "Singular Value Decomposition (SVD): Mathematical Overview",
+          "channel": "Steve Brunton",
+          "length": "12:51",
+          "why": "SVD: the mathematical picture."
+        },
+        {
+          "kind": "v",
+          "id": "HMOI_lkzW08",
+          "role": "next",
+          "title": "StatQuest: PCA main ideas in only 5 minutes!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "6:05",
+          "why": "PCA main ideas."
+        },
+        {
+          "kind": "v",
+          "id": "oRvgq966yZg",
+          "role": "next",
+          "title": "StatQuest: PCA - Practical Tips",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "8:20",
+          "why": "PCA practical tips: scaling and how many components."
+        }
+      ]
+    },
+    {
+      "key": "optim",
+      "name": "Gradient Descent & Optimisers",
+      "note": "Gradient descent and the learning rate, stochastic and mini-batch updates, momentum, RMSProp and Adam, learning-rate decay.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "uJryes5Vk1o",
+          "role": "best",
+          "title": "Gradient Descent (C1W2L04)",
+          "channel": "DeepLearningAI",
+          "length": "11:24",
+          "why": "Gradient descent on a cost function."
+        },
+        {
+          "kind": "v",
+          "id": "vMh0zPT0tLI",
+          "role": "next",
+          "title": "Stochastic Gradient Descent, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "10:53",
+          "why": "Stochastic gradient descent."
+        },
+        {
+          "kind": "v",
+          "id": "4qJaSmvhxi8",
+          "role": "next",
+          "title": "Mini Batch Gradient Descent (C2W2L01)",
+          "channel": "DeepLearningAI",
+          "length": "11:29",
+          "why": "Mini-batch gradient descent."
+        },
+        {
+          "kind": "v",
+          "id": "lAq96T8FkTw",
+          "role": "next",
+          "title": "Exponentially Weighted Averages (C2W2L03)",
+          "channel": "DeepLearningAI",
+          "length": "5:59",
+          "why": "Exponentially weighted averages, the building block of momentum."
+        },
+        {
+          "kind": "v",
+          "id": "k8fTYJPd3_I",
+          "role": "next",
+          "title": "Gradient Descent With Momentum (C2W2L06)",
+          "channel": "DeepLearningAI",
+          "length": "9:21",
+          "why": "Momentum."
+        },
+        {
+          "kind": "v",
+          "id": "_e-LFe_igno",
+          "role": "next",
+          "title": "RMSProp (C2W2L07)",
+          "channel": "DeepLearningAI",
+          "length": "7:42",
+          "why": "RMSProp."
+        },
+        {
+          "kind": "v",
+          "id": "JXQT_vxqwIs",
+          "role": "next",
+          "title": "Adam Optimization Algorithm (C2W2L08)",
+          "channel": "DeepLearningAI",
+          "length": "7:08",
+          "why": "Adam."
+        },
+        {
+          "kind": "v",
+          "id": "QzulmoOg2JE",
+          "role": "next",
+          "title": "Learning Rate Decay (C2W2L09)",
+          "channel": "DeepLearningAI",
+          "length": "6:45",
+          "why": "Learning-rate decay."
+        },
+        {
+          "kind": "v",
+          "id": "NE88eqLngkg",
+          "role": "deeper",
+          "title": "Optimization for Deep Learning (Momentum, RMSprop, AdaGrad, Adam)",
+          "channel": "DeepBean",
+          "length": "15:52",
+          "why": "Momentum, RMSProp, AdaGrad and Adam compared on one picture."
+        }
+      ]
+    },
+    {
+      "key": "regression",
+      "name": "Regression, Regularisation & Bias-Variance",
+      "note": "Linear and logistic regression, L1 vs L2 regularisation and why they shrink weights differently, and the bias-variance trade-off.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "PaFPbb66DxQ",
+          "role": "best",
+          "title": "The Main Ideas of Fitting a Line to Data (The Main Ideas of Least Squares and Linear Regression.)",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "9:22",
+          "why": "Least squares: fitting a line."
+        },
+        {
+          "kind": "v",
+          "id": "zITIFTsivN8",
+          "role": "next",
+          "title": "Multiple Regression, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "5:25",
+          "why": "Multiple regression."
+        },
+        {
+          "kind": "v",
+          "id": "yIYKR4sgzI8",
+          "role": "next",
+          "title": "StatQuest: Logistic Regression",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "8:48",
+          "why": "Logistic regression."
+        },
+        {
+          "kind": "v",
+          "id": "BfKanl1aSG0",
+          "role": "next",
+          "title": "Logistic Regression Details Pt 2: Maximum Likelihood",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "10:23",
+          "why": "How logistic regression is fit with maximum likelihood."
+        },
+        {
+          "kind": "v",
+          "id": "EuBBz3bI-aA",
+          "role": "next",
+          "title": "Machine Learning Fundamentals: Bias and Variance",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "6:36",
+          "why": "Bias and variance."
+        },
+        {
+          "kind": "v",
+          "id": "SjQyLhQIXSM",
+          "role": "next",
+          "title": "Bias/Variance (C2W1L02)",
+          "channel": "DeepLearningAI",
+          "length": "8:47",
+          "why": "Diagnosing bias vs variance from train and dev error."
+        },
+        {
+          "kind": "v",
+          "id": "NGf0voTMlcs",
+          "role": "next",
+          "title": "Regularization Part 2: Lasso (L1) Regression",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "8:19",
+          "why": "Lasso (L1)."
+        },
+        {
+          "kind": "v",
+          "id": "Xm2C_gTAl8c",
+          "role": "next",
+          "title": "Ridge vs Lasso Regression, Visualized!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "9:06",
+          "why": "Ridge vs lasso, visualised: why L1 gives zeros."
+        },
+        {
+          "kind": "v",
+          "id": "1dKRdX9bfIo",
+          "role": "next",
+          "title": "Regularization Part 3: Elastic Net Regression",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "5:19",
+          "why": "Elastic net."
+        }
+      ]
+    },
+    {
+      "key": "trees",
+      "name": "Trees, Forests & Boosting",
+      "note": "Decision trees and impurity, random forests (bagging + feature subsampling), and gradient boosting.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "_L39rN6gz7Y",
+          "role": "best",
+          "title": "Decision and Classification Trees, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "18:08",
+          "why": "Decision and classification trees, with Gini impurity."
+        },
+        {
+          "kind": "v",
+          "id": "J4Wdy0Wc_xQ",
+          "role": "next",
+          "title": "StatQuest: Random Forests Part 1 - Building, Using and Evaluating",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "9:54",
+          "why": "Random forests: building, using, evaluating."
+        },
+        {
+          "kind": "v",
+          "id": "3CC4N4z3GJc",
+          "role": "next",
+          "title": "Gradient Boost Part 1 (of 4): Regression Main Ideas",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "15:52",
+          "why": "Gradient boosting for regression: the main ideas."
+        },
+        {
+          "kind": "v",
+          "id": "jxuNLH5dXCs",
+          "role": "next",
+          "title": "Gradient Boost Part 3 (of 4): Classification",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "17:03",
+          "why": "Gradient boosting for classification."
+        },
+        {
+          "kind": "v",
+          "id": "en2bmeB4QUo",
+          "role": "next",
+          "title": "Gradient Boosting : Data Science's Silver Bullet",
+          "channel": "ritvikmath",
+          "length": "15:48",
+          "why": "Why gradient boosting wins on tabular data."
+        },
+        {
+          "kind": "v",
+          "id": "TyvYZ26alZs",
+          "role": "quick",
+          "title": "Visual Guide to Gradient Boosted Trees (xgboost)",
+          "channel": "Econoscent",
+          "length": "4:06",
+          "why": "Gradient-boosted trees, visually."
+        }
+      ]
+    },
+    {
+      "key": "models",
+      "name": "SVM, kNN, Naive Bayes & Clustering",
+      "note": "Margins and kernels, kNN, Naive Bayes, k-means, hierarchical clustering and DBSCAN.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "iEQ0e-WLgkQ",
+          "role": "best",
+          "title": "Support Vector Machines : Data Science Concepts",
+          "channel": "ritvikmath",
+          "length": "8:07",
+          "why": "Support vector machines: margins."
+        },
+        {
+          "kind": "v",
+          "id": "bM4_AstaBZo",
+          "role": "next",
+          "title": "SVM (The Math) : Data Science Concepts",
+          "channel": "ritvikmath",
+          "length": "10:19",
+          "why": "The SVM optimisation problem."
+        },
+        {
+          "kind": "v",
+          "id": "Toet3EiSFcM",
+          "role": "next",
+          "title": "Support Vector Machines Part 2: The Polynomial Kernel (Part 2 of 3)",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "7:15",
+          "why": "The polynomial kernel."
+        },
+        {
+          "kind": "v",
+          "id": "Qc5IyLW_hns",
+          "role": "next",
+          "title": "Support Vector Machines Part 3: The Radial (RBF) Kernel (Part 3 of 3)",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "15:52",
+          "why": "The RBF kernel."
+        },
+        {
+          "kind": "v",
+          "id": "HVXime0nQeI",
+          "role": "next",
+          "title": "StatQuest: K-nearest neighbors, Clearly Explained",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "5:30",
+          "why": "k-nearest neighbours."
+        },
+        {
+          "kind": "v",
+          "id": "O2L2Uv9pdDA",
+          "role": "next",
+          "title": "Naive Bayes, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "15:12",
+          "why": "Naive Bayes."
+        },
+        {
+          "kind": "v",
+          "id": "4b5d3muPQmA",
+          "role": "next",
+          "title": "StatQuest: K-means clustering",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "8:30",
+          "why": "k-means clustering."
+        },
+        {
+          "kind": "v",
+          "id": "7xHsRkOdVwo",
+          "role": "next",
+          "title": "StatQuest: Hierarchical Clustering",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "11:19",
+          "why": "Hierarchical clustering."
+        },
+        {
+          "kind": "v",
+          "id": "RDZUdRSDOok",
+          "role": "next",
+          "title": "Clustering with DBSCAN, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "9:30",
+          "why": "DBSCAN."
+        }
+      ]
+    },
+    {
+      "key": "eval",
+      "name": "Validation, Metrics & Pitfalls",
+      "note": "Train/dev/test and cross-validation, confusion-matrix metrics, ROC/AUC, calibration, leakage, class imbalance and tuning.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "1waHlpKiNyY",
+          "role": "best",
+          "title": "Train/Dev/Test Sets (C2W1L01)",
+          "channel": "DeepLearningAI",
+          "length": "12:05",
+          "why": "Train, dev and test sets."
+        },
+        {
+          "kind": "v",
+          "id": "fSytzGwwBVw",
+          "role": "next",
+          "title": "Machine Learning Fundamentals: Cross Validation",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "6:05",
+          "why": "Cross-validation."
+        },
+        {
+          "kind": "v",
+          "id": "Kdsp6soqA7o",
+          "role": "next",
+          "title": "Machine Learning Fundamentals: The Confusion Matrix",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "7:13",
+          "why": "The confusion matrix."
+        },
+        {
+          "kind": "v",
+          "id": "qWfzIYCvBqo",
+          "role": "next",
+          "title": "Never Forget Again! // Precision vs Recall with a Clear Example of Precision and Recall",
+          "channel": "Kimberly Fessel",
+          "length": "5:24",
+          "why": "Precision vs recall with one clear example."
+        },
+        {
+          "kind": "v",
+          "id": "4jRBRDbJemM",
+          "role": "next",
+          "title": "ROC and AUC, Clearly Explained!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "16:17",
+          "why": "ROC and AUC."
+        },
+        {
+          "kind": "v",
+          "id": "AunotauS5yI",
+          "role": "next",
+          "title": "Probability Calibration : Data Science Concepts",
+          "channel": "ritvikmath",
+          "length": "10:23",
+          "why": "Probability calibration."
+        },
+        {
+          "kind": "v",
+          "id": "yuOOo0FQklQ",
+          "role": "next",
+          "title": "Data Leakage in Machine Learning | Understanding Data Leakage with example in machine learning",
+          "channel": "Unfold Data Science",
+          "length": "8:29",
+          "why": "Data leakage."
+        },
+        {
+          "kind": "v",
+          "id": "GR-OW5asKlk",
+          "role": "next",
+          "title": "Handling Imbalanced Dataset in Machine Learning: Easy Explanation for Data Science Interviews",
+          "channel": "Emma Ding",
+          "length": "13:44",
+          "why": "Handling imbalanced datasets."
+        },
+        {
+          "kind": "v",
+          "id": "589nCGeWG1w",
+          "role": "next",
+          "title": "One-Hot, Label, Target and K-Fold Target Encoding, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "15:23",
+          "why": "One-hot, label and target encoding, and the leakage target encoding risks."
+        },
+        {
+          "kind": "v",
+          "id": "xRhPwQdNMss",
+          "role": "next",
+          "title": "Hyperparameters Optimization Strategies: GridSearch, Bayesian, & Random Search (Beginner Friendly!)",
+          "channel": "Prof. Ryan Ahmed",
+          "length": "8:02",
+          "why": "Grid, random and Bayesian hyperparameter search."
+        }
+      ]
+    },
+    {
+      "key": "timeseries",
+      "name": "Forecasting & Time Series",
+      "note": "Why random splits leak in time series, walk-forward validation, ARIMA and seasonality.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "OGpENuxjRWM",
+          "role": "best",
+          "title": "Forecasting Principles & Practice: 5.10 Time series cross-validation",
+          "channel": "OTexts",
+          "length": "6:54",
+          "why": "Time-series cross-validation (rolling origin)."
+        },
+        {
+          "kind": "v",
+          "id": "TpS8bcKjzw0",
+          "role": "next",
+          "title": "How are Time Series Models Evaluated",
+          "channel": "Aric LaBarr",
+          "length": "4:53",
+          "why": "How forecasts are evaluated."
+        },
+        {
+          "kind": "v",
+          "id": "dXND1OEBABI",
+          "role": "next",
+          "title": "What are ARIMA Models",
+          "channel": "Aric LaBarr",
+          "length": "5:07",
+          "why": "What ARIMA models are."
+        },
+        {
+          "kind": "v",
+          "id": "3UmyHed0iYE",
+          "role": "next",
+          "title": "Time Series Talk : ARIMA Model",
+          "channel": "ritvikmath",
+          "length": "9:26",
+          "why": "ARIMA in more detail."
+        },
+        {
+          "kind": "v",
+          "id": "WjeGUs6mzXg",
+          "role": "next",
+          "title": "Time Series Talk : Seasonal ARIMA Model",
+          "channel": "ritvikmath",
+          "length": "11:33",
+          "why": "Seasonal ARIMA."
+        }
+      ]
+    },
+    {
+      "key": "nn",
+      "name": "Neural Networks & Backprop",
+      "note": "What a layer computes, activations and why they must be non-linear, softmax and cross-entropy, and backprop on a computation graph.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "aircAruvnKk",
+          "role": "best",
+          "title": "But what is a neural network? | Deep learning chapter 1",
+          "channel": "3Blue1Brown",
+          "length": "18:40",
+          "why": "What a neural network is, visually."
+        },
+        {
+          "kind": "v",
+          "id": "Xvg00QnyaIY",
+          "role": "next",
+          "title": "Activation Functions (C1W3L06)",
+          "channel": "DeepLearningAI",
+          "length": "10:57",
+          "why": "Activation functions."
+        },
+        {
+          "kind": "v",
+          "id": "NkOv_k7r6no",
+          "role": "next",
+          "title": "Why Non-linear Activation Functions (C1W3L07)",
+          "channel": "DeepLearningAI",
+          "length": "5:36",
+          "why": "Why activations must be non-linear."
+        },
+        {
+          "kind": "v",
+          "id": "hCP1vGoCdYU",
+          "role": "next",
+          "title": "Computation Graph (C1W2L07)",
+          "channel": "DeepLearningAI",
+          "length": "3:34",
+          "why": "Computation graphs."
+        },
+        {
+          "kind": "v",
+          "id": "nJyUyKN-XBQ",
+          "role": "next",
+          "title": "Derivatives With Computation Graphs (C1W2L08)",
+          "channel": "DeepLearningAI",
+          "length": "14:34",
+          "why": "Derivatives on a computation graph: reverse-mode autodiff."
+        },
+        {
+          "kind": "v",
+          "id": "Ilg3gGewQ5U",
+          "role": "next",
+          "title": "Backpropagation, intuitively | Deep Learning Chapter 3",
+          "channel": "3Blue1Brown",
+          "length": "12:47",
+          "why": "Backpropagation, intuitively."
+        },
+        {
+          "kind": "v",
+          "id": "tIeHLnjs5U8",
+          "role": "next",
+          "title": "Backpropagation calculus | Deep Learning Chapter 4",
+          "channel": "3Blue1Brown",
+          "length": "10:18",
+          "why": "Backpropagation calculus."
+        },
+        {
+          "kind": "v",
+          "id": "KpKog-L9veg",
+          "role": "next",
+          "title": "Neural Networks Part 5: ArgMax and SoftMax",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "14:03",
+          "why": "Argmax and softmax."
+        },
+        {
+          "kind": "v",
+          "id": "6ArSys5qHAU",
+          "role": "next",
+          "title": "Neural Networks Part 6: Cross Entropy",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "9:31",
+          "why": "Cross-entropy."
+        },
+        {
+          "kind": "v",
+          "id": "yslMo3hSbqE",
+          "role": "next",
+          "title": "Getting Matrix Dimensions Right (C1W4L03)",
+          "channel": "DeepLearningAI",
+          "length": "11:10",
+          "why": "Getting matrix dimensions right."
+        }
+      ]
+    },
+    {
+      "key": "training",
+      "name": "Training Deep Networks",
+      "note": "Initialisation and vanishing gradients, dropout and other regularisers, batch norm vs layer norm, and debugging a training run.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "C1N_PDHuJ6Q",
+          "role": "best",
+          "title": "Basic Recipe for Machine Learning (C2W1L03)",
+          "channel": "DeepLearningAI",
+          "length": "6:22",
+          "why": "The basic recipe: fix bias first, then variance."
+        },
+        {
+          "kind": "v",
+          "id": "qhXZsFVxGKo",
+          "role": "next",
+          "title": "Vanishing/Exploding Gradients (C2W1L10)",
+          "channel": "DeepLearningAI",
+          "length": "6:08",
+          "why": "Vanishing and exploding gradients."
+        },
+        {
+          "kind": "v",
+          "id": "s2coXdufOzE",
+          "role": "next",
+          "title": "Weight Initialization in a Deep Network (C2W1L11)",
+          "channel": "DeepLearningAI",
+          "length": "6:12",
+          "why": "Weight initialisation."
+        },
+        {
+          "kind": "v",
+          "id": "D8PJAL-MZv8",
+          "role": "next",
+          "title": "Dropout Regularization (C2W1L06)",
+          "channel": "DeepLearningAI",
+          "length": "9:26",
+          "why": "Dropout."
+        },
+        {
+          "kind": "v",
+          "id": "ARq74QuavAo",
+          "role": "next",
+          "title": "Understanding Dropout (C2W1L07)",
+          "channel": "DeepLearningAI",
+          "length": "7:05",
+          "why": "Why dropout works."
+        },
+        {
+          "kind": "v",
+          "id": "BOCLq2gpcGU",
+          "role": "next",
+          "title": "Other Regularization Methods (C2W1L08)",
+          "channel": "DeepLearningAI",
+          "length": "8:24",
+          "why": "Data augmentation and early stopping."
+        },
+        {
+          "kind": "v",
+          "id": "tNIpEZLv_eg",
+          "role": "next",
+          "title": "Normalizing Activations in a Network (C2W3L04)",
+          "channel": "DeepLearningAI",
+          "length": "8:55",
+          "why": "Normalising activations: batch norm."
+        },
+        {
+          "kind": "v",
+          "id": "nUUqwaxLnWs",
+          "role": "next",
+          "title": "Why Does Batch Norm Work? (C2W3L06)",
+          "channel": "DeepLearningAI",
+          "length": "11:40",
+          "why": "Why batch norm works."
+        },
+        {
+          "kind": "v",
+          "id": "5qefnAek8OA",
+          "role": "next",
+          "title": "Batch Norm At Test Time (C2W3L07)",
+          "channel": "DeepLearningAI",
+          "length": "5:47",
+          "why": "Batch norm at test time."
+        },
+        {
+          "kind": "v",
+          "id": "o4chPk_S5C0",
+          "role": "next",
+          "title": "Batch Norm vs Layer Norm - Explained",
+          "channel": "DataMListic",
+          "length": "4:43",
+          "why": "Batch norm vs layer norm."
+        },
+        {
+          "kind": "v",
+          "id": "QrzApibhohY",
+          "role": "next",
+          "title": "Gradient Checking (C2W1L13)",
+          "channel": "DeepLearningAI",
+          "length": "6:35",
+          "why": "Gradient checking."
+        }
+      ]
+    },
+    {
+      "key": "cnn",
+      "name": "CNNs",
+      "note": "Convolution, padding and stride, output-shape and parameter arithmetic, pooling, receptive field, ResNets and transfer learning.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "XuD4C8vJzEQ",
+          "role": "best",
+          "title": "C4W1L02 Edge Detection Examples",
+          "channel": "DeepLearningAI",
+          "length": "11:31",
+          "why": "Convolution as edge detection."
+        },
+        {
+          "kind": "v",
+          "id": "smHa2442Ah4",
+          "role": "next",
+          "title": "C4W1L04 Padding",
+          "channel": "DeepLearningAI",
+          "length": "9:50",
+          "why": "Padding."
+        },
+        {
+          "kind": "v",
+          "id": "tQYZaDn_kSg",
+          "role": "next",
+          "title": "C4W1L05 Strided Convolutions",
+          "channel": "DeepLearningAI",
+          "length": "9:02",
+          "why": "Stride, and the output-size formula."
+        },
+        {
+          "kind": "v",
+          "id": "KTB_OFoAQcc",
+          "role": "next",
+          "title": "C4W1L06 Convolutions Over Volumes",
+          "channel": "DeepLearningAI",
+          "length": "10:45",
+          "why": "Convolutions over volumes (channels)."
+        },
+        {
+          "kind": "v",
+          "id": "jPOAS7uCODQ",
+          "role": "next",
+          "title": "C4W1L07 One Layer of a Convolutional Net",
+          "channel": "DeepLearningAI",
+          "length": "16:11",
+          "why": "One conv layer, and counting its parameters."
+        },
+        {
+          "kind": "v",
+          "id": "8oOgPUO-TBY",
+          "role": "next",
+          "title": "C4W1L09 Pooling Layers",
+          "channel": "DeepLearningAI",
+          "length": "10:30",
+          "why": "Pooling."
+        },
+        {
+          "kind": "v",
+          "id": "ay3zYUeuyhU",
+          "role": "next",
+          "title": "C4W1L11 Why Convolutions",
+          "channel": "DeepLearningAI",
+          "length": "9:41",
+          "why": "Why convolutions: sharing and sparsity."
+        },
+        {
+          "kind": "v",
+          "id": "ZILIbUvp5lk",
+          "role": "next",
+          "title": "C4W2L03 Resnets",
+          "channel": "DeepLearningAI",
+          "length": "7:08",
+          "why": "ResNets."
+        },
+        {
+          "kind": "v",
+          "id": "RYth6EbBUqM",
+          "role": "next",
+          "title": "C4W2L04 Why ResNets Work",
+          "channel": "DeepLearningAI",
+          "length": "9:13",
+          "why": "Why ResNets work."
+        },
+        {
+          "kind": "v",
+          "id": "FQM13HkEfBk",
+          "role": "next",
+          "title": "C4W2L09 Transfer Learning",
+          "channel": "DeepLearningAI",
+          "length": "8:48",
+          "why": "Transfer learning."
+        },
+        {
+          "kind": "v",
+          "id": "HGwBXDKFk9I",
+          "role": "quick",
+          "title": "Neural Networks Part 8: Image Classification with Convolutional Neural Networks (CNNs)",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "15:24",
+          "why": "CNN image classification, step by step."
+        }
+      ]
+    },
+    {
+      "key": "seq",
+      "name": "RNNs, Attention & Transformers",
+      "note": "RNNs and why they struggle, embeddings, seq2seq, attention, multi-head attention, positional encoding, encoder vs decoder, ViT.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "AsNTP8Kwu80",
+          "role": "best",
+          "title": "Recurrent Neural Networks (RNNs), Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "16:37",
+          "why": "Recurrent neural networks and vanishing gradients."
+        },
+        {
+          "kind": "v",
+          "id": "viZrOnJclY0",
+          "role": "next",
+          "title": "Word Embedding and Word2Vec, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "16:12",
+          "why": "Word embeddings and word2vec."
+        },
+        {
+          "kind": "v",
+          "id": "L8HKweZIOmg",
+          "role": "next",
+          "title": "Sequence-to-Sequence (seq2seq) Encoder-Decoder Neural Networks, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "16:50",
+          "why": "Seq2seq encoder-decoder."
+        },
+        {
+          "kind": "v",
+          "id": "PSs6nxngL6k",
+          "role": "next",
+          "title": "Attention for Neural Networks, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "15:51",
+          "why": "Attention."
+        },
+        {
+          "kind": "v",
+          "id": "avjX3QrYkls",
+          "role": "next",
+          "title": "Transformers Step-by-Step Explained (Attention Is All You Need)",
+          "channel": "ByteByteGo",
+          "length": "10:04",
+          "why": "Transformers step by step."
+        },
+        {
+          "kind": "v",
+          "id": "mmzRYGCfTzc",
+          "role": "next",
+          "title": "A Dive Into Multihead Attention, Self-Attention and Cross-Attention",
+          "channel": "Machine Learning Studio",
+          "length": "9:57",
+          "why": "Multi-head, self- and cross-attention."
+        },
+        {
+          "kind": "v",
+          "id": "1biZfFLPRSY",
+          "role": "next",
+          "title": "Positional embeddings in transformers EXPLAINED | Demystifying positional encodings.",
+          "channel": "AI Coffee Break with Letitia",
+          "length": "9:40",
+          "why": "Positional embeddings."
+        },
+        {
+          "kind": "v",
+          "id": "GDN649X_acE",
+          "role": "next",
+          "title": "Encoder-Only Transformers (like BERT) for RAG, Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "18:52",
+          "why": "Encoder-only transformers (BERT)."
+        },
+        {
+          "kind": "v",
+          "id": "j3VNqtJUoz0",
+          "role": "next",
+          "title": "Vision Transformer Quick Guide - Theory and Code in (almost) 15 min",
+          "channel": "DeepFindr",
+          "length": "16:51",
+          "why": "Vision transformer: patches as tokens."
+        }
+      ]
+    },
+    {
+      "key": "vision",
+      "name": "Detection, Segmentation & Multimodal",
+      "note": "Boxes and IoU, NMS, anchors and YOLO, mAP, semantic vs instance segmentation, tracking by detection, and CLIP-style vision-language models.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "GSwYGkTfOKk",
+          "role": "best",
+          "title": "C4W3L01 Object Localization",
+          "channel": "DeepLearningAI",
+          "length": "11:54",
+          "why": "Object localisation: predicting a box."
+        },
+        {
+          "kind": "v",
+          "id": "5e5pjeojznk",
+          "role": "next",
+          "title": "C4W3L03 Object Detection",
+          "channel": "DeepLearningAI",
+          "length": "5:49",
+          "why": "Object detection."
+        },
+        {
+          "kind": "v",
+          "id": "ANIzQ5G-XPE",
+          "role": "next",
+          "title": "C4W3L06 Intersection Over Union",
+          "channel": "DeepLearningAI",
+          "length": "4:19",
+          "why": "Intersection over union."
+        },
+        {
+          "kind": "v",
+          "id": "VAo84c1hQX8",
+          "role": "next",
+          "title": "C4W3L07 Nonmax Suppression",
+          "channel": "DeepLearningAI",
+          "length": "8:02",
+          "why": "Non-max suppression."
+        },
+        {
+          "kind": "v",
+          "id": "RTlwl2bv0Tg",
+          "role": "next",
+          "title": "C4W3L08 Anchor Boxes",
+          "channel": "DeepLearningAI",
+          "length": "9:43",
+          "why": "Anchor boxes."
+        },
+        {
+          "kind": "v",
+          "id": "9s_FpMpdYW8",
+          "role": "next",
+          "title": "C4W3L09 YOLO Algorithm",
+          "channel": "DeepLearningAI",
+          "length": "7:02",
+          "why": "YOLO."
+        },
+        {
+          "kind": "v",
+          "id": "6ykvU9WuIws",
+          "role": "next",
+          "title": "C4W3L10 Region Proposals",
+          "channel": "DeepLearningAI",
+          "length": "6:28",
+          "why": "Region proposals (R-CNN family)."
+        },
+        {
+          "kind": "v",
+          "id": "oqXDdxF_Wuw",
+          "role": "next",
+          "title": "What is Mean Average Precision (mAP)?",
+          "channel": "Roboflow",
+          "length": "13:02",
+          "why": "Mean average precision."
+        },
+        {
+          "kind": "v",
+          "id": "5QUmlXBb0MY",
+          "role": "next",
+          "title": "Image Segmentation, Semantic Segmentation, Instance Segmentation, and Panoptic Segmentation",
+          "channel": "LearnOpenCV",
+          "length": "5:04",
+          "why": "Semantic, instance and panoptic segmentation."
+        },
+        {
+          "kind": "v",
+          "id": "gwAp3swodtg",
+          "role": "next",
+          "title": "What is Object Tracking? | DeepSORT Algorithm (Part 1)",
+          "channel": "Algonique",
+          "length": "7:58",
+          "why": "Tracking by detection and DeepSORT."
+        },
+        {
+          "kind": "v",
+          "id": "KcSXcpluDe4",
+          "role": "next",
+          "title": "How AI 'Understands' Images (CLIP) - Computerphile",
+          "channel": "Computerphile",
+          "length": "18:05",
+          "why": "CLIP: how models link images and text."
+        }
+      ]
+    }
+  ]
+}

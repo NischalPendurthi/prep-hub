@@ -1,0 +1,758 @@
+{
+  "id": "llms",
+  "name": "LLMs & Agents",
+  "blurb": "Short videos only: every pick is 20 minutes or less and covers one or two ideas, ordered as a sequence. Subtopics follow the LLMs and Agents guides in Topics.",
+  "method": "<ul><li><b>Length</b>: hard cap of 20 minutes per video; depth comes from a sequence.</li><li><b>Order</b>: picks in a subtopic are in watching order; the first is the starting point.</li><li><b>Sources</b>: there is no single short course here, so picks come from the clearest explainer per concept: AI Coffee Break, Efficient NLP, StatQuest, IBM Technology, DataMListic and the original authors where they explain their own work.</li><li>This field moves fast; check the upload date before trusting tool-specific details.</li></ul>",
+  "subtopics": [
+    {
+      "key": "basics",
+      "name": "Tokens & Embeddings",
+      "note": "The whole path from text to next-token probabilities; BPE tokenisation and why token counts matter; embeddings.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "LPZh9BOjkQs",
+          "role": "best",
+          "title": "Large Language Models explained briefly",
+          "channel": "3Blue1Brown",
+          "length": "7:58",
+          "why": "What an LLM does, end to end, in eight minutes."
+        },
+        {
+          "kind": "v",
+          "id": "hL4ZnAWSyuU",
+          "role": "next",
+          "title": "LLM Tokenizers Explained: BPE Encoding, WordPiece and SentencePiece",
+          "channel": "DataMListic",
+          "length": "5:14",
+          "why": "Tokenizers: BPE, WordPiece, SentencePiece."
+        },
+        {
+          "kind": "v",
+          "id": "HEikzVL-lZU",
+          "role": "next",
+          "title": "Byte Pair Encoding Tokenization",
+          "channel": "Hugging Face",
+          "length": "5:23",
+          "why": "Byte-pair encoding, step by step."
+        },
+        {
+          "kind": "v",
+          "id": "gstdcCDqdlc",
+          "role": "next",
+          "title": "Tokenization and Byte Pair Encoding",
+          "channel": "Luis Serrano Academy",
+          "length": "7:32",
+          "why": "Tokenization and BPE, worked."
+        },
+        {
+          "kind": "v",
+          "id": "wgfSDrqYMJ4",
+          "role": "next",
+          "title": "What are Word Embeddings?",
+          "channel": "IBM Technology",
+          "length": "8:38",
+          "why": "Embeddings."
+        }
+      ]
+    },
+    {
+      "key": "attention",
+      "name": "Attention & the Transformer Block",
+      "note": "Queries, keys and values, the causal mask, multi-head attention, positional information, and the residual + norm + MLP block.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "fjJOgb-E41w",
+          "role": "best",
+          "title": "Attention mechanism: Overview",
+          "channel": "Google Cloud Tech",
+          "length": "5:34",
+          "why": "The attention mechanism in brief."
+        },
+        {
+          "kind": "v",
+          "id": "viCl2T7vx64",
+          "role": "next",
+          "title": "Why the name Query, Key and Value? Self-Attention in Transformers | Part 4",
+          "channel": "Learn With Jay",
+          "length": "4:13",
+          "why": "Why they're called query, key and value."
+        },
+        {
+          "kind": "v",
+          "id": "RNF0FvRjGZk",
+          "role": "next",
+          "title": "I Visualised Attention in Transformers",
+          "channel": "Gal Lahat",
+          "length": "13:01",
+          "why": "Attention visualised."
+        },
+        {
+          "kind": "v",
+          "id": "mmzRYGCfTzc",
+          "role": "next",
+          "title": "A Dive Into Multihead Attention, Self-Attention and Cross-Attention",
+          "channel": "Machine Learning Studio",
+          "length": "9:57",
+          "why": "Multi-head, self- and cross-attention."
+        },
+        {
+          "kind": "v",
+          "id": "1biZfFLPRSY",
+          "role": "next",
+          "title": "Positional embeddings in transformers EXPLAINED | Demystifying positional encodings.",
+          "channel": "AI Coffee Break with Letitia",
+          "length": "9:40",
+          "why": "Positional embeddings."
+        },
+        {
+          "kind": "v",
+          "id": "avjX3QrYkls",
+          "role": "next",
+          "title": "Transformers Step-by-Step Explained (Attention Is All You Need)",
+          "channel": "ByteByteGo",
+          "length": "10:04",
+          "why": "The full transformer, step by step."
+        }
+      ]
+    },
+    {
+      "key": "training",
+      "name": "Pretraining, Sampling & Hallucination",
+      "note": "Next-token prediction and teacher forcing, pre- vs post-training, temperature / top-k / top-p, and why models hallucinate.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "JRArFxEfyQU",
+          "role": "best",
+          "title": "How are large language models trained?",
+          "channel": "Google for Developers",
+          "length": "10:09",
+          "why": "How LLMs are trained."
+        },
+        {
+          "kind": "v",
+          "id": "PWDhTBd3cZI",
+          "role": "next",
+          "title": "How LLMs Are Actually Trained: Pre-Training vs. Post-Training Explained (with Julien Launay)",
+          "channel": "Super Data Science: ML & AI Podcast with Jon Krohn",
+          "length": "5:04",
+          "why": "Pre-training vs post-training."
+        },
+        {
+          "kind": "v",
+          "id": "-BBulGM6xF0",
+          "role": "next",
+          "title": "LLM Prompt Engineering with Random Sampling: Temperature, Top-k, Top-p",
+          "channel": "DataMListic",
+          "length": "8:11",
+          "why": "Temperature, top-k and top-p."
+        },
+        {
+          "kind": "v",
+          "id": "jnikMver_CE",
+          "role": "next",
+          "title": "What is Temperature in LLM",
+          "channel": "Under The Hood",
+          "length": "9:46",
+          "why": "Temperature in depth."
+        },
+        {
+          "kind": "v",
+          "id": "cfqtFvWOfg0",
+          "role": "next",
+          "title": "Why Large Language Models Hallucinate",
+          "channel": "IBM Technology",
+          "length": "9:38",
+          "why": "Why LLMs hallucinate."
+        },
+        {
+          "kind": "v",
+          "id": "005JLRt3gXI",
+          "role": "next",
+          "title": "Why do AI models hallucinate?",
+          "channel": "Claude",
+          "length": "5:14",
+          "why": "Why models hallucinate, from Anthropic."
+        }
+      ]
+    },
+    {
+      "key": "finetune",
+      "name": "Fine-tuning: LoRA & QLoRA",
+      "note": "When to prompt, retrieve or fine-tune; the low-rank update and its parameter count; QLoRA's 4-bit base.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "KEv-F5UkhxU",
+          "role": "best",
+          "title": "What is LoRA? Low-Rank Adaptation for finetuning LLMs EXPLAINED",
+          "channel": "AI Coffee Break with Letitia",
+          "length": "8:22",
+          "why": "LoRA: the low-rank update."
+        },
+        {
+          "kind": "v",
+          "id": "DhRoTONcyZE",
+          "role": "next",
+          "title": "What is Low-Rank Adaptation (LoRA) | explained by the inventor",
+          "channel": "Edward Hu",
+          "length": "7:29",
+          "why": "LoRA explained by its inventor."
+        },
+        {
+          "kind": "v",
+          "id": "t1caDsMzWBk",
+          "role": "next",
+          "title": "LoRA & QLoRA Fine-tuning Explained In-Depth",
+          "channel": "Mark Hennings",
+          "length": "14:39",
+          "why": "LoRA and QLoRA in depth: rank, alpha, which layers."
+        },
+        {
+          "kind": "v",
+          "id": "6l8GZDPbFn8",
+          "role": "next",
+          "title": "QLoRA paper explained (Efficient Finetuning of Quantized LLMs)",
+          "channel": "AI Bites",
+          "length": "11:44",
+          "why": "The QLoRA paper: NF4 and double quantization."
+        }
+      ]
+    },
+    {
+      "key": "align",
+      "name": "RLHF & DPO",
+      "note": "The RLHF pipeline (SFT, reward model, PPO), and how DPO gets the same effect without a reward model.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "T_X4XFwKX8k",
+          "role": "best",
+          "title": "Reinforcement Learning from Human Feedback (RLHF) Explained",
+          "channel": "IBM Technology",
+          "length": "11:29",
+          "why": "RLHF."
+        },
+        {
+          "kind": "v",
+          "id": "qPN_XZcJf_s",
+          "role": "next",
+          "title": "Reinforcement Learning with Human Feedback (RLHF), Clearly Explained!!!",
+          "channel": "StatQuest with Josh Starmer",
+          "length": "18:02",
+          "why": "RLHF, clearly explained."
+        },
+        {
+          "kind": "v",
+          "id": "XZLc09hkMwA",
+          "role": "next",
+          "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model | DPO paper explained",
+          "channel": "AI Coffee Break with Letitia",
+          "length": "8:55",
+          "why": "DPO: the language model is secretly a reward model."
+        },
+        {
+          "kind": "v",
+          "id": "lBzw9ku86dg",
+          "role": "next",
+          "title": "4 Ways to Align LLMs: RLHF, DPO, KTO, and ORPO",
+          "channel": "Snorkel AI",
+          "length": "6:18",
+          "why": "Four ways to align: RLHF, DPO, KTO, ORPO."
+        },
+        {
+          "kind": "v",
+          "id": "vJ4SsfmeQlk",
+          "role": "quick",
+          "title": "Reinforcement Learning with Human Feedback (RLHF) in 4 minutes",
+          "channel": "Sebastian Raschka",
+          "length": "4:06",
+          "why": "RLHF in four minutes."
+        }
+      ]
+    },
+    {
+      "key": "serving",
+      "name": "Inference & Serving",
+      "note": "Prefill vs decode, the KV cache and its memory, flash attention, PagedAttention, continuous batching, speculative decoding.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "ZPHXbUcARYI",
+          "role": "best",
+          "title": "How LLMs Generate Text: GPUs, KV Cache, and Prefill/Decode",
+          "channel": "The Cef Experience",
+          "length": "11:06",
+          "why": "How LLMs generate text: prefill, decode and the KV cache."
+        },
+        {
+          "kind": "v",
+          "id": "80bIUggRJf4",
+          "role": "next",
+          "title": "The KV Cache: Memory Usage in Transformers",
+          "channel": "Efficient NLP",
+          "length": "8:33",
+          "why": "KV-cache memory arithmetic."
+        },
+        {
+          "kind": "v",
+          "id": "gBMO1JZav44",
+          "role": "next",
+          "title": "How FlashAttention Accelerates Generative AI Revolution",
+          "channel": "Jia-Bin Huang",
+          "length": "11:54",
+          "why": "FlashAttention: tiling to avoid memory traffic."
+        },
+        {
+          "kind": "v",
+          "id": "6uPnLkCiy5g",
+          "role": "next",
+          "title": "PagedAttention: Behind vLLM's Insane Speed",
+          "channel": "Tales Of Tensors",
+          "length": "6:53",
+          "why": "PagedAttention."
+        },
+        {
+          "kind": "v",
+          "id": "McLdlg5Gc9s",
+          "role": "next",
+          "title": "What is vLLM? Efficient AI Inference for Large Language Models",
+          "channel": "IBM Technology",
+          "length": "4:58",
+          "why": "What vLLM is."
+        },
+        {
+          "kind": "v",
+          "id": "yjvMtJNecec",
+          "role": "next",
+          "title": "Gentle Introduction to Static, Dynamic, and Continuous Batching for LLM Inference",
+          "channel": "neuralkian",
+          "length": "7:34",
+          "why": "Static, dynamic and continuous batching."
+        },
+        {
+          "kind": "v",
+          "id": "S-8yr_RibJ4",
+          "role": "next",
+          "title": "Speculative Decoding: When Two LLMs are Faster than One",
+          "channel": "Efficient NLP",
+          "length": "12:46",
+          "why": "Speculative decoding."
+        },
+        {
+          "kind": "v",
+          "id": "VkWlLSTdHs8",
+          "role": "next",
+          "title": "Faster LLMs: Accelerate Inference with Speculative Decoding",
+          "channel": "IBM Technology",
+          "length": "9:39",
+          "why": "Speculative decoding, another angle."
+        }
+      ]
+    },
+    {
+      "key": "quant",
+      "name": "Quantization",
+      "note": "Scale and zero point, memory per weight, and the GPTQ / AWQ / GGUF formats.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "qqN63hbziaI",
+          "role": "best",
+          "title": "What is LLM quantization?",
+          "channel": "Airtrain AI",
+          "length": "5:13",
+          "why": "What LLM quantization is."
+        },
+        {
+          "kind": "v",
+          "id": "idifQfmTjGE",
+          "role": "next",
+          "title": "Quantization in Neural Networks - Basics Explained | Affine and Symmetric Quantization",
+          "channel": "Dingu Sagar",
+          "length": "16:48",
+          "why": "Affine vs symmetric quantization, with the maths."
+        },
+        {
+          "kind": "v",
+          "id": "K75j8MkwgJ0",
+          "role": "next",
+          "title": "Optimize Your AI - Quantization Explained",
+          "channel": "Matt Williams",
+          "length": "12:10",
+          "why": "Quantization levels and what they cost in quality."
+        },
+        {
+          "kind": "v",
+          "id": "mNE_d-C82lI",
+          "role": "next",
+          "title": "Which Quantization Method is Right for You? (GPTQ vs. GGUF vs. AWQ)",
+          "channel": "Maarten Grootendorst",
+          "length": "15:51",
+          "why": "GPTQ vs GGUF vs AWQ."
+        }
+      ]
+    },
+    {
+      "key": "agents",
+      "name": "The Agent Loop & Tools",
+      "note": "An agent as a loop around a model; tool/function calling; ReAct, chain-of-thought and planning; memory and context management; MCP.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "F8NKVhkZZWI",
+          "role": "best",
+          "title": "What are AI Agents?",
+          "channel": "IBM Technology",
+          "length": "12:29",
+          "why": "What AI agents are."
+        },
+        {
+          "kind": "v",
+          "id": "h8gMhXYAv1k",
+          "role": "next",
+          "title": "What is Tool Calling? Connecting LLMs to Your Data",
+          "channel": "IBM Technology",
+          "length": "4:57",
+          "why": "Tool calling."
+        },
+        {
+          "kind": "v",
+          "id": "Qor2VZoBib0",
+          "role": "next",
+          "title": "How does OpenAI Function Calling work?",
+          "channel": "Learn Data with Mark",
+          "length": "5:21",
+          "why": "How function calling works under the hood."
+        },
+        {
+          "kind": "v",
+          "id": "AFE6x81AP4k",
+          "role": "next",
+          "title": "Chain-of-thought prompting - Explained!",
+          "channel": "CodeEmporium",
+          "length": "8:34",
+          "why": "Chain-of-thought prompting."
+        },
+        {
+          "kind": "v",
+          "id": "PB7hrp0mz54",
+          "role": "next",
+          "title": "ReAct Prompting",
+          "channel": "Arize AI",
+          "length": "11:21",
+          "why": "ReAct: reasoning and acting."
+        },
+        {
+          "kind": "v",
+          "id": "MXBxNUnC7iY",
+          "role": "next",
+          "title": "Tree of Thoughts: Deliberate Problem Solving with Large Language Models | Paper Summary",
+          "channel": "Lucas Soares | Automata Learning Lab",
+          "length": "8:16",
+          "why": "Tree of thoughts."
+        },
+        {
+          "kind": "v",
+          "id": "Y-VCZ_KTuzo",
+          "role": "next",
+          "title": "ReAct vs Plan-and-Execute for AI Agents",
+          "channel": "What's AI by Louis-François Bouchard",
+          "length": "16:18",
+          "why": "ReAct vs plan-and-execute."
+        },
+        {
+          "kind": "v",
+          "id": "BacJ6sEhqMo",
+          "role": "next",
+          "title": "The Four Types of Memory Every AI Agent Needs",
+          "channel": "IBM Technology",
+          "length": "10:41",
+          "why": "Types of agent memory."
+        },
+        {
+          "kind": "v",
+          "id": "Qx0fCqpkBus",
+          "role": "next",
+          "title": "What Is Context Engineering? Why It Matters for AI Agents",
+          "channel": "IBM Technology",
+          "length": "9:57",
+          "why": "Context engineering."
+        },
+        {
+          "kind": "v",
+          "id": "cGuyrANVi4A",
+          "role": "next",
+          "title": "How Model Context Protocol (MCP) actually works",
+          "channel": "Google Cloud Tech",
+          "length": "7:58",
+          "why": "How the Model Context Protocol works."
+        },
+        {
+          "kind": "v",
+          "id": "D7_ipDqhtwk",
+          "role": "deeper",
+          "title": "How We Build Effective Agents: Barry Zhang, Anthropic",
+          "channel": "AI Engineer",
+          "length": "15:09",
+          "why": "How Anthropic builds effective agents."
+        }
+      ]
+    },
+    {
+      "key": "rag",
+      "name": "RAG & Retrieval",
+      "note": "The pipeline; chunking; embeddings and vector indexes (HNSW); BM25 and hybrid search with RRF; cross-encoder re-ranking.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "T-D1OfcDW1M",
+          "role": "best",
+          "title": "What is Retrieval-Augmented Generation (RAG)?",
+          "channel": "IBM Technology",
+          "length": "6:36",
+          "why": "What RAG is."
+        },
+        {
+          "kind": "v",
+          "id": "_HQ2H_0Ayy0",
+          "role": "next",
+          "title": "RAG Explained For Beginners",
+          "channel": "KodeKloud",
+          "length": "10:09",
+          "why": "The RAG pipeline end to end."
+        },
+        {
+          "kind": "v",
+          "id": "ZTOtxiWb2bE",
+          "role": "next",
+          "title": "Chunking Strategies Explained",
+          "channel": "Redis",
+          "length": "8:25",
+          "why": "Chunking strategies."
+        },
+        {
+          "kind": "v",
+          "id": "dN0lsF2cvm4",
+          "role": "next",
+          "title": "Vector Databases simply explained! (Embeddings & Indexes)",
+          "channel": "AssemblyAI",
+          "length": "4:23",
+          "why": "Vector databases: embeddings and indexes."
+        },
+        {
+          "kind": "v",
+          "id": "77QH0Y2PYKg",
+          "role": "next",
+          "title": "Vector Database Search - Hierarchical Navigable Small Worlds (HNSW) Explained",
+          "channel": "DataMListic",
+          "length": "8:03",
+          "why": "HNSW."
+        },
+        {
+          "kind": "v",
+          "id": "ruBm9WywevM",
+          "role": "next",
+          "title": "BM25 : The Most Important Text Metric in Data Science",
+          "channel": "ritvikmath",
+          "length": "18:12",
+          "why": "BM25."
+        },
+        {
+          "kind": "v",
+          "id": "2uBcjEecr38",
+          "role": "next",
+          "title": "What is reciprocal rank fusion in hybrid search?",
+          "channel": "Abhishek Thakur",
+          "length": "7:52",
+          "why": "Hybrid search with reciprocal rank fusion."
+        },
+        {
+          "kind": "v",
+          "id": "aVgZE746OXw",
+          "role": "next",
+          "title": "How Retrieval and Reranking works in RAG | Bi Encoder vs Cross Encoder",
+          "channel": "Techventures",
+          "length": "5:15",
+          "why": "Bi-encoder retrieval vs cross-encoder re-ranking."
+        },
+        {
+          "kind": "v",
+          "id": "tLMViADvSNE",
+          "role": "next",
+          "title": "Every RAG Strategy Explained in 13 Minutes (No Fluff)",
+          "channel": "Cole Medin",
+          "length": "12:51",
+          "why": "A survey of RAG strategies."
+        }
+      ]
+    },
+    {
+      "key": "evals",
+      "name": "Evals, Guardrails & Safety",
+      "note": "Designing an eval set, code graders vs LLM judges, RAG metrics, prompt injection, guardrails and human-in-the-loop.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "EN8jVkv0kiw",
+          "role": "best",
+          "title": "Why Everyone Should Know About AI Evals: The Fundamentals Explained",
+          "channel": "ByteByteAI",
+          "length": "9:00",
+          "why": "Why evals matter and what they look like."
+        },
+        {
+          "kind": "v",
+          "id": "trfUBIDeI1Y",
+          "role": "next",
+          "title": "LLM as a Judge: Scaling AI Evaluation Strategies",
+          "channel": "IBM Technology",
+          "length": "6:09",
+          "why": "LLM as a judge."
+        },
+        {
+          "kind": "v",
+          "id": "7_LTU0LA374",
+          "role": "next",
+          "title": "RAG Evaluation: Precision, Recall, Faithfulness, RAGAS Explained Clearly",
+          "channel": "Logical Lenses",
+          "length": "12:19",
+          "why": "RAG evaluation: precision, recall, faithfulness."
+        },
+        {
+          "kind": "v",
+          "id": "jrHRe9lSqqA",
+          "role": "next",
+          "title": "What Is a Prompt Injection Attack?",
+          "channel": "IBM Technology",
+          "length": "10:57",
+          "why": "Prompt injection."
+        },
+        {
+          "kind": "v",
+          "id": "ugY6fQT9cfw",
+          "role": "next",
+          "title": "LLM Guardrails for AI Applications",
+          "channel": "Arize AI",
+          "length": "4:48",
+          "why": "Guardrails for LLM applications."
+        },
+        {
+          "kind": "v",
+          "id": "9Ek2cvIHq1c",
+          "role": "next",
+          "title": "AI Agent Guardrails Simplified - Prompt Injection, PII & More",
+          "channel": "Applied with AI - Sanjay Kumar",
+          "length": "11:05",
+          "why": "Agent guardrails: injection, PII leaks, misuse."
+        },
+        {
+          "kind": "v",
+          "id": "cmEJ-5zYKHA",
+          "role": "next",
+          "title": "Why AI Agents Need A Human in the Loop Now",
+          "channel": "IBM Technology",
+          "length": "7:27",
+          "why": "Why agents need a human in the loop."
+        }
+      ]
+    },
+    {
+      "key": "multi",
+      "name": "Multi-agent Systems & Frameworks",
+      "note": "When to split work across agents, common architectures, model routing, and what the frameworks give you.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "sWH0T4Zez6I",
+          "role": "best",
+          "title": "Multi Agent Systems Explained: How AI Agents & LLMs Work Together",
+          "channel": "IBM Technology",
+          "length": "7:57",
+          "why": "Multi-agent systems."
+        },
+        {
+          "kind": "v",
+          "id": "4nZl32FwU-o",
+          "role": "next",
+          "title": "Conceptual Guide: Multi Agent Architectures",
+          "channel": "LangChain",
+          "length": "8:58",
+          "why": "Multi-agent architectures."
+        },
+        {
+          "kind": "v",
+          "id": "ZVPlLaehjLk",
+          "role": "next",
+          "title": "Agentic AI Frameworks Explained: Workflows, Multi-Agent, & Production",
+          "channel": "IBM Technology",
+          "length": "11:54",
+          "why": "Workflows vs agents vs multi-agent in production."
+        },
+        {
+          "kind": "v",
+          "id": "V_K6PCmdtRg",
+          "role": "next",
+          "title": "What is an LLM Router?",
+          "channel": "Sam Witteveen",
+          "length": "9:16",
+          "why": "Model routing."
+        },
+        {
+          "kind": "v",
+          "id": "qAF1NjEVHhY",
+          "role": "next",
+          "title": "LangChain vs LangGraph: A Tale of Two Frameworks",
+          "channel": "IBM Technology",
+          "length": "9:55",
+          "why": "LangChain vs LangGraph."
+        }
+      ]
+    },
+    {
+      "key": "coding",
+      "name": "Agentic Coding Tools",
+      "note": "How coding agents read a codebase and use tools, giving them context, plans and tests, and reviewing what they write.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "sji7ugaLSXA",
+          "role": "best",
+          "title": "How Coding Agents Actually Work (Animated)",
+          "channel": "Neural Download",
+          "length": "5:25",
+          "why": "How coding agents work, animated."
+        },
+        {
+          "kind": "v",
+          "id": "zAe-sau06io",
+          "role": "next",
+          "title": "How AI Coding Agents Understand Your Codebase & Developer Tools",
+          "channel": "IBM Technology",
+          "length": "6:54",
+          "why": "How coding agents understand a codebase."
+        },
+        {
+          "kind": "v",
+          "id": "mViFYTwWvcM",
+          "role": "next",
+          "title": "Spec-Driven Development: AI Assisted Coding Explained",
+          "channel": "IBM Technology",
+          "length": "9:00",
+          "why": "Spec-driven development with AI."
+        },
+        {
+          "kind": "v",
+          "id": "WwdIYp5fuxY",
+          "role": "next",
+          "title": "My top 6 tips & ways of using Claude Code efficiently",
+          "channel": "Academind",
+          "length": "17:44",
+          "why": "Practical habits for working with Claude Code."
+        }
+      ]
+    }
+  ]
+}

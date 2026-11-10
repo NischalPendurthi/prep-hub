@@ -1,0 +1,772 @@
+{
+  "id": "embedded",
+  "name": "Embedded & Linux Kernel",
+  "blurb": "Short videos only: every pick is 20 minutes or less and covers one or two ideas, ordered as a sequence. Subtopics follow the Embedded C and Embedded Linux guides in Topics.",
+  "method": "<ul><li><b>Length</b>: hard cap of 20 minutes per video; depth comes from a sequence.</li><li><b>Order</b>: picks in a subtopic are in watching order; the first is the starting point.</li><li><b>Sources</b>: Miro Samek (Quantum Leaps) for bare-metal C on Cortex-M, Shawn Hymel (Digi-Key) for FreeRTOS, Johannes 4GNU_Linux for Linux drivers, Rohde &amp; Schwarz for buses.</li></ul>",
+  "subtopics": [
+    {
+      "key": "courses",
+      "name": "Short-video courses",
+      "note": "Every video on this page is 20 minutes or less. Digi-Key's RTOS series and the early Quantum Leaps lessons fit; Johannes 4GNU_Linux covers drivers.",
+      "picks": [
+        {
+          "kind": "l",
+          "id": "PLEBQazB0HUyQ4hAPU1cJED6t3DU0h34bz",
+          "thumb": "F321087yYy4",
+          "role": "course",
+          "title": "Introduction to RTOS",
+          "channel": "DigiKey",
+          "length": "12 videos",
+          "why": "Shawn Hymel's FreeRTOS series for Digi-Key, 10–16 minutes each: tasks, scheduling, queues, mutexes, semaphores, interrupts, priority inversion."
+        },
+        {
+          "kind": "l",
+          "id": "PLPW8O6W-1chwyTzI3BHwBLbGQoPFxPAPM",
+          "thumb": "hnj-7XwTYRI",
+          "role": "course",
+          "title": "Modern Embedded Systems Programming Course",
+          "channel": "Quantum Leaps, LLC",
+          "length": "58 videos",
+          "why": "Miro Samek's Modern Embedded Systems Programming on ARM Cortex-M. Lessons 0–9 and the interrupt lessons fit the cap; later RTOS and state-machine lessons run 20–40 minutes."
+        },
+        {
+          "kind": "l",
+          "id": "PLCGpd0Do5-I3b5TtyqeF1UdyD4C-S-dMa",
+          "thumb": "4tgluSJDA_E",
+          "role": "course",
+          "title": "Let's code a Linux Driver",
+          "channel": "Johannes 4GNU_Linux",
+          "length": "27 videos",
+          "why": "Johannes 4GNU_Linux writes Linux drivers on a Raspberry Pi, one concept per video: modules, char devices, ioctl, device tree, GPIO, interrupts."
+        }
+      ]
+    },
+    {
+      "key": "c",
+      "name": "C for Hardware",
+      "note": "volatile and what it does not do, fixed-width types and integer promotion, bit manipulation, alignment and endianness.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "5MzilJ2-MGY",
+          "role": "best",
+          "title": "#5 Preprocessor and the \"volatile\" keyword in C",
+          "label": "Preprocessor and volatile (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "14:29",
+          "why": "The preprocessor and volatile, on a real Cortex-M."
+        },
+        {
+          "kind": "v",
+          "id": "6tIWFEzzx9I",
+          "role": "next",
+          "title": "How to use the volatile keyword in C?",
+          "channel": "Jacob Sorber",
+          "length": "6:48",
+          "why": "When to use volatile."
+        },
+        {
+          "kind": "v",
+          "id": "7Iru_LM3qY0",
+          "role": "next",
+          "title": "#6 Bit-wise operators in C",
+          "label": "Bitwise operators (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "17:06",
+          "why": "Bitwise operators on hardware registers."
+        },
+        {
+          "kind": "v",
+          "id": "F9742wnBWRc",
+          "role": "next",
+          "title": "How do I Set, Clear, and Toggle a Single Bit?",
+          "channel": "Jacob Sorber",
+          "length": "9:26",
+          "why": "Set, clear and toggle a single bit."
+        },
+        {
+          "kind": "v",
+          "id": "pQs8vp7JOSk",
+          "role": "next",
+          "title": "#7 Arrays and Pointer Arithmetic",
+          "label": "Arrays and pointers (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "15:22",
+          "why": "Arrays and pointer arithmetic."
+        },
+        {
+          "kind": "v",
+          "id": "Ju4KivZIL1g",
+          "role": "next",
+          "title": "#8 Functions in C and the call stack",
+          "label": "Functions and the stack (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "17:06",
+          "why": "Functions and the call stack."
+        },
+        {
+          "kind": "v",
+          "id": "_I-SeeC07Jo",
+          "role": "next",
+          "title": "#9 Modules, Recursion, ARM Application Procedure Call Standard (AAPCS)",
+          "label": "AAPCS (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "19:08",
+          "why": "Modules, recursion and the ARM calling convention (AAPCS)."
+        }
+      ]
+    },
+    {
+      "key": "startup",
+      "name": "Registers, Startup & Linking",
+      "note": "Memory-mapped I/O, register access, reset to main, sections and linker scripts.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "1Kjh0CAgnl4",
+          "role": "best",
+          "title": "#4 How to control the world outside?",
+          "label": "Controlling the world outside (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "16:45",
+          "why": "Controlling hardware through memory-mapped registers."
+        },
+        {
+          "kind": "v",
+          "id": "bY6NQb10AaI",
+          "role": "next",
+          "title": "Memory Mapped IO vs Port Mapped IO (Animation)",
+          "channel": "BitLemon",
+          "length": "6:22",
+          "why": "Memory-mapped vs port-mapped I/O."
+        },
+        {
+          "kind": "v",
+          "id": "N2SDHSLD03Q",
+          "role": "next",
+          "title": "Microcontroller BootUp Sequence: From Power-On Reset to main().",
+          "channel": "BitFlip Academy",
+          "length": "4:55",
+          "why": "Boot sequence from power-on reset to main()."
+        },
+        {
+          "kind": "v",
+          "id": "E8mbtUIpuAM",
+          "role": "next",
+          "title": "Startup Code | Startup file | Reset Handler |Startup in Microcontroller",
+          "channel": "Embedded System Creations",
+          "length": "10:56",
+          "why": "Startup code and the reset handler."
+        },
+        {
+          "kind": "v",
+          "id": "csg7kQ4Sltg",
+          "role": "next",
+          "title": "Firmware Engineer Fundamentals | Linker Scripts",
+          "channel": "MetalSilicon",
+          "length": "8:38",
+          "why": "Linker scripts."
+        },
+        {
+          "kind": "v",
+          "id": "vXTUTjxpX0o",
+          "role": "next",
+          "title": "Linker Script Explained Step by Step | Embedded Systems #EmbeddedSystems#STM32#LinkerScript#Embedded",
+          "channel": "TechFromScratch",
+          "length": "10:40",
+          "why": "A linker script, step by step."
+        }
+      ]
+    },
+    {
+      "key": "irq",
+      "name": "Interrupts & Concurrency on an MCU",
+      "note": "What happens on an interrupt, ISR rules, sharing data with the main loop, ring buffers and watchdogs.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "jP1JymlHUtc",
+          "role": "best",
+          "title": "#16 Interrupts Part-1: What are interrupts, and how they work",
+          "label": "Interrupts part 1 (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "15:58",
+          "why": "What interrupts are and how they work."
+        },
+        {
+          "kind": "v",
+          "id": "o_UaEcbfodo",
+          "role": "next",
+          "title": "#17 interrupts Part-2: How most CPUs (e.g. MSP430) handle interrupts?",
+          "label": "Interrupts part 2 (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "19:52",
+          "why": "How a CPU handles an interrupt."
+        },
+        {
+          "kind": "v",
+          "id": "O0Z1D6p7J5A",
+          "role": "next",
+          "title": "#18 interrupts Part-3: How interrupts work on ARM Cortex-M?",
+          "label": "Interrupts part 3 (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "15:27",
+          "why": "Interrupts on ARM Cortex-M."
+        },
+        {
+          "kind": "v",
+          "id": "3ha72Y8pyD4",
+          "role": "next",
+          "title": "#20 Race Conditions: What are they and how to avoid them?",
+          "label": "Race conditions (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "16:58",
+          "why": "Race conditions between ISRs and the main loop."
+        },
+        {
+          "kind": "v",
+          "id": "AoLLKbvEY8Q",
+          "role": "next",
+          "title": "#21 Foreground-Background Architecture (\"Superloop\")",
+          "label": "Superloop (Quantum Leaps)",
+          "channel": "Quantum Leaps, LLC",
+          "length": "18:37",
+          "why": "The superloop (foreground/background) architecture."
+        },
+        {
+          "kind": "v",
+          "id": "uvD9_Wdtjtw",
+          "role": "next",
+          "title": "Circular Buffer | Circular Buffer Implementation in C",
+          "channel": "TechVedas .learn",
+          "length": "6:24",
+          "why": "Circular buffers in C."
+        },
+        {
+          "kind": "v",
+          "id": "jeWLei8C0S0",
+          "role": "next",
+          "title": "Using The Watchdog Timer To Find Bugs? Embedded System Explained",
+          "channel": "TheFabytm",
+          "length": "10:17",
+          "why": "Using the watchdog."
+        }
+      ]
+    },
+    {
+      "key": "rtos",
+      "name": "RTOS",
+      "note": "When to move from a superloop to an RTOS, tasks and preemptive priority scheduling, queues, mutexes and semaphores, priority inversion.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "F321087yYy4",
+          "role": "best",
+          "title": "Introduction to RTOS Part 1 - What is a Real-Time Operating System (RTOS)? | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "11:34",
+          "why": "What an RTOS is."
+        },
+        {
+          "kind": "v",
+          "id": "JIr7Xm_riRs",
+          "role": "next",
+          "title": "Introduction to RTOS Part 2 - Getting Started with FreeRTOS | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "11:46",
+          "why": "Getting started with FreeRTOS."
+        },
+        {
+          "kind": "v",
+          "id": "95yUbClyf3E",
+          "role": "next",
+          "title": "Introduction to RTOS Part 3 - Task Scheduling | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "10:59",
+          "why": "Task scheduling."
+        },
+        {
+          "kind": "v",
+          "id": "Qske3yZRW5I",
+          "role": "next",
+          "title": "Introduction to RTOS Part 4 - Memory Management | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "10:40",
+          "why": "Memory management and stacks."
+        },
+        {
+          "kind": "v",
+          "id": "pHJ3lxOoWeI",
+          "role": "next",
+          "title": "Introduction to RTOS Part 5 - Queue | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "12:01",
+          "why": "Queues."
+        },
+        {
+          "kind": "v",
+          "id": "I55auRpbiTs",
+          "role": "next",
+          "title": "Introduction to RTOS Part 6 - Mutex | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "13:44",
+          "why": "Mutexes."
+        },
+        {
+          "kind": "v",
+          "id": "5JcMtbA9QEE",
+          "role": "next",
+          "title": "Introduction to RTOS Part 7 - Semaphore | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "12:07",
+          "why": "Semaphores."
+        },
+        {
+          "kind": "v",
+          "id": "qsflCf6ahXU",
+          "role": "next",
+          "title": "Introduction to RTOS Part 9 - Hardware Interrupts | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "15:10",
+          "why": "Hardware interrupts in an RTOS."
+        },
+        {
+          "kind": "v",
+          "id": "hRsWi4HIENc",
+          "role": "next",
+          "title": "Introduction to RTOS Part 10 - Deadlock and Starvation | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "12:18",
+          "why": "Deadlock and starvation."
+        },
+        {
+          "kind": "v",
+          "id": "C2xKhxROmhA",
+          "role": "next",
+          "title": "Introduction to RTOS Part 11 - Priority Inversion | Digi-Key Electronics",
+          "channel": "DigiKey",
+          "length": "12:35",
+          "why": "Priority inversion and inheritance."
+        }
+      ]
+    },
+    {
+      "key": "buses",
+      "name": "Buses & Peripherals",
+      "note": "UART, SPI, I2C and CAN: when to use which; DMA vs interrupts vs polling; debouncing and PWM.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "0rlpwVNyBO8",
+          "role": "best",
+          "title": "Every Hardware Protocol Explained in 6 Minutes",
+          "channel": "Techs Explained",
+          "length": "5:39",
+          "why": "Every hardware protocol in six minutes, for orientation."
+        },
+        {
+          "kind": "v",
+          "id": "sTHckUyxwp8",
+          "role": "next",
+          "title": "Understanding UART",
+          "channel": "Rohde & Schwarz",
+          "length": "6:11",
+          "why": "UART."
+        },
+        {
+          "kind": "v",
+          "id": "0nVNwozXsIc",
+          "role": "next",
+          "title": "Understanding SPI",
+          "channel": "Rohde & Schwarz",
+          "length": "11:50",
+          "why": "SPI."
+        },
+        {
+          "kind": "v",
+          "id": "CAvawEcxoPU",
+          "role": "next",
+          "title": "Understanding I2C",
+          "channel": "Rohde & Schwarz",
+          "length": "10:58",
+          "why": "I2C."
+        },
+        {
+          "kind": "v",
+          "id": "FqLDpHsxvf8",
+          "role": "next",
+          "title": "CAN Bus Explained - A Simple Intro [v1.0 | 2019]",
+          "channel": "CSS Electronics",
+          "length": "8:41",
+          "why": "CAN bus."
+        },
+        {
+          "kind": "v",
+          "id": "s8RGHggL7ws",
+          "role": "next",
+          "title": "DMA Controller: How Peripheral Devices Transfer Data to RAM",
+          "channel": "BitLemon",
+          "length": "8:20",
+          "why": "DMA."
+        },
+        {
+          "kind": "v",
+          "id": "FM5YR5tR7ZU",
+          "role": "next",
+          "title": "Firmware Engineer C Interview Question | Button Debouncing State Machine",
+          "channel": "MetalSilicon",
+          "length": "12:44",
+          "why": "Debouncing a button with a state machine, as an interview question."
+        },
+        {
+          "kind": "v",
+          "id": "JI8Gyz2auAo",
+          "role": "next",
+          "title": "How Pulse Width Modulation (PWM) Works + Example | Embedded Systems Explained",
+          "channel": "TheFabytm",
+          "length": "8:04",
+          "why": "PWM with a timer."
+        }
+      ]
+    },
+    {
+      "key": "boot",
+      "name": "Embedded Linux Boot & Device Tree",
+      "note": "The boot chain (ROM, bootloader, U-Boot, kernel, rootfs) and how the device tree describes hardware.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "XpFsMB6FoOs",
+          "role": "best",
+          "title": "How Does Linux Boot Process Work?",
+          "channel": "ByteByteGo",
+          "length": "4:44",
+          "why": "The Linux boot process at a glance."
+        },
+        {
+          "kind": "v",
+          "id": "6Gzzm6jcNL0",
+          "role": "next",
+          "title": "Embedded Linux Booting Process, BootLoader, kernel, rootFS, init process #embedded_systems #booting",
+          "channel": "EMBEDDED Tech Talks",
+          "length": "4:56",
+          "why": "Embedded Linux boot: bootloader, kernel, rootfs."
+        },
+        {
+          "kind": "v",
+          "id": "rVaiLgXccSE",
+          "role": "next",
+          "title": "Embedded Linux | Introduction To U-Boot | Beginners",
+          "channel": "CoolCamera",
+          "length": "15:37",
+          "why": "Introduction to U-Boot."
+        },
+        {
+          "kind": "v",
+          "id": "_Z65pqLSMi8",
+          "role": "next",
+          "title": "Brief introduction to the Device Tree on GNU/Linux",
+          "channel": "Johannes 4GNU_Linux",
+          "length": "8:07",
+          "why": "The device tree."
+        },
+        {
+          "kind": "v",
+          "id": "ugBZhdaSV4g",
+          "role": "next",
+          "title": "How Linux Works on Any Hardware: The Devicetree Explained",
+          "channel": "The Kernel Log",
+          "length": "6:10",
+          "why": "How one kernel runs on any board: the devicetree."
+        }
+      ]
+    },
+    {
+      "key": "drivers",
+      "name": "Kernel Modules & Drivers",
+      "note": "How kernel code differs, modules, character drivers and file_operations, ioctl and sysfs, platform drivers and probe.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "4tgluSJDA_E",
+          "role": "best",
+          "title": "Let's code a Linux Driver - 1: Hello World Linux Kernel Module",
+          "channel": "Johannes 4GNU_Linux",
+          "length": "12:05",
+          "why": "A hello-world kernel module."
+        },
+        {
+          "kind": "v",
+          "id": "E57_9fid9u4",
+          "role": "next",
+          "title": "Linux device drivers explained - Animated",
+          "channel": "Bit Byte Talks",
+          "length": "11:06",
+          "why": "Linux device drivers, animated."
+        },
+        {
+          "kind": "v",
+          "id": "Zg8tnxR_z94",
+          "role": "next",
+          "title": "Let's code a Linux Driver: 5 - Create a Character Device in a Linux Driver",
+          "channel": "Johannes 4GNU_Linux",
+          "length": "13:28",
+          "why": "Creating a character device."
+        },
+        {
+          "kind": "v",
+          "id": "t2qlo43S_C0",
+          "role": "next",
+          "title": "Let's code a Linux Driver - 12: Introduction to ioctl",
+          "channel": "Johannes 4GNU_Linux",
+          "length": "9:08",
+          "why": "ioctl."
+        },
+        {
+          "kind": "v",
+          "id": "uISVkBNsmkQ",
+          "role": "next",
+          "title": "Let's code a Linux Driver - 19: Create sysfs entries from a Linux Kernel Module",
+          "channel": "Johannes 4GNU_Linux",
+          "length": "14:50",
+          "why": "Creating sysfs entries from a module."
+        },
+        {
+          "kind": "v",
+          "id": "VPKvivKfo1s",
+          "role": "next",
+          "title": "How the Linux Kernel Probes Your Device Drivers",
+          "channel": "Embedded Linux Insights",
+          "length": "10:44",
+          "why": "How the kernel probes drivers."
+        },
+        {
+          "kind": "v",
+          "id": "RPReJToFYEU",
+          "role": "next",
+          "title": "Let's code a Linux Driver - 14: The device tree",
+          "channel": "Johannes 4GNU_Linux",
+          "length": "15:26",
+          "why": "A device-tree-based driver."
+        },
+        {
+          "kind": "v",
+          "id": "_4ZYpnZLAnY",
+          "role": "next",
+          "title": "Let's code a Linux Driver - 23: GPIO interrupts in a Platform Device Driver",
+          "channel": "Johannes 4GNU_Linux",
+          "length": "12:38",
+          "why": "GPIO interrupts in a platform driver."
+        }
+      ]
+    },
+    {
+      "key": "kernel",
+      "name": "Kernel Concurrency, DMA & Barriers",
+      "note": "Interrupt context and bottom halves, spinlocks vs mutexes, memory barriers, DMA and cache coherency.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "iroGoDXS7Bc",
+          "role": "best",
+          "title": "Linux Device Driver (Part 5): Interrupt Handling | Linux Device Driver tutorial | Top half",
+          "channel": "TechoGenius",
+          "length": "15:08",
+          "why": "Interrupt handling in a driver."
+        },
+        {
+          "kind": "v",
+          "id": "AtJZfPl-t_w",
+          "role": "next",
+          "title": "Interrupts: The Hidden World of Linux Performance - Shaghayegh Tavakoli, tonies®",
+          "channel": "The Linux Foundation",
+          "length": "9:19",
+          "why": "Interrupts and Linux performance."
+        },
+        {
+          "kind": "v",
+          "id": "XKBjwQQJ0qk",
+          "role": "next",
+          "title": "What's Spin Lock? Spin Lock Vs. Mutex.",
+          "channel": "Shriram Vasudevan",
+          "length": "5:07",
+          "why": "Spinlock vs mutex."
+        },
+        {
+          "kind": "v",
+          "id": "ga3v3jux7r0",
+          "role": "next",
+          "title": "Let's code a Linux Driver - 28: Mutex exclusive access to shared resources",
+          "channel": "Johannes 4GNU_Linux",
+          "length": "8:27",
+          "why": "Mutex for exclusive access in a driver."
+        },
+        {
+          "kind": "v",
+          "id": "qlkMbxUbKfw",
+          "role": "next",
+          "title": "Memory Barriers - Learn Modern C++",
+          "channel": "Code Blacksmith",
+          "length": "6:56",
+          "why": "Memory barriers."
+        },
+        {
+          "kind": "v",
+          "id": "nh9Af9z7cgE",
+          "role": "next",
+          "title": "Advanced Topics: Hardware Memory Barriers",
+          "channel": "Nick",
+          "length": "19:15",
+          "why": "Hardware memory barriers in depth."
+        }
+      ]
+    },
+    {
+      "key": "rt",
+      "name": "Real-time Linux",
+      "note": "Where latency comes from, PREEMPT_RT, SCHED_FIFO and deadline classes, priority inversion.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "7hwoJanE5-U",
+          "role": "best",
+          "title": "What is a Real Time Linux Kernel?? (They're in systems all around you)",
+          "channel": "SavvyNik",
+          "length": "10:21",
+          "why": "What a real-time kernel is."
+        },
+        {
+          "kind": "v",
+          "id": "FJcc8X4MUxM",
+          "role": "next",
+          "title": "Linux PREEMPT_RT Explained: How Real-Time Linux Works",
+          "channel": "The Kernel Log",
+          "length": "7:19",
+          "why": "How PREEMPT_RT works."
+        },
+        {
+          "kind": "v",
+          "id": "hLzhYW6TvU4",
+          "role": "next",
+          "title": "How Linux CPU Scheduling Really Works: Unmasking CFS & EEVDF",
+          "channel": "The Kernel Log",
+          "length": "7:37",
+          "why": "Linux CPU scheduling: CFS and EEVDF."
+        },
+        {
+          "kind": "v",
+          "id": "2oM7UcClFqk",
+          "role": "next",
+          "title": "SCHED_FIFO vs SCHED_DEADLINE Explained | Deterministic Real-Time Linux Performance",
+          "channel": "SystemDR - Scalable System Design ",
+          "length": "9:39",
+          "why": "SCHED_FIFO vs SCHED_DEADLINE."
+        },
+        {
+          "kind": "v",
+          "id": "KK_FNnxYZw0",
+          "role": "next",
+          "title": "Priority Inversion with Example in Hindi | Real Time Systems",
+          "channel": "Rudra Singh",
+          "length": "8:12",
+          "why": "Priority inversion with examples."
+        }
+      ]
+    },
+    {
+      "key": "debug",
+      "name": "Debugging & Tracing",
+      "note": "perf and flame graphs, gdb with QEMU, JTAG, reading an oops.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "ZVo6GXXcXHQ",
+          "role": "best",
+          "title": "Fastware - perf - How to analyse the performance of my program!",
+          "channel": "Fastware",
+          "length": "12:33",
+          "why": "Using perf to see where time goes."
+        },
+        {
+          "kind": "v",
+          "id": "VEvK0JkPlOY",
+          "role": "next",
+          "title": "Beginners Guide - All About Flame Graphs Visualization | Grafana",
+          "channel": "Grafana",
+          "length": "6:18",
+          "why": "Reading flame graphs."
+        },
+        {
+          "kind": "v",
+          "id": "kyczwhC2G7A",
+          "role": "next",
+          "title": "[qemu / gdb] Linux kernel debugging",
+          "channel": "nasm - RE",
+          "length": "5:59",
+          "why": "Debugging a Linux kernel with QEMU and gdb."
+        },
+        {
+          "kind": "v",
+          "id": "NKsgSN61Yq0",
+          "role": "next",
+          "title": "REAL Debugging Arduino + ESP32 | JTAG Programmer",
+          "channel": "Electronoobs",
+          "length": "9:05",
+          "why": "JTAG debugging on a microcontroller."
+        },
+        {
+          "kind": "v",
+          "id": "lSgzoPf8Rpg",
+          "role": "next",
+          "title": "Linux Kernel Panic Explained: Read the Log & 6 Ways to Debug It | Embedded Linux",
+          "channel": "BSP Blueprint",
+          "length": "10:43",
+          "why": "Reading a kernel panic log and debugging it."
+        }
+      ]
+    },
+    {
+      "key": "build",
+      "name": "Toolchains, Yocto & Buildroot",
+      "note": "Cross-compilers and sysroots, and choosing between Yocto and Buildroot.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "9kp0yUA-KgQ",
+          "role": "best",
+          "title": "'Accidental' CrossCompiler - Computerphile",
+          "channel": "Computerphile",
+          "length": "15:13",
+          "why": "Cross-compilers, by Computerphile."
+        },
+        {
+          "kind": "v",
+          "id": "SoGsKI_nrYU",
+          "role": "next",
+          "title": "Cross compiling for arm or aarch64 on Debian or Ubuntu",
+          "channel": "jensd_be",
+          "length": "12:03",
+          "why": "Cross-compiling for ARM on Debian/Ubuntu."
+        },
+        {
+          "kind": "v",
+          "id": "JMpHInyOdts",
+          "role": "next",
+          "title": "Yocto vs Buildroot",
+          "channel": "Kaizen Labs",
+          "length": "6:45",
+          "why": "Yocto vs Buildroot."
+        },
+        {
+          "kind": "v",
+          "id": "0OYP1b06F7Q",
+          "role": "next",
+          "title": "Intro to Yocto I wish I was given | Part 1: The Basics",
+          "channel": "Tomaž Zaman",
+          "length": "17:49",
+          "why": "Yocto basics."
+        }
+      ]
+    }
+  ]
+}

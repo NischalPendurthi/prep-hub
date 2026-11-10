@@ -1,0 +1,577 @@
+{
+  "id": "compilers",
+  "name": "Compilers",
+  "blurb": "Short videos only: every pick is 20 minutes or less and covers one or two ideas, ordered as a sequence. Subtopics follow the Compilers guide in Topics.",
+  "method": "<ul><li><b>Length</b>: hard cap of 20 minutes per video; depth comes from a sequence.</li><li><b>Order</b>: picks in a subtopic are in watching order; the first is the starting point.</li><li><b>Sources</b>: Sorav Bansal (IIT Delhi) for IR, SSA, dataflow and register allocation; Neso Academy for the front end; short explainers for LLVM, MLIR and ML compilers, where good short material is thin.</li></ul>",
+  "subtopics": [
+    {
+      "key": "courses",
+      "name": "Short-video courses",
+      "note": "Every video on this page is 20 minutes or less. Sorav Bansal's IIT Delhi modules cover IR, SSA, dataflow and register allocation; Neso covers the front end.",
+      "picks": [
+        {
+          "kind": "l",
+          "id": "PLf3ZkSCyj1tf3rPAkOKY5hUzDrDoekAc7",
+          "thumb": "Mcq5gNNDXTw",
+          "role": "course",
+          "title": "Compiler Design by Sorav Bansal - IIT Delhi",
+          "channel": "compilerai",
+          "length": "217 videos",
+          "why": "Sorav Bansal's IIT Delhi compiler course in short modules, following Stanford's Aiken course and going further into optimisation. Some modules exceed 20 minutes and are left out below."
+        },
+        {
+          "kind": "l",
+          "id": "PLBlnK6fEyqRjT3oJxFXRgjPNzeS-LFY-q",
+          "thumb": "TApMNhQPaCM",
+          "role": "course",
+          "title": "Compiler Design",
+          "channel": "Neso Academy",
+          "length": "42 videos",
+          "why": "Neso Academy's front-end series: phases, lexing, grammars, ambiguity, LL(1) parsing, all with solved problems."
+        }
+      ]
+    },
+    {
+      "key": "frontend",
+      "name": "Phases, Lexing & Parsing",
+      "note": "What each compiler phase does, tokens, grammars and ambiguity, ASTs, and top-down parsing. Interviews rarely go deeper than this on the front end.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "4iXDDLwpq7o",
+          "role": "best",
+          "title": "How Compilers Work (The 4 Stages of Compilation)",
+          "channel": "MrBrownCS",
+          "length": "9:44",
+          "why": "The four stages of compilation, at a glance."
+        },
+        {
+          "kind": "v",
+          "id": "TApMNhQPaCM",
+          "role": "next",
+          "title": "Different Phases of Compiler",
+          "channel": "Neso Academy",
+          "length": "19:12",
+          "why": "The phases of a compiler in detail."
+        },
+        {
+          "kind": "v",
+          "id": "MBpMYTTEvLU",
+          "role": "next",
+          "title": "Okay, so why are lexers even needed?",
+          "channel": "Premature Abstraction",
+          "length": "12:57",
+          "why": "Why a separate lexer exists."
+        },
+        {
+          "kind": "v",
+          "id": "MZ9NZdZteG4",
+          "role": "next",
+          "title": "Lexical Analyzer – Tokenization",
+          "channel": "Neso Academy",
+          "length": "9:28",
+          "why": "Tokenization."
+        },
+        {
+          "kind": "v",
+          "id": "bxpc9Pp5pZM",
+          "role": "next",
+          "title": "Parsing Explained - Computerphile",
+          "channel": "Computerphile",
+          "length": "14:58",
+          "why": "Parsing, by Computerphile."
+        },
+        {
+          "kind": "v",
+          "id": "gUaAKAj-rqA",
+          "role": "next",
+          "title": "Ambiguity in CFGs",
+          "channel": "Neso Academy",
+          "length": "6:38",
+          "why": "Ambiguous grammars."
+        },
+        {
+          "kind": "v",
+          "id": "tdygrKkz28s",
+          "role": "next",
+          "title": "Compiler Design Module 16 : Abstract Syntax Tree",
+          "label": "Abstract Syntax Tree (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "5:28",
+          "why": "The abstract syntax tree."
+        },
+        {
+          "kind": "v",
+          "id": "YioXoN9iO7w",
+          "role": "next",
+          "title": "Compiler Design Module 17 : Recursive Descent Parsing Introduction",
+          "label": "Recursive Descent Parsing (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "9:27",
+          "why": "Recursive-descent parsing."
+        },
+        {
+          "kind": "v",
+          "id": "v_wvcuJ6mGY",
+          "role": "next",
+          "title": "Top Down Parsers - LL(1) Parsers",
+          "channel": "Neso Academy",
+          "length": "16:16",
+          "why": "LL(1) parsers."
+        }
+      ]
+    },
+    {
+      "key": "ir",
+      "name": "IR, Three-Address Code & SSA",
+      "note": "Three-address code, basic blocks and the CFG, SSA form, phi nodes, and dominance.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "Mcq5gNNDXTw",
+          "role": "best",
+          "title": "Compiler Design Module 68 : Intermediate Representation",
+          "label": "Intermediate Representation (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "15:25",
+          "why": "Why compilers use intermediate representations."
+        },
+        {
+          "kind": "v",
+          "id": "34_yFle5QI8",
+          "role": "next",
+          "title": "Compiler Design Module 69 : Three Address Code",
+          "label": "Three Address Code (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "16:53",
+          "why": "Three-address code."
+        },
+        {
+          "kind": "v",
+          "id": "yfGuxHCyZvs",
+          "role": "next",
+          "title": "Compiler Design: Basic Blocks and Flow Graphs",
+          "channel": "Anita R",
+          "length": "11:16",
+          "why": "Basic blocks and control-flow graphs."
+        },
+        {
+          "kind": "v",
+          "id": "uqTT3gI7KU8",
+          "role": "next",
+          "title": "Compiler Design Module 70 : Static Single Assignment IR",
+          "label": "Static Single Assignment (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "14:12",
+          "why": "SSA form."
+        },
+        {
+          "kind": "v",
+          "id": "m_LT1jv0ozQ",
+          "role": "next",
+          "title": "Compiler Design Module 71 : Phi Nodes",
+          "label": "Phi Nodes (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "11:47",
+          "why": "Phi nodes."
+        },
+        {
+          "kind": "v",
+          "id": "9ZUaGdzf8uM",
+          "role": "next",
+          "title": "Static Single Assignment Form - Part 3",
+          "channel": "Fernando Magno Quintao Pereira",
+          "length": "14:17",
+          "why": "Dominance frontiers and where phis go."
+        },
+        {
+          "kind": "v",
+          "id": "AUZl6iQzPg0",
+          "role": "quick",
+          "title": "How Go Compiler Uses SSA (Static Single Assignment) | Explained Simply with Real Example",
+          "channel": "nihonsensei",
+          "length": "7:51",
+          "why": "How a real compiler (Go) uses SSA."
+        }
+      ]
+    },
+    {
+      "key": "opt",
+      "name": "Optimisations & Dataflow",
+      "note": "Local and peephole optimisation, constant propagation, dead-code elimination, global dataflow (reaching definitions, liveness), loops.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "dK8SjttPNG4",
+          "role": "best",
+          "title": "Compiler Design Module 72 : Optimization Overview",
+          "label": "Optimization Overview (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "18:03",
+          "why": "Optimisation overview."
+        },
+        {
+          "kind": "v",
+          "id": "lQ1tG9b8Kdk",
+          "role": "next",
+          "title": "Compiler Design Module 74 : Peephole Optimizations",
+          "label": "Peephole Optimizations (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "12:11",
+          "why": "Peephole optimisation."
+        },
+        {
+          "kind": "v",
+          "id": "ckx1aWLrx6U",
+          "role": "next",
+          "title": "Constant Propagation in Compiler Design | Constant Folding in compiler design | Local optimization",
+          "channel": "CSE concepts with Parinita",
+          "length": "7:41",
+          "why": "Constant propagation and folding."
+        },
+        {
+          "kind": "v",
+          "id": "zJpzXWISrhw",
+          "role": "next",
+          "title": "Dead Code Elimination in compiler design | dead code vs unreachable code in c programming",
+          "channel": "CSE concepts with Parinita",
+          "length": "7:23",
+          "why": "Dead-code elimination."
+        },
+        {
+          "kind": "v",
+          "id": "EI56VONzCcc",
+          "role": "next",
+          "title": "Compiler Design Module 75 : Global Optimization",
+          "label": "Global Optimization (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "10:06",
+          "why": "Global optimisation."
+        },
+        {
+          "kind": "v",
+          "id": "NRoF_6NN70M",
+          "role": "next",
+          "title": "Compiler Design Module 89 : Gen and Kill Sets",
+          "label": "Gen and Kill Sets (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "12:03",
+          "why": "Gen and kill sets."
+        },
+        {
+          "kind": "v",
+          "id": "xmj5shfHq4U",
+          "role": "next",
+          "title": "Compiler Design Module 90 : Reaching Definitions",
+          "label": "Reaching Definitions (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "14:40",
+          "why": "Reaching definitions."
+        },
+        {
+          "kind": "v",
+          "id": "5slyZmmtqkk",
+          "role": "next",
+          "title": "Compiler Design Module 94 : Worklist Algorithm",
+          "label": "Worklist Algorithm (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "19:50",
+          "why": "The worklist algorithm."
+        },
+        {
+          "kind": "v",
+          "id": "9VM-nJPwP-0",
+          "role": "next",
+          "title": "Compiler Design Module 114 : Computing Natural Loops",
+          "label": "Computing Natural Loops (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "16:43",
+          "why": "Finding natural loops."
+        },
+        {
+          "kind": "v",
+          "id": "BOrAVwwCXq8",
+          "role": "quick",
+          "title": "Compiler Optimizations",
+          "channel": "Premature Abstraction",
+          "length": "18:21",
+          "why": "A tour of common compiler optimisations."
+        }
+      ]
+    },
+    {
+      "key": "regalloc",
+      "name": "Liveness & Register Allocation",
+      "note": "Live-variable analysis, interference graphs, graph-colouring allocation and spilling.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "T8MZJ5J-tLA",
+          "role": "best",
+          "title": "Compiler Design Module 81 : Liveness Property",
+          "label": "Liveness (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "16:48",
+          "why": "The liveness property."
+        },
+        {
+          "kind": "v",
+          "id": "z7ZVVWRAKu4",
+          "role": "next",
+          "title": "Compiler Design Module 82 : Liveness DFA",
+          "label": "Liveness DFA (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "10:02",
+          "why": "Liveness as a dataflow analysis."
+        },
+        {
+          "kind": "v",
+          "id": "eQMhdY56fws",
+          "role": "next",
+          "title": "Liveness Analysis in Compiler Design for GATE | Live Variable analysis in compiler design examples",
+          "channel": "CSE concepts with Parinita",
+          "length": "8:51",
+          "why": "Liveness worked example."
+        },
+        {
+          "kind": "v",
+          "id": "K3mi2m7ccDQ",
+          "role": "next",
+          "title": "Coloring Code: How Compilers Use Graph Theory",
+          "channel": "Heon Lee",
+          "length": "9:46",
+          "why": "How compilers use graph colouring."
+        },
+        {
+          "kind": "v",
+          "id": "eWp_-XCwN1A",
+          "role": "next",
+          "title": "Register Allocation using Graph Coloring",
+          "channel": "David Broman",
+          "length": "18:23",
+          "why": "Register allocation by graph colouring, worked."
+        },
+        {
+          "kind": "v",
+          "id": "WcYgn1H47Hc",
+          "role": "next",
+          "title": "Compiler Design Module 87 : Limitations of Graph Colouring",
+          "label": "Limitations of Graph Colouring (Sorav Bansal, IIT Delhi)",
+          "channel": "compilerai",
+          "length": "12:23",
+          "why": "Limits of graph colouring."
+        }
+      ]
+    },
+    {
+      "key": "llvm",
+      "name": "LLVM & MLIR",
+      "note": "What LLVM is, reading its IR, the pass pipeline, and why MLIR exists for multi-level lowering.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "HecW5byOrUY",
+          "role": "best",
+          "title": "What Is LLVM?",
+          "channel": "CompilersLab",
+          "length": "5:52",
+          "why": "What LLVM is."
+        },
+        {
+          "kind": "v",
+          "id": "3WojCM9r0Ls",
+          "role": "next",
+          "title": "Why LLVM is a Game Changer for Compilers",
+          "channel": "The Coding Gopher",
+          "length": "6:31",
+          "why": "Why LLVM changed compilers: one IR, many front and back ends."
+        },
+        {
+          "kind": "v",
+          "id": "GiffRLk8nkc",
+          "role": "next",
+          "title": "Introduction to LLVM Passes",
+          "channel": "CompilersLab",
+          "length": "5:10",
+          "why": "LLVM passes."
+        },
+        {
+          "kind": "v",
+          "id": "sXfRNf_EirM",
+          "role": "next",
+          "title": "LLVM and Clang Optimizations: Make Your Code 10X Faster",
+          "channel": "The Coding Gopher",
+          "length": "5:16",
+          "why": "What Clang/LLVM optimisation levels do."
+        },
+        {
+          "kind": "v",
+          "id": "6BwqK6E8v3g",
+          "role": "next",
+          "title": "Read a paper: Multi-level Intermediate Representation (MLIR)",
+          "channel": "Vivek Haldar",
+          "length": "7:42",
+          "why": "The MLIR paper, read aloud and explained."
+        },
+        {
+          "kind": "v",
+          "id": "XnRZA1pz7iw",
+          "role": "next",
+          "title": "2024 EuroLLVM - Teaching MLIR concepts to undergraduate students",
+          "channel": "LLVM",
+          "length": "19:01",
+          "why": "MLIR concepts as taught to undergraduates."
+        },
+        {
+          "kind": "v",
+          "id": "d7KHAVaX_Rs",
+          "role": "quick",
+          "title": "Just In Time (JIT) Compilers - Computerphile",
+          "channel": "Computerphile",
+          "length": "10:41",
+          "why": "JIT compilers."
+        }
+      ]
+    },
+    {
+      "key": "mlcomp",
+      "name": "ML Compilers & Graphs",
+      "note": "Models as operator graphs, ONNX, operator fusion, layout and tiling, torch.compile and XLA.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "cZtXdMao7Ic",
+          "role": "best",
+          "title": "ONNX Explained with Example | Quick ML Tutorial",
+          "channel": "Daniel Krei",
+          "length": "4:33",
+          "why": "ONNX by example."
+        },
+        {
+          "kind": "v",
+          "id": "Wp5PaRpudlk",
+          "role": "next",
+          "title": "Introduction to ONNX Runtime",
+          "channel": "NVIDIA Developer",
+          "length": "8:13",
+          "why": "ONNX Runtime."
+        },
+        {
+          "kind": "v",
+          "id": "7fHwPjKVhmg",
+          "role": "next",
+          "title": "What is Fusion of Tensor Operators?",
+          "channel": "CompilersLab",
+          "length": "9:07",
+          "why": "Fusion of tensor operators."
+        },
+        {
+          "kind": "v",
+          "id": "PBdpNhaBxfc",
+          "role": "next",
+          "title": "Kernel Fusion",
+          "channel": "HPC Education",
+          "length": "6:46",
+          "why": "Kernel fusion and why it saves memory traffic."
+        },
+        {
+          "kind": "v",
+          "id": "G92BCtfTwOE",
+          "role": "next",
+          "title": "Performance x64: Cache Blocking (Matrix Blocking)",
+          "channel": "Creel",
+          "length": "12:24",
+          "why": "Cache blocking (tiling) for matrix multiply."
+        },
+        {
+          "kind": "v",
+          "id": "QUZ4KEDxhCM",
+          "role": "next",
+          "title": "What Is torch.compile? Dynamo, PyTorch & Faster AI Models Explained",
+          "channel": "IBM Technology",
+          "length": "6:53",
+          "why": "What torch.compile does: Dynamo and Inductor."
+        },
+        {
+          "kind": "v",
+          "id": "SMAsCd4W5Z0",
+          "role": "next",
+          "title": "Understanding JAX: JIT, XLA, and Pure Functions Explained",
+          "channel": "Google for Developers",
+          "length": "10:06",
+          "why": "JAX: JIT and XLA."
+        },
+        {
+          "kind": "v",
+          "id": "hllgdI9h-EM",
+          "role": "quick",
+          "title": "How AI Compilers Optimize Model Execution. - The Translator Between Models and Hardware",
+          "channel": "Mini Leviathan",
+          "length": "4:24",
+          "why": "How AI compilers optimise model execution."
+        }
+      ]
+    },
+    {
+      "key": "npu",
+      "name": "Quantization & Accelerators",
+      "note": "Affine quantization (scale, zero point), integer-only arithmetic, systolic arrays, TPUs, and processing-in-memory.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "4PbgmrU8aDU",
+          "role": "best",
+          "title": "Linear Quantization Formula | Quantization | TensorTeach",
+          "channel": "TensorTeach",
+          "length": "6:42",
+          "why": "The linear quantization formula."
+        },
+        {
+          "kind": "v",
+          "id": "idifQfmTjGE",
+          "role": "next",
+          "title": "Quantization in Neural Networks - Basics Explained | Affine and Symmetric Quantization",
+          "channel": "Dingu Sagar",
+          "length": "16:48",
+          "why": "Affine vs symmetric quantization, with the maths."
+        },
+        {
+          "kind": "v",
+          "id": "JC84GCU7zqA",
+          "role": "next",
+          "title": "TPUs, systolic arrays, and bfloat16: accelerate your deep learning | Kaggle",
+          "channel": "Kaggle",
+          "length": "8:01",
+          "why": "TPUs, systolic arrays and bfloat16."
+        },
+        {
+          "kind": "v",
+          "id": "DzeTDFwGcIs",
+          "role": "next",
+          "title": "Systolic Arrays Explained: How AI Chips Work",
+          "channel": "CodeLucky",
+          "length": "4:17",
+          "why": "Systolic arrays."
+        },
+        {
+          "kind": "v",
+          "id": "GKQz4-esU5M",
+          "role": "next",
+          "title": "Tensor Processing Units (TPUs) Explained",
+          "channel": "The Coding Gopher",
+          "length": "16:40",
+          "why": "How TPUs work."
+        },
+        {
+          "kind": "v",
+          "id": "BTnr8z-ePR4",
+          "role": "next",
+          "title": "What is In-Memory Computing?",
+          "channel": "IBM Technology",
+          "length": "9:58",
+          "why": "In-memory computing."
+        }
+      ]
+    }
+  ]
+}

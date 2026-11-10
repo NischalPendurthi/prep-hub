@@ -1,0 +1,806 @@
+{
+  "id": "system-design",
+  "name": "System Design",
+  "blurb": "Short videos only: every pick is 20 minutes or less and covers one or two ideas, ordered as a sequence. Most come from ByteByteGo and Gaurav Sen.",
+  "method": "<ul><li><b>Length</b>: hard cap of 20 minutes per video; depth comes from a sequence.</li><li><b>Order</b>: picks in a subtopic are in watching order; the first is the starting point.</li><li><b>Sources</b>: ByteByteGo (Alex Xu), Gaurav Sen, Hello Interview and Jordan has no life for deeper interview-style takes. Long full-interview walkthroughs are left out; the short case studies plus practising on paper cover the same ground.</li></ul>",
+  "subtopics": [
+    {
+      "key": "courses",
+      "name": "Short-video courses",
+      "note": "Every video on this page is 20 minutes or less. ByteByteGo's videos are 3–10 minutes; Gaurav Sen's are 6–15 and go a little deeper.",
+      "picks": [
+        {
+          "kind": "l",
+          "id": "PLCRMIe5FDPsd0gVs500xeOewfySTsmEjf",
+          "thumb": "BTjxUS_PylA",
+          "role": "course",
+          "title": "System Design Fundamentals",
+          "channel": "ByteByteGo",
+          "length": "100+ videos",
+          "why": "ByteByteGo (Alex Xu) System Design Fundamentals: one concept per short animated video."
+        },
+        {
+          "kind": "l",
+          "id": "PLMCXHnjXnTnvo6alSjVkgxV-VH6EPyvoX",
+          "thumb": "xpDnVSmNFX0",
+          "role": "course",
+          "title": "System Design Playlist",
+          "channel": "Gaurav Sen",
+          "length": "26 videos",
+          "why": "Gaurav Sen's system design playlist. The concept videos fit the cap; the full case studies (Instagram, WhatsApp, Tinder) run 25–45 minutes."
+        },
+        {
+          "kind": "l",
+          "id": "PLCRMIe5FDPseVvwzRiCQBmNOVUIZSSkP8",
+          "thumb": "i7twT3x5yv8",
+          "role": "course",
+          "title": "System Design Interview",
+          "channel": "ByteByteGo",
+          "length": "20 videos",
+          "why": "ByteByteGo's interview series: the framework, estimation, consistent hashing, rate limiters and short case studies."
+        }
+      ]
+    },
+    {
+      "key": "approach",
+      "name": "Interview Approach & Estimation",
+      "note": "The step-by-step framework, back-of-the-envelope estimation, and latency numbers worth knowing.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "i7twT3x5yv8",
+          "role": "best",
+          "title": "System Design Interview: A Step-By-Step Guide",
+          "channel": "ByteByteGo",
+          "length": "9:54",
+          "why": "A step-by-step framework for the interview."
+        },
+        {
+          "kind": "v",
+          "id": "FqR5vESuKe0",
+          "role": "next",
+          "title": "Latency Numbers Programmer Should Know: Crash Course System Design #1",
+          "channel": "ByteByteGo",
+          "length": "6:22",
+          "why": "Latency numbers every programmer should know."
+        },
+        {
+          "kind": "v",
+          "id": "UC5xf8FbdJc",
+          "role": "next",
+          "title": "Back-Of-The-Envelope Estimation / Capacity Planning",
+          "channel": "ByteByteGo",
+          "length": "8:32",
+          "why": "Back-of-the-envelope estimation."
+        },
+        {
+          "kind": "v",
+          "id": "0myM0k1mjZw",
+          "role": "next",
+          "title": "Capacity Planning and Estimation: How much data does YouTube store daily?",
+          "channel": "Gaurav Sen",
+          "length": "13:12",
+          "why": "Capacity planning worked through: how much does YouTube store a day?"
+        },
+        {
+          "kind": "v",
+          "id": "1nENigGr-a0",
+          "role": "next",
+          "title": "System Design Was HARD - Until You Knew the Trade-Offs",
+          "channel": "ByteByteGo",
+          "length": "5:09",
+          "why": "The core trade-offs, part 1."
+        },
+        {
+          "kind": "v",
+          "id": "2g1G8Jr88xU",
+          "role": "next",
+          "title": "System Design Was HARD - Until You Knew the Trade-Offs, Part 2",
+          "channel": "ByteByteGo",
+          "length": "6:12",
+          "why": "The core trade-offs, part 2."
+        },
+        {
+          "kind": "v",
+          "id": "OvufRkoD-D0",
+          "role": "quick",
+          "title": "System Design Interview – BIGGEST Mistakes to Avoid",
+          "channel": "ByteByteGo",
+          "length": "6:48",
+          "why": "The biggest mistakes candidates make."
+        }
+      ]
+    },
+    {
+      "key": "scale",
+      "name": "Scaling & Load Balancing",
+      "note": "Vertical vs horizontal scaling, stateless services, load balancers and their algorithms, proxies and gateways, single points of failure.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "xpDnVSmNFX0",
+          "role": "best",
+          "title": "System Design BASICS: Horizontal vs. Vertical Scaling",
+          "channel": "Gaurav Sen",
+          "length": "7:56",
+          "why": "Horizontal vs vertical scaling."
+        },
+        {
+          "kind": "v",
+          "id": "EWS_CIxttVw",
+          "role": "next",
+          "title": "Scalability Simply Explained in 10 Minutes",
+          "channel": "ByteByteGo",
+          "length": "9:20",
+          "why": "Scalability in ten minutes."
+        },
+        {
+          "kind": "v",
+          "id": "K0Ta65OqQkY",
+          "role": "next",
+          "title": "What is LOAD BALANCING? ⚖️",
+          "channel": "Gaurav Sen",
+          "length": "13:50",
+          "why": "Load balancing."
+        },
+        {
+          "kind": "v",
+          "id": "dBmxNsS3BGE",
+          "role": "next",
+          "title": "Top 6 Load Balancing Algorithms Every Developer Should Know",
+          "channel": "ByteByteGo",
+          "length": "5:18",
+          "why": "Load-balancing algorithms."
+        },
+        {
+          "kind": "v",
+          "id": "RqfaTIWc3LQ",
+          "role": "next",
+          "title": "Reverse Proxy vs API Gateway vs Load Balancer",
+          "channel": "ByteByteGo",
+          "length": "3:06",
+          "why": "Reverse proxy vs API gateway vs load balancer."
+        },
+        {
+          "kind": "v",
+          "id": "-BOysyYErLY",
+          "role": "next",
+          "title": "How to avoid a single point of failure in distributed systems ✅",
+          "channel": "Gaurav Sen",
+          "length": "6:34",
+          "why": "Avoiding single points of failure."
+        },
+        {
+          "kind": "v",
+          "id": "3Lis4w4_bBc",
+          "role": "next",
+          "title": "8 Most Important Tips for Designing Fault-Tolerant System",
+          "channel": "ByteByteGo",
+          "length": "5:11",
+          "why": "Tips for fault-tolerant systems."
+        }
+      ]
+    },
+    {
+      "key": "cache",
+      "name": "Caching & CDNs",
+      "note": "Where caches sit, cache-aside vs write-through vs write-back, eviction, invalidation and stampedes, CDNs, Redis.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "dGAgxozNWFE",
+          "role": "best",
+          "title": "Cache Systems Every Developer Should Know",
+          "channel": "ByteByteGo",
+          "length": "5:48",
+          "why": "The cache layers in a typical system."
+        },
+        {
+          "kind": "v",
+          "id": "zw7VwIlkPPc",
+          "role": "next",
+          "title": "Caching in distributed systems: A friendly introduction",
+          "channel": "Gaurav Sen",
+          "length": "11:25",
+          "why": "Caching in distributed systems."
+        },
+        {
+          "kind": "v",
+          "id": "2zIFUqTx_TU",
+          "role": "next",
+          "title": "5 Caching Strategies | System Design Interview | Cache Aside, Read through, Write through | Patterns",
+          "channel": "SoftwareDude",
+          "length": "8:53",
+          "why": "Five caching strategies: cache-aside, read-through, write-through, write-back, write-around."
+        },
+        {
+          "kind": "v",
+          "id": "wh98s0XhMmQ",
+          "role": "next",
+          "title": "Caching Pitfalls Every Developer Should Know",
+          "channel": "ByteByteGo",
+          "length": "6:41",
+          "why": "Caching pitfalls: stampede, penetration, avalanche."
+        },
+        {
+          "kind": "v",
+          "id": "RI9np1LWzqw",
+          "role": "next",
+          "title": "What Is A CDN? How Does It Work?",
+          "channel": "ByteByteGo",
+          "length": "4:24",
+          "why": "What a CDN is."
+        },
+        {
+          "kind": "v",
+          "id": "z_NbVtbgBJw",
+          "role": "next",
+          "title": "What Is Redis Really About? Why Is It So Popular?",
+          "channel": "ByteByteGo",
+          "length": "9:01",
+          "why": "What Redis is really for."
+        },
+        {
+          "kind": "v",
+          "id": "5TRFpFBccQM",
+          "role": "quick",
+          "title": "System Design: Why is single-threaded Redis so fast?",
+          "channel": "ByteByteGo",
+          "length": "3:39",
+          "why": "Why single-threaded Redis is fast."
+        }
+      ]
+    },
+    {
+      "key": "db",
+      "name": "Databases, Indexes & Storage Engines",
+      "note": "Choosing SQL vs NoSQL, ACID, indexes, B-trees vs LSM trees, key-value stores.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "kkeFE6iRfMM",
+          "role": "best",
+          "title": "How To Choose The Right Database?",
+          "channel": "ByteByteGo",
+          "length": "6:58",
+          "why": "How to choose the right database."
+        },
+        {
+          "kind": "v",
+          "id": "_Ss42Vb1SU4",
+          "role": "next",
+          "title": "SQL vs. NoSQL Explained (in 4 Minutes)",
+          "channel": "Aced (formerly Exponent)",
+          "length": "4:01",
+          "why": "SQL vs NoSQL."
+        },
+        {
+          "kind": "v",
+          "id": "GAe5oB742dw",
+          "role": "next",
+          "title": "ACID Properties in Databases With Examples",
+          "channel": "ByteByteGo",
+          "length": "4:57",
+          "why": "ACID with examples."
+        },
+        {
+          "kind": "v",
+          "id": "BHCSL_ZifI0",
+          "role": "next",
+          "title": "DB Indexing in System Design Interviews - B-tree, Geospatial, Inverted Index, and more!",
+          "channel": "Hello Interview",
+          "length": "14:16",
+          "why": "Database indexing for system design: B-tree, geospatial, inverted."
+        },
+        {
+          "kind": "v",
+          "id": "I6jB0nM9SKU",
+          "role": "next",
+          "title": "The Secret Sauce Behind NoSQL: LSM Tree",
+          "channel": "ByteByteGo",
+          "length": "7:35",
+          "why": "LSM trees."
+        },
+        {
+          "kind": "v",
+          "id": "Q9xD4J3tezw",
+          "role": "next",
+          "title": "How Databases Actually Store Your Data (B-Trees vs LSM Trees Explained)",
+          "channel": "ByteMonk",
+          "length": "11:22",
+          "why": "B-trees vs LSM trees."
+        },
+        {
+          "kind": "v",
+          "id": "Dwt8R0KPu7k",
+          "role": "next",
+          "title": "How Key value Stores Work (Redis, DynamoDB, Memcached)?",
+          "channel": "ByteByteGo",
+          "length": "6:00",
+          "why": "How key-value stores work."
+        }
+      ]
+    },
+    {
+      "key": "partition",
+      "name": "Sharding, Replication & Consistent Hashing",
+      "note": "Partitioning schemes and hot keys, consistent hashing, leader-follower replication and lag.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "5faMjKuB9bc",
+          "role": "best",
+          "title": "What is DATABASE SHARDING?",
+          "channel": "Gaurav Sen",
+          "length": "8:56",
+          "why": "Database sharding."
+        },
+        {
+          "kind": "v",
+          "id": "_1IKwnbscQU",
+          "role": "next",
+          "title": "7 Must-know Strategies to Scale Your Database",
+          "channel": "ByteByteGo",
+          "length": "8:42",
+          "why": "Seven strategies to scale a database."
+        },
+        {
+          "kind": "v",
+          "id": "zaRkONvyGr8",
+          "role": "next",
+          "title": "What is CONSISTENT HASHING and Where is it used?",
+          "channel": "Gaurav Sen",
+          "length": "10:50",
+          "why": "Consistent hashing."
+        },
+        {
+          "kind": "v",
+          "id": "UF9Iqmg94tk",
+          "role": "next",
+          "title": "Consistent Hashing | Algorithms You Should Know #1",
+          "channel": "ByteByteGo",
+          "length": "8:04",
+          "why": "Consistent hashing with virtual nodes."
+        },
+        {
+          "kind": "v",
+          "id": "bI8Ry6GhMSE",
+          "role": "next",
+          "title": "Database Replication Explained (in 5 Minutes)",
+          "channel": "Aced (formerly Exponent)",
+          "length": "5:02",
+          "why": "Database replication."
+        },
+        {
+          "kind": "v",
+          "id": "jLEp1XI_L6Q",
+          "role": "next",
+          "title": "Database Replication & Sharding Explained",
+          "channel": "Hayk Simonyan",
+          "length": "6:53",
+          "why": "Replication and sharding together."
+        },
+        {
+          "kind": "v",
+          "id": "_5vrfuwhvlQ",
+          "role": "deeper",
+          "title": "How databases scale writes: The power of the log ✍️🗒️",
+          "channel": "Gaurav Sen",
+          "length": "17:22",
+          "why": "How databases scale writes with a log."
+        }
+      ]
+    },
+    {
+      "key": "consistency",
+      "name": "CAP, Consistency & Consensus",
+      "note": "CAP and PACELC, strong vs eventual consistency, consensus with Raft, and distributed transactions (2PC vs saga).",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "BHqjEjzAicA",
+          "role": "best",
+          "title": "CAP Theorem Simplified",
+          "channel": "ByteByteGo",
+          "length": "5:33",
+          "why": "CAP theorem."
+        },
+        {
+          "kind": "v",
+          "id": "Qz9DiHng-RM",
+          "role": "next",
+          "title": "Eventual consistency vs Strong consistency (with Example)",
+          "channel": "Techdose",
+          "length": "9:20",
+          "why": "Strong vs eventual consistency with an example."
+        },
+        {
+          "kind": "v",
+          "id": "GeGxgmPTe4c",
+          "role": "next",
+          "title": "Distributed Consensus and Data Replication strategies on the server",
+          "channel": "Gaurav Sen",
+          "length": "15:48",
+          "why": "Consensus and replication strategies."
+        },
+        {
+          "kind": "v",
+          "id": "IujMVjKvWP4",
+          "role": "next",
+          "title": "Understand RAFT without breaking your brain",
+          "channel": "ankush",
+          "length": "8:51",
+          "why": "Raft without breaking your brain."
+        },
+        {
+          "kind": "v",
+          "id": "DOFflggE_0Q",
+          "role": "next",
+          "title": "Distributed Transactions Explained: 2 Phase Commit vs Saga Pattern",
+          "channel": "Hello Interview",
+          "length": "14:46",
+          "why": "Distributed transactions: two-phase commit vs saga."
+        },
+        {
+          "kind": "v",
+          "id": "cTyZ_hbmbDw",
+          "role": "quick",
+          "title": "KISS, SOLID, CAP, BASE: Important Terms You Might Not Know!",
+          "channel": "ByteByteGo",
+          "length": "6:38",
+          "why": "KISS, SOLID, CAP, BASE: terms you'll hear."
+        }
+      ]
+    },
+    {
+      "key": "async",
+      "name": "Queues, Streams & Events",
+      "note": "Message queues, pub/sub, Kafka and why it's fast, event-driven systems, CQRS and event sourcing.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "oUJbuFMyBDk",
+          "role": "best",
+          "title": "What is a MESSAGE QUEUE and Where is it used?",
+          "channel": "Gaurav Sen",
+          "length": "9:59",
+          "why": "Message queues."
+        },
+        {
+          "kind": "v",
+          "id": "FMhbR_kQeHw",
+          "role": "next",
+          "title": "What is the Publisher Subscriber Model?",
+          "channel": "Gaurav Sen",
+          "length": "11:25",
+          "why": "Publish-subscribe."
+        },
+        {
+          "kind": "v",
+          "id": "-RDyEFvnTXI",
+          "role": "next",
+          "title": "Apache Kafka Fundamentals You Should Know",
+          "channel": "ByteByteGo",
+          "length": "4:55",
+          "why": "Kafka fundamentals."
+        },
+        {
+          "kind": "v",
+          "id": "UNUz1-msbOM",
+          "role": "next",
+          "title": "System Design: Why is Kafka fast?",
+          "channel": "ByteByteGo",
+          "length": "5:02",
+          "why": "Why Kafka is fast."
+        },
+        {
+          "kind": "v",
+          "id": "x4k1XEjNzYQ",
+          "role": "next",
+          "title": "Kafka vs. RabbitMQ vs. Messaging Middleware vs. Pulsar",
+          "channel": "ByteByteGo",
+          "length": "4:31",
+          "why": "Kafka vs RabbitMQ vs Pulsar."
+        },
+        {
+          "kind": "v",
+          "id": "rJHTK2TfZ1I",
+          "role": "next",
+          "title": "What's an Event Driven System?",
+          "channel": "Gaurav Sen",
+          "length": "14:59",
+          "why": "Event-driven systems."
+        },
+        {
+          "kind": "v",
+          "id": "SvjdJoNPcHs",
+          "role": "next",
+          "title": "Mastering CQRS in Just 5 Minutes",
+          "channel": "ByteMonk",
+          "length": "5:48",
+          "why": "CQRS."
+        },
+        {
+          "kind": "v",
+          "id": "ID-_ic1fLkY",
+          "role": "next",
+          "title": "Master Event Sourcing in Just 10 Minutes",
+          "channel": "ByteMonk",
+          "length": "10:48",
+          "why": "Event sourcing."
+        }
+      ]
+    },
+    {
+      "key": "api",
+      "name": "APIs & Communication",
+      "note": "REST, gRPC and GraphQL, API design, pagination, idempotency, real-time options (polling, SSE, WebSockets), auth.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "-mN3VyJuCjM",
+          "role": "best",
+          "title": "What Is REST API? Examples And How To Use It: Crash Course System Design #3",
+          "channel": "ByteByteGo",
+          "length": "5:21",
+          "why": "REST APIs."
+        },
+        {
+          "kind": "v",
+          "id": "_YlYuNMTCc8",
+          "role": "next",
+          "title": "What is an API and how do you design it? 🗒️✅",
+          "channel": "Gaurav Sen",
+          "length": "15:26",
+          "why": "Designing an API."
+        },
+        {
+          "kind": "v",
+          "id": "gnchfOojMk4",
+          "role": "next",
+          "title": "What is RPC? gRPC Introduction.",
+          "channel": "ByteByteGo",
+          "length": "6:09",
+          "why": "RPC and gRPC."
+        },
+        {
+          "kind": "v",
+          "id": "yWzKJPw_VzM",
+          "role": "next",
+          "title": "What Is GraphQL? REST vs. GraphQL",
+          "channel": "ByteByteGo",
+          "length": "5:15",
+          "why": "GraphQL vs REST."
+        },
+        {
+          "kind": "v",
+          "id": "14K_a2kKTxU",
+          "role": "next",
+          "title": "API Pagination: Making Billions of Products Scrolling Possible",
+          "channel": "ByteByteGo",
+          "length": "3:12",
+          "why": "API pagination."
+        },
+        {
+          "kind": "v",
+          "id": "XAccGbtl3Z8",
+          "role": "next",
+          "title": "Idempotency - What it is and How to Implement it",
+          "channel": "Alex Hyett",
+          "length": "8:05",
+          "why": "Idempotency and how to implement it."
+        },
+        {
+          "kind": "v",
+          "id": "3Ud6Ds2abO8",
+          "role": "next",
+          "title": "Long Polling vs SSE vs WebSockets vs QUIC | Simply Explained",
+          "channel": "TechPrep",
+          "length": "10:42",
+          "why": "Long polling vs SSE vs WebSockets."
+        },
+        {
+          "kind": "v",
+          "id": "ZV5yTm4pT8g",
+          "role": "next",
+          "title": "OAuth 2 Explained In Simple Terms",
+          "channel": "ByteByteGo",
+          "length": "4:32",
+          "why": "OAuth 2."
+        },
+        {
+          "kind": "v",
+          "id": "fyTxwIa-1U0",
+          "role": "next",
+          "title": "Session Vs JWT: The Differences You May Not Know!",
+          "channel": "ByteByteGo",
+          "length": "7:00",
+          "why": "Sessions vs JWT."
+        }
+      ]
+    },
+    {
+      "key": "micro",
+      "name": "Microservices & Resilience",
+      "note": "When microservices help and when they don't, API gateways, circuit breakers, retries, and deployment strategies.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "qYhRvH9tJKw",
+          "role": "best",
+          "title": "What is a MICROSERVICE ARCHITECTURE and what are its advantages?",
+          "channel": "Gaurav Sen",
+          "length": "8:19",
+          "why": "Microservice architecture."
+        },
+        {
+          "kind": "v",
+          "id": "lTAcCNbJ7KE",
+          "role": "next",
+          "title": "What Are Microservices Really All About? (And When Not To Use It)",
+          "channel": "ByteByteGo",
+          "length": "4:45",
+          "why": "What microservices are really about, and when not to use them."
+        },
+        {
+          "kind": "v",
+          "id": "nH4qjmP2KEE",
+          "role": "next",
+          "title": "Top 7 Most-Used Distributed System Patterns",
+          "channel": "ByteByteGo",
+          "length": "6:14",
+          "why": "Seven common distributed-system patterns."
+        },
+        {
+          "kind": "v",
+          "id": "dJI2saoM5_k",
+          "role": "next",
+          "title": "Circuit Breaker Pattern in Microservices",
+          "channel": "ByteMonk",
+          "length": "9:54",
+          "why": "Circuit breakers."
+        },
+        {
+          "kind": "v",
+          "id": "RfPNuaj5Ax0",
+          "role": "next",
+          "title": "Top 5 Microservices Resilience Patterns",
+          "channel": "ByteMonk",
+          "length": "6:48",
+          "why": "Resilience patterns: retry, timeout, bulkhead."
+        },
+        {
+          "kind": "v",
+          "id": "AWVTKBUnoIg",
+          "role": "next",
+          "title": "Top 5 Most-Used Deployment Strategies",
+          "channel": "ByteByteGo",
+          "length": "10:00",
+          "why": "Deployment strategies: blue-green, canary, rolling."
+        }
+      ]
+    },
+    {
+      "key": "algos",
+      "name": "Algorithms for System Design",
+      "note": "Bloom filters, rate-limiting algorithms, unique ID generation, geospatial indexes.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "xbgzl2maQUU",
+          "role": "best",
+          "title": "Algorithms You Should Know Before System Design Interviews",
+          "channel": "ByteByteGo",
+          "length": "6:55",
+          "why": "Algorithms worth knowing before a system design interview."
+        },
+        {
+          "kind": "v",
+          "id": "V3pzxngeLqw",
+          "role": "next",
+          "title": "Bloom Filters | Algorithms You Should Know #2 | Real-world Examples",
+          "channel": "ByteByteGo",
+          "length": "5:40",
+          "why": "Bloom filters."
+        },
+        {
+          "kind": "v",
+          "id": "YXkOdWBwqaA",
+          "role": "next",
+          "title": "Rate Limiter System Design: Token Bucket, Leaky Bucket, Scaling",
+          "channel": "ByteByteGo",
+          "length": "7:46",
+          "why": "Rate limiter: token bucket, leaky bucket, scaling."
+        },
+        {
+          "kind": "v",
+          "id": "SnyFRsPtoy4",
+          "role": "next",
+          "title": "Generating Unique IDs at Scale: Inside Twitter’s Snowflake System Design",
+          "channel": "Ultimate System Design",
+          "length": "8:48",
+          "why": "Unique IDs at scale: Twitter's Snowflake."
+        }
+      ]
+    },
+    {
+      "key": "cases",
+      "name": "Case Studies",
+      "note": "Short end-to-end designs. Watch one, then try the next on paper before watching.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "HHUi8F_qAXM",
+          "role": "best",
+          "title": "How Does a URL Shortener Work?",
+          "channel": "ByteByteGo",
+          "length": "6:44",
+          "why": "URL shortener."
+        },
+        {
+          "kind": "v",
+          "id": "okrR1KXNLtA",
+          "role": "next",
+          "title": "FAANG System Design Interview: Design A Chat System (WhatsApp, Facebook Messenger, Discord, Slack)",
+          "channel": "ByteByteGo",
+          "length": "8:45",
+          "why": "Chat system."
+        },
+        {
+          "kind": "v",
+          "id": "FEkXjNFrL1o",
+          "role": "next",
+          "title": "Twitter Timeline Architecture |  Fanout | System Design",
+          "channel": "ByteMonk",
+          "length": "5:43",
+          "why": "Twitter timeline and fan-out."
+        },
+        {
+          "kind": "v",
+          "id": "qogwP78LzAk",
+          "role": "next",
+          "title": "Design the Facebook/Twitter News Feed | Systems Design Questions 3.0 With Ex-Google SWE",
+          "channel": "Jordan has no life",
+          "length": "11:25",
+          "why": "News feed in more depth."
+        },
+        {
+          "kind": "v",
+          "id": "jWRW2xGMqSw",
+          "role": "next",
+          "title": "System Design: Design YouTube",
+          "channel": "ByteByteGo",
+          "length": "7:13",
+          "why": "YouTube."
+        },
+        {
+          "kind": "v",
+          "id": "6u25GckPhLU",
+          "role": "next",
+          "title": "Design a Web Crawler: FAANG Interview Question",
+          "channel": "ByteByteGo",
+          "length": "5:41",
+          "why": "Web crawler."
+        },
+        {
+          "kind": "v",
+          "id": "IScGMqojqKE",
+          "role": "next",
+          "title": "Design a Notification Service (OneSignal) | Systems Design Questions 3.0 With Ex-Google SWE",
+          "channel": "Jordan has no life",
+          "length": "11:33",
+          "why": "Notification service."
+        },
+        {
+          "kind": "v",
+          "id": "O3PwuzCvAjI",
+          "role": "deeper",
+          "title": "How Discord Stores TRILLIONS of Messages",
+          "channel": "ByteByteGo",
+          "length": "7:11",
+          "why": "How Discord stores trillions of messages."
+        }
+      ]
+    }
+  ]
+}
