@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="../shared/hub.css">
+<script src="../shared/hub.js" data-tool="plan" data-private></script>
+<title>Prep Plan</title>
+<meta name="description" content="Day-by-day timetable to Nov 30: exam prep, placement tasks and a nightly revision list built from what you finished.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23087f5b'/%3E%3Crect x='8' y='9' width='16' height='15' rx='2' stroke='white' stroke-width='2.4' fill='none'/%3E%3Cpath d='M8 14h16M12 7v4M20 7v4' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="hubbar" id="hubbar"></nav>
+<main class="wrap">
+  <header class="top">
+    <div>
+      <h1>Prep Plan</h1>
+      <p class="sub" id="sub"></p>
+    </div>
+    <div class="overall" id="overall"></div>
+  </header>
+
+  <div class="exams" id="exams" aria-label="Exams"></div>
+  <nav class="days" id="days" aria-label="Days"></nav>
+
+  <section id="day" aria-live="polite"></section>
+
+  <details class="optional" id="optional">
+    <summary>After Nov 30 (optional)</summary>
+    <ul id="optional-list"></ul>
+  </details>
+
+  <footer>
+    <span>Ticks are saved in this browser only.</span>
+    <button type="button" id="export">Export</button>
+    <button type="button" id="import">Import</button>
+    <input type="file" id="file" accept="application/json,.json" hidden>
+  </footer>
+</main>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -14,6 +14,10 @@ rm -rf _site
 mkdir -p _site/mcq _site/atlas _site/videos
 cp index.html _site/
 cp -r shared guide ladder counter applications _site/
+mkdir -p _site/plan
+cp plan/index.html plan/app.js plan/style.css _site/plan/
+# plan/data.js names private projects, so it is gitignored; a local build serves it, the site reads it from the private repo.
+if [[ -f plan/data.js ]]; then node plan/tools/check.mjs; cp plan/data.js _site/plan/; fi
 mkdir -p _site/projects
 cp private-shell/projects.html _site/projects/index.html
 cp -r mcq/index.html mcq/css mcq/js mcq/data _site/mcq/

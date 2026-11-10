@@ -13,6 +13,7 @@ One site for placement and interview prep, published at **https://nischalpendurt
 | `/atlas/` | CP Atlas: pattern map, templates, problem log, revision queue | `atlas/` (built from `atlas/content/`) |
 | `/ladder/` | Codeforces 2000–2400 ladder, hard drill, segment tree & BIT, PYQ tracker | `ladder/` |
 | `/counter/` | Practice counter with GitHub Gist sync | `counter/` |
+| `/plan/` | Day-by-day timetable to Nov 30: exam prep, placement tasks, carry-over and a nightly revision list built from ticked tasks | `plan/data.js`: gitignored because it names private projects; `projects/publish.sh` uploads it to the private repo as `plan.json` |
 | `/applications/` | Applied companies and roles with status tags, saved in the browser | `applications/` |
 
 ## Shared look

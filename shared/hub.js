@@ -28,6 +28,7 @@
     { id: "topics", name: "Topics", href: "topics/" },
     { id: "mcq", name: "MCQ Prep", href: "mcq/" },
     { id: "videos", name: "Videos", href: "videos/" },
+    { id: "plan", name: "Plan", href: "plan/", private: true },
     { id: "atlas", name: "CP Atlas", href: "atlas/", private: true },
     { id: "ladder", name: "Ladder", href: "ladder/", private: true },
     { id: "counter", name: "Counter", href: "counter/", private: true },

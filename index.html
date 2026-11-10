@@ -66,6 +66,7 @@ a { color: inherit; }
 .t-counter { --tint: #0e8a8a; }
 .t-videos { --tint: #c2410c; }
 .t-applications { --tint: #5f3dc4; }
+.t-plan { --tint: #087f5b; }
 .t-projects { --tint: #a8327a; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .t-guide { --tint: #a99bff; }
@@ -77,6 +78,7 @@ a { color: inherit; }
   :root:not([data-theme="light"]) .t-counter { --tint: #4fd1cf; }
   :root:not([data-theme="light"]) .t-videos { --tint: #fb8a4c; }
   :root:not([data-theme="light"]) .t-applications { --tint: #b197fc; }
+  :root:not([data-theme="light"]) .t-plan { --tint: #51cf9a; }
 }
 :root[data-theme="dark"] .t-guide { --tint: #a99bff; }
 :root[data-theme="dark"] .t-langs { --tint: #f08a5d; }
@@ -87,6 +89,7 @@ a { color: inherit; }
 :root[data-theme="dark"] .t-counter { --tint: #4fd1cf; }
 :root[data-theme="dark"] .t-videos { --tint: #fb8a4c; }
 :root[data-theme="dark"] .t-applications { --tint: #b197fc; }
+:root[data-theme="dark"] .t-plan { --tint: #51cf9a; }
 
 footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var(--hub-ink-3); font-size: .84rem; }
 @media (max-width: 520px) {
@@ -108,6 +111,17 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
   </section>
 
   <section class="grid" aria-label="Tools">
+    <a class="card t-plan" href="plan/" data-private>
+      <div class="card-top">
+        <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4M8 15l2 2 4-4"/></svg></span>
+        <div><h2>Prep Plan</h2><div class="kind">Timetable · to Nov 30</div></div>
+      </div>
+      <p>What to do each day around the exams, with a revision list each night built from what you finished.</p>
+      <div class="chips"><span class="chip">SDE</span><span class="chip">Applied AI</span><span class="chip">Exams</span><span class="chip">Revision</span></div>
+      <div class="stat" data-private data-stat="plan" hidden></div>
+      <span class="open">Open plan →</span>
+    </a>
+
     <a class="card t-guide" href="guide/">
       <div class="card-top">
         <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg></span>
@@ -218,6 +232,7 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
 
 <footer><div class="wrap">Progress is saved in this browser. Nothing leaves your device except GitHub sign-in and the counter's optional Gist sync.</div></footer>
 
+<script src="plan/data.js"></script>
 <script>
 (function () {
   "use strict";
@@ -287,7 +302,27 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
   } catch (e) {}
 
   try {
-    var NAMES = { guide: "C++ / OS Guide", langs: "Language Internals", topics: "Topics", mcq: "MCQ Prep", videos: "Video Picks", atlas: "CP Atlas", ladder: "Ladder", counter: "Practice Counter", applications: "Applications", projects: "My Projects" };
+    var P = window.PLAN || read("plan.data.v1"), ticks = read("plan.v1") || {};
+    if (P) {
+      var d = new Date(), today = d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2);
+      var all = 0, doneN = 0, left = -1;
+      P.days.forEach(function (day) {
+        if (day.date === today) left = 0;
+        day.blocks.forEach(function (b) {
+          (b.tasks || []).forEach(function (t) {
+            all++;
+            if (ticks[t.id]) doneN++;
+            else if (day.date === today) left++;
+          });
+        });
+      });
+      show("plan", (left >= 0 ? "Today: <strong>" + left + "</strong> left · " : "") +
+        "<strong>" + doneN + "</strong> of " + all + " done", doneN / all * 100);
+    }
+  } catch (e) {}
+
+  try {
+    var NAMES = { guide: "C++ / OS Guide", langs: "Language Internals", topics: "Topics", mcq: "MCQ Prep", videos: "Video Picks", atlas: "CP Atlas", ladder: "Ladder", counter: "Practice Counter", applications: "Applications", projects: "My Projects", plan: "Prep Plan" };
     var last = read("hub-last");
     if (last && NAMES[last.tool]) {
       var c = document.getElementById("continue");
