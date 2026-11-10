@@ -1,13 +1,13 @@
 {
   "id": "networks",
   "name": "Computer Networks",
-  "blurb": "One best video per subtopic, mostly from Jim Kurose, co-author of the standard networking textbook. Each comes with a deeper or hands-on alternative and a quick refresher. Watch the best pick, then do that subtopic's MCQs.",
-  "method": "<ul><li><b>Best pick</b>: the clearest correct explanation at interview depth. Most are Jim Kurose's own short lectures for <i>Computer Networking: A Top-Down Approach</i>, so they match the textbook your syllabus is built on.</li><li><b>Go deeper</b>: hands-on or production-level detail, from Ben Eater (real packets on real wires), Hussein Nasser (how backends use TCP, HTTP and TLS) and others.</li><li><b>Quick / visual</b>: short explanations for revision, such as Practical Networking's subnetting and packet-walk videos and 3Blue1Brown on Hamming codes.</li><li>Candidates came from about 5,000 YouTube links in Hacker News comments plus YouTube search for every subtopic. High-view exam channels lost when an English lecture explained the same idea more precisely; numericals are covered by the linked MCQs.</li></ul>",
+  "blurb": "Short videos only: every pick is 20 minutes or less and covers one or two ideas, ordered as a sequence. Most come from Jim Kurose, co-author of the standard textbook, with Neso Academy for numericals.",
+  "method": "<ul><li><b>Length</b>: hard cap of 20 minutes per video; depth comes from a sequence.</li><li><b>Order</b>: picks in a subtopic are in watching order; the first is the starting point.</li><li><b>Sources</b>: Jim Kurose (follows Kurose &amp; Ross), Neso Academy (data link, ARQ and addressing numericals), Ben Eater and Chris Greer for real packets, Hussein Nasser for the backend view.</li><li>Numericals (subnetting, CRC, window sizes, delay) are covered by the linked MCQs.</li></ul>",
   "subtopics": [
     {
       "key": "courses",
-      "name": "Full courses",
-      "note": "Kurose's lectures follow his textbook chapter by chapter; work through them in order on his channel. Ben Eater's series shows the same layers with real hardware.",
+      "name": "Short-video courses",
+      "note": "Every video on this page is 20 minutes or less, so each subtopic is a sequence of short sittings. Kurose's lectures follow his textbook chapter by chapter and supply most picks; Neso fills in the numericals.",
       "picks": [
         {
           "kind": "v",
@@ -16,18 +16,27 @@
           "title": "1.1 Introduction (reposted) - What is the Internet",
           "channel": "JimKurose",
           "length": "13:36",
-          "why": "Start of the textbook author's own lecture series: about 50 videos of 10–30 minutes covering every chapter. Every best pick below except subnetting, TLS and proxies comes from it."
+          "why": "Start of Jim Kurose's lecture series, which follows his Computer Networking textbook. Work through it on his channel in section order."
+        },
+        {
+          "kind": "l",
+          "id": "PLBlnK6fEyqRgMCUAG0XRw78UA8qnv6jEx",
+          "thumb": "VwN91x5i25g",
+          "role": "course",
+          "title": "Computer Networks",
+          "channel": "Neso Academy",
+          "length": "100+ videos",
+          "why": "Neso Academy's networks series in 4–15 minute parts: data link, framing, error detection, ARQ protocols, MAC protocols, addressing, all with solved problems."
         },
         {
           "kind": "l",
           "id": "PLowKtXNTBypH19whXTVoG3oKSuOcw_XeW",
           "thumb": "XaGXPObx2Gs",
-          "role": "deeper",
+          "role": "course",
           "title": "Networking tutorial",
           "channel": "Ben Eater",
           "length": "14 videos",
-          "why": "From voltages on a wire through Ethernet, IP, ARP and a full TCP connection, reading the actual bits at every layer. Nothing else makes the stack this concrete.",
-          "hn": 3
+          "why": "Ben Eater builds the layers up from real signals on a breadboard to a TCP connection, with packet captures."
         }
       ]
     },
@@ -44,16 +53,52 @@
           "title": "1.5 Layering, encapsulation",
           "channel": "JimKurose",
           "length": "10:50",
-          "why": "Why networks are layered, the five-layer Internet stack against the seven-layer OSI model, and how headers wrap each other."
+          "why": "Layering and encapsulation."
         },
         {
           "kind": "v",
-          "id": "YJGGYKAV4pA",
-          "role": "deeper",
-          "title": "How Data moves through the Internet - Networking Fundamentals",
-          "channel": "Practical Networking",
-          "length": "26:47",
-          "why": "Follows one request from your laptop to a server and back, naming the layer and device responsible at each step. Ideal for \"what happens when…\" questions."
+          "id": "FewtLNsjtRA",
+          "role": "next",
+          "title": "Layering in Computer Networks",
+          "channel": "Neso Academy",
+          "length": "7:05",
+          "why": "Why networks are layered."
+        },
+        {
+          "kind": "v",
+          "id": "qBXmbJZQ5rY",
+          "role": "next",
+          "title": "The OSI Reference Model (Part 1)",
+          "channel": "Neso Academy",
+          "length": "7:54",
+          "why": "The OSI model, part 1."
+        },
+        {
+          "kind": "v",
+          "id": "xiGgrQioF2E",
+          "role": "next",
+          "title": "The OSI Reference Model (Part 2)",
+          "channel": "Neso Academy",
+          "length": "11:46",
+          "why": "The OSI model, part 2."
+        },
+        {
+          "kind": "v",
+          "id": "wvPe4Zb0tUA",
+          "role": "next",
+          "title": "The TCP/IP Protocol Suite",
+          "channel": "Neso Academy",
+          "length": "10:09",
+          "why": "The TCP/IP suite and how it maps to OSI."
+        },
+        {
+          "kind": "v",
+          "id": "0pMm_QxCg3I",
+          "role": "next",
+          "title": "Network Devices",
+          "channel": "Neso Academy",
+          "length": "4:47",
+          "why": "Network devices and the layer each works at."
         },
         {
           "kind": "v",
@@ -62,7 +107,7 @@
           "title": "Packet Traveling - How Packets Move Through a Network",
           "channel": "Practical Networking",
           "length": "14:39",
-          "why": "Hosts, switches and routers, and what each one rewrites in a packet as it passes."
+          "why": "A packet's journey through switches and routers."
         }
       ]
     },
@@ -74,12 +119,102 @@
       "picks": [
         {
           "kind": "v",
-          "id": "X2cLpzFRMT4",
+          "id": "lMGWJZLTulY",
           "role": "best",
-          "title": "6.3 Multiple Access links  and protocols",
+          "title": "6.1 Introduction to the Link Layer",
           "channel": "JimKurose",
-          "length": "28:06",
-          "why": "Channel partitioning, random access (ALOHA, CSMA/CD) and taking-turns protocols, with the efficiency reasoning behind each."
+          "length": "11:13",
+          "why": "Link-layer services."
+        },
+        {
+          "kind": "v",
+          "id": "NhpzBldHOYo",
+          "role": "next",
+          "title": "Framing (Part 1)",
+          "channel": "Neso Academy",
+          "length": "7:12",
+          "why": "Framing."
+        },
+        {
+          "kind": "v",
+          "id": "toS0RXNaTaE",
+          "role": "next",
+          "title": "Bit Stuffing",
+          "channel": "Neso Academy",
+          "length": "4:34",
+          "why": "Bit stuffing."
+        },
+        {
+          "kind": "v",
+          "id": "YAjfUc7Tt24",
+          "role": "next",
+          "title": "Multiple Access Protocols",
+          "channel": "Neso Academy",
+          "length": "7:38",
+          "why": "Multiple-access protocols: the taxonomy."
+        },
+        {
+          "kind": "v",
+          "id": "j4-r0e7DjqY",
+          "role": "next",
+          "title": "Pure Aloha",
+          "channel": "Neso Academy",
+          "length": "12:10",
+          "why": "Pure ALOHA and its efficiency."
+        },
+        {
+          "kind": "v",
+          "id": "aqWTNk90zRA",
+          "role": "next",
+          "title": "Slotted Aloha",
+          "channel": "Neso Academy",
+          "length": "9:24",
+          "why": "Slotted ALOHA."
+        },
+        {
+          "kind": "v",
+          "id": "MAZi6VoekYw",
+          "role": "next",
+          "title": "Carrier Sense Multiple Access (CSMA) – Part 1",
+          "channel": "Neso Academy",
+          "length": "12:47",
+          "why": "CSMA, part 1."
+        },
+        {
+          "kind": "v",
+          "id": "PyLlYQXuxvs",
+          "role": "next",
+          "title": "Carrier Sense Multiple Access (CSMA) – Part 2",
+          "channel": "Neso Academy",
+          "length": "13:01",
+          "why": "CSMA/CD and the minimum frame size."
+        },
+        {
+          "kind": "v",
+          "id": "iKn0GzF5-IU",
+          "role": "next",
+          "title": "CSMA/CD and CSMA/CA Explained",
+          "channel": "PowerCert Animated Videos",
+          "length": "6:14",
+          "why": "CSMA/CD vs CSMA/CA."
+        },
+        {
+          "kind": "v",
+          "id": "MzhiVE6OuQA",
+          "role": "next",
+          "title": "Ethernet",
+          "channel": "Neso Academy",
+          "length": "13:05",
+          "why": "Ethernet."
+        },
+        {
+          "kind": "v",
+          "id": "o4xkvyZnhj4",
+          "role": "next",
+          "title": "How L2 Switches Use MAC Addresses",
+          "channel": "CBT Nuggets",
+          "length": "6:41",
+          "why": "How switches learn MAC addresses."
         },
         {
           "kind": "v",
@@ -88,7 +223,7 @@
           "title": "ARP: Mapping between IP and Ethernet | Networking tutorial (9 of 13)",
           "channel": "Ben Eater",
           "length": "10:07",
-          "why": "ARP requests and replies captured off a real network, so you see exactly how an IP address becomes a MAC address."
+          "why": "ARP, with real packets."
         },
         {
           "kind": "v",
@@ -97,7 +232,7 @@
           "title": "Address Resolution Protocol (ARP) in less than 5 minutes",
           "channel": "Practical Networking",
           "length": "4:06",
-          "why": "ARP in four minutes for revision."
+          "why": "ARP in four minutes."
         }
       ]
     },
@@ -114,25 +249,70 @@
           "title": "6.2 Error detection and correction",
           "channel": "JimKurose",
           "length": "8:48",
-          "why": "Parity, two-dimensional parity, checksums and CRC side by side, so the trade-offs are clear."
+          "why": "Parity, checksum and CRC at textbook level."
         },
         {
           "kind": "v",
-          "id": "izG7qT0EpBw",
-          "role": "deeper",
-          "title": "How do CRCs work?",
-          "channel": "Ben Eater",
-          "length": "47:30",
-          "why": "Builds CRC from polynomial division and shows why it catches burst errors. After this, CRC numericals are mechanical."
+          "id": "EMrY-8m8D1E",
+          "role": "next",
+          "title": "Error Detection",
+          "channel": "Neso Academy",
+          "length": "8:08",
+          "why": "Error detection basics."
         },
         {
           "kind": "v",
-          "id": "X8jsijhllIA",
-          "role": "quick",
-          "title": "But what are Hamming codes? The origin of error correction",
-          "channel": "3Blue1Brown",
-          "length": "20:05",
-          "why": "The best intuition for how parity bits can locate an error, not just detect it."
+          "id": "AtVWnyDDaDI",
+          "role": "next",
+          "title": "Checksum",
+          "channel": "Neso Academy",
+          "length": "9:32",
+          "why": "Internet checksum."
+        },
+        {
+          "kind": "v",
+          "id": "A9g6rTMblz4",
+          "role": "next",
+          "title": "Cyclic Redundancy Check (CRC) - Part 1",
+          "channel": "Neso Academy",
+          "length": "9:08",
+          "why": "CRC, part 1: the polynomial division."
+        },
+        {
+          "kind": "v",
+          "id": "wQGwfBS3gpk",
+          "role": "next",
+          "title": "Cyclic Redundancy Check (CRC) - Part 2",
+          "channel": "Neso Academy",
+          "length": "5:45",
+          "why": "CRC, part 2."
+        },
+        {
+          "kind": "v",
+          "id": "tEkePtlujSA",
+          "role": "next",
+          "title": "Cyclic Redundancy Check (Solved Problem)",
+          "channel": "Neso Academy",
+          "length": "8:57",
+          "why": "CRC solved problem."
+        },
+        {
+          "kind": "v",
+          "id": "1A_NcXxdoCc",
+          "role": "next",
+          "title": "Hamming Code | Error Detection",
+          "channel": "Neso Academy",
+          "length": "12:20",
+          "why": "Hamming code: detection."
+        },
+        {
+          "kind": "v",
+          "id": "wbH2VxzmoZk",
+          "role": "next",
+          "title": "Hamming Code | Error Correction",
+          "channel": "Neso Academy",
+          "length": "5:32",
+          "why": "Hamming code: correction."
         }
       ]
     },
@@ -144,21 +324,84 @@
       "picks": [
         {
           "kind": "v",
-          "id": "nyUHUtmxWg0",
+          "id": "ReQiSK8W3Ag",
           "role": "best",
-          "title": "3.4-1 Principles of Reliable Data Transfer  (Part 1)",
-          "channel": "JimKurose",
-          "length": "24:04",
-          "why": "Builds a reliable protocol step by step (checksums, ACKs, sequence numbers, timers), so every ARQ rule has a reason."
+          "title": "Flow Control",
+          "channel": "Neso Academy",
+          "length": "5:15",
+          "why": "Flow control."
         },
         {
           "kind": "v",
-          "id": "vxgH6r-II2Q",
+          "id": "n09DfvemnTQ",
           "role": "next",
-          "title": "3.4-2 Principles of Reliable Data Transfer  (Part 2)",
-          "channel": "JimKurose",
-          "length": "20:52",
-          "why": "Pipelining: Go-Back-N against Selective Repeat, window-size limits and the utilisation formula."
+          "title": "Stop-and-Wait Protocol",
+          "channel": "Neso Academy",
+          "length": "7:26",
+          "why": "Stop-and-wait."
+        },
+        {
+          "kind": "v",
+          "id": "YdkksvhkQGQ",
+          "role": "next",
+          "title": "Stop-and-Wait ARQ Protocol",
+          "channel": "Neso Academy",
+          "length": "6:21",
+          "why": "Stop-and-wait ARQ: timeouts and sequence numbers."
+        },
+        {
+          "kind": "v",
+          "id": "LnbvhoxHn8M",
+          "role": "next",
+          "title": "Sliding Window Protocol",
+          "channel": "Neso Academy",
+          "length": "7:54",
+          "why": "Sliding window and why it improves utilisation."
+        },
+        {
+          "kind": "v",
+          "id": "QD3oCelHJ20",
+          "role": "next",
+          "title": "Go-Back-N ARQ",
+          "channel": "Neso Academy",
+          "length": "10:55",
+          "why": "Go-Back-N."
+        },
+        {
+          "kind": "v",
+          "id": "cqPWjo2iLgk",
+          "role": "next",
+          "title": "Go-Back-N ARQ (Solved Problem 1)",
+          "channel": "Neso Academy",
+          "length": "15:21",
+          "why": "Go-Back-N solved problem."
+        },
+        {
+          "kind": "v",
+          "id": "WfIhQ3o2xow",
+          "role": "next",
+          "title": "Selective Repeat ARQ",
+          "channel": "Neso Academy",
+          "length": "5:07",
+          "why": "Selective Repeat."
+        },
+        {
+          "kind": "v",
+          "id": "gG0xzEHH0iU",
+          "role": "next",
+          "title": "Selective Repeat ARQ (Solved Problem 1)",
+          "channel": "Neso Academy",
+          "length": "5:19",
+          "why": "Selective Repeat solved problem: window size vs sequence space."
+        },
+        {
+          "kind": "v",
+          "id": "_amTFCVhXNw",
+          "role": "next",
+          "title": "Sliding Window Protocol (Solved Problem 1)",
+          "channel": "Neso Academy",
+          "length": "3:44",
+          "why": "Sliding window solved problem."
         }
       ]
     },
@@ -170,12 +413,39 @@
       "picks": [
         {
           "kind": "v",
-          "id": "BWZ-MHIhqjM",
+          "id": "phOlq9SuscM",
           "role": "best",
+          "title": "IPv4 Address (Part 1)",
+          "channel": "Neso Academy",
+          "length": "10:04",
+          "why": "IPv4 addresses, part 1."
+        },
+        {
+          "kind": "v",
+          "id": "m_iCPlVzN_o",
+          "role": "next",
+          "title": "IPv4 Address (Part 2)",
+          "channel": "Neso Academy",
+          "length": "9:12",
+          "why": "IPv4 addresses, part 2."
+        },
+        {
+          "kind": "v",
+          "id": "VkgfyLf1raY",
+          "role": "next",
+          "title": "Classful Addressing (Part 1)",
+          "channel": "Neso Academy",
+          "length": "10:05",
+          "why": "Classful addressing, and why CIDR replaced it."
+        },
+        {
+          "kind": "v",
+          "id": "BWZ-MHIhqjM",
+          "role": "next",
           "title": "What is Subnetting? - Subnetting Mastery - Part 1 of 7",
           "channel": "Practical Networking",
           "length": "8:37",
-          "why": "The clearest start on subnetting, from a CCIE-level instructor. The rest of his seven-part series builds real speed."
+          "why": "What subnetting is."
         },
         {
           "kind": "v",
@@ -184,16 +454,7 @@
           "title": "How to solve ANY Subnetting Problems in 60 seconds or less - Subnetting Mastery - Part 3 of 7",
           "channel": "Practical Networking",
           "length": "6:10",
-          "why": "A reliable method for working out network, broadcast and host range under time pressure in an aptitude round."
-        },
-        {
-          "kind": "v",
-          "id": "sdIpLuIR1ZY",
-          "role": "deeper",
-          "title": "4.3 The Internet Protocol, part 1",
-          "channel": "JimKurose",
-          "length": "30:14",
-          "why": "The IPv4 datagram, addressing, CIDR and how hierarchical addressing enables route aggregation."
+          "why": "Solving subnetting problems fast."
         }
       ]
     },
@@ -205,30 +466,84 @@
       "picks": [
         {
           "kind": "v",
-          "id": "H9DivCEFuUg",
+          "id": "NfHR94JAO-s",
           "role": "best",
-          "title": "4.3 The Internet Protocol, part 2",
+          "title": "4.2 What's inside a router?  Part 1.",
           "channel": "JimKurose",
-          "length": "20:50",
-          "why": "The second half of Kurose's IP section: getting an address, NAT and the move to IPv6."
+          "length": "14:37",
+          "why": "What's inside a router: forwarding and the data plane."
         },
         {
           "kind": "v",
           "id": "rPoalUa4m8E",
-          "role": "deeper",
+          "role": "next",
           "title": "The Internet Protocol | Networking tutorial (8 of 13)",
           "channel": "Ben Eater",
           "length": "9:33",
-          "why": "Reads every IPv4 header field off a real packet: TTL, protocol, checksum and the fragmentation fields."
+          "why": "The IP header, with real packets."
+        },
+        {
+          "kind": "v",
+          "id": "vdajb14Lcu0",
+          "role": "next",
+          "title": "How IP FRAGMENTATION Works",
+          "channel": "Chris Greer",
+          "length": "14:41",
+          "why": "IP fragmentation in a packet capture: ID, MF and offset."
+        },
+        {
+          "kind": "v",
+          "id": "01ajHxPLxAw",
+          "role": "next",
+          "title": "Network Address Translation - Computerphile",
+          "channel": "Computerphile",
+          "length": "10:50",
+          "why": "NAT, by Computerphile."
+        },
+        {
+          "kind": "v",
+          "id": "FTUV0t6JaDA",
+          "role": "next",
+          "title": "NAT Explained - Network Address Translation",
+          "channel": "PowerCert Animated Videos",
+          "length": "4:26",
+          "why": "NAT in four minutes."
+        },
+        {
+          "kind": "v",
+          "id": "oItwDXraK1M",
+          "role": "next",
+          "title": "IPv6 from scratch - the very basics of IPv6 explained",
+          "channel": "OneMarcFifty",
+          "length": "14:34",
+          "why": "IPv6 from scratch."
+        },
+        {
+          "kind": "v",
+          "id": "EHV0Q0R--Ns",
+          "role": "next",
+          "title": "5.6 ICMP: Internet Control Message Protocol",
+          "channel": "JimKurose",
+          "length": "4:53",
+          "why": "ICMP."
+        },
+        {
+          "kind": "v",
+          "id": "up3bcBLZS74",
+          "role": "next",
+          "title": "Traceroute (tracert) Explained - Network Troubleshooting",
+          "channel": "PowerCert Animated Videos",
+          "length": "9:24",
+          "why": "How traceroute uses TTL and ICMP."
         },
         {
           "kind": "v",
           "id": "kKZlPeyef0k",
-          "role": "quick",
+          "role": "deeper",
           "title": "4 5 Middleboxes, Internet architecture",
           "channel": "JimKurose",
           "length": "12:00",
-          "why": "NAT, firewalls and load balancers as middleboxes, and how they bend the end-to-end principle."
+          "why": "Middleboxes and the Internet's architecture."
         }
       ]
     },
@@ -240,30 +555,57 @@
       "picks": [
         {
           "kind": "v",
-          "id": "bdh2kfgxVuw",
+          "id": "Aeb80Q_mJp4",
           "role": "best",
-          "title": "5.2 Routing algorithms: link state routing",
+          "title": "5.1 Introduction to the Network-layer Control Plane",
           "channel": "JimKurose",
-          "length": "20:18",
-          "why": "Dijkstra as routers actually run it, with the oscillation problem and complexity."
+          "length": "6:33",
+          "why": "The network-layer control plane: what routing must do."
         },
         {
           "kind": "v",
-          "id": "jJU2AVX6gpU",
+          "id": "pPtTsMCGjEw",
           "role": "next",
-          "title": "5.2-2 Bellman Ford Distance Vector Routing (updated)",
+          "title": "Network Routing: Dijkstra's Algorithm",
+          "channel": "Anand Seetharam",
+          "length": "19:41",
+          "why": "Dijkstra's algorithm for link-state routing, worked."
+        },
+        {
+          "kind": "v",
+          "id": "JMzbdR9iBFY",
+          "role": "next",
+          "title": "Distance Vector Routing Algorithm in Computer Networks",
+          "channel": "Sudhakar Atchala",
+          "length": "15:14",
+          "why": "Distance-vector routing with Bellman-Ford, worked."
+        },
+        {
+          "kind": "v",
+          "id": "wBvmet19XZU",
+          "role": "next",
+          "title": "L44: Count to Infinity Problem and Solution | Distance Vector Routing | Computer Network Lectures",
+          "channel": "Easy Engineering Classes",
+          "length": "10:48",
+          "why": "Count to infinity and its fixes."
+        },
+        {
+          "kind": "v",
+          "id": "iUQmn3nNjaI",
+          "role": "next",
+          "title": "5.3 Open Shortest Path First (OSPF)",
           "channel": "JimKurose",
-          "length": "21:56",
-          "why": "Distance vector worked through table by table, including count-to-infinity and poisoned reverse."
+          "length": "10:45",
+          "why": "OSPF."
         },
         {
           "kind": "v",
           "id": "2rV4tJkP-CQ",
-          "role": "deeper",
+          "role": "next",
           "title": "5.4 BGP: the Border Gateway Protocol",
           "channel": "JimKurose",
           "length": "18:07",
-          "why": "eBGP and iBGP, path attributes and policy routing: how the Internet's networks actually connect."
+          "why": "BGP between autonomous systems."
         },
         {
           "kind": "v",
@@ -272,7 +614,7 @@
           "title": "EGP / IGP :: Distance Vector / Link State :: Dynamic Routing Protocols :: OSPF EIGRP BGP RIP IS-IS",
           "channel": "Practical Networking",
           "length": "12:11",
-          "why": "Sorts every routing protocol name into the right category in twelve minutes."
+          "why": "IGP vs EGP, distance vector vs link state."
         }
       ]
     },
@@ -284,12 +626,21 @@
       "picks": [
         {
           "kind": "v",
-          "id": "UYJP-6mhF6E",
+          "id": "lAvhH0XJLNE",
           "role": "best",
-          "title": "3.5-1 TCP Reliability, Flow Control, and Connection Management",
+          "title": "3.1 Introduction and Transport-layer Services",
+          "channel": "JimKurose",
+          "length": "9:00",
+          "why": "Transport-layer services."
+        },
+        {
+          "kind": "v",
+          "id": "CekW6ipRrGA",
+          "role": "next",
+          "title": "3.2 Transport layer multiplexing and demultiplexing",
           "channel": "JimKurose",
           "length": "14:20",
-          "why": "Sequence numbers, ACKs, retransmission timers, the handshake and connection close, all in one lecture."
+          "why": "Multiplexing and demultiplexing with ports."
         },
         {
           "kind": "v",
@@ -298,16 +649,34 @@
           "title": "3.3 Connectionless Transport: UDP",
           "channel": "JimKurose",
           "length": "12:20",
-          "why": "What UDP gives you, what it doesn't, and the Internet checksum."
+          "why": "UDP."
         },
         {
           "kind": "v",
-          "id": "qqRYkcta6IE",
-          "role": "deeper",
-          "title": "TCP vs UDP Crash Course",
+          "id": "UYJP-6mhF6E",
+          "role": "next",
+          "title": "3.5-1 TCP Reliability, Flow Control, and Connection Management",
+          "channel": "JimKurose",
+          "length": "14:20",
+          "why": "TCP reliability, flow control and connection management."
+        },
+        {
+          "kind": "v",
+          "id": "bW_BILl7n0Y",
+          "role": "next",
+          "title": "What is the TCP 3-Way Handshake and Why Backend Engineers should understand it",
           "channel": "Hussein Nasser",
-          "length": "40:30",
-          "why": "A backend engineer on how the TCP/UDP choice plays out in real servers: connection cost, head-of-line blocking, statefulness."
+          "length": "11:37",
+          "why": "The 3-way handshake from a backend engineer's view."
+        },
+        {
+          "kind": "v",
+          "id": "HCHFX5O1IaQ",
+          "role": "next",
+          "title": "How TCP Works - The Handshake",
+          "channel": "Chris Greer",
+          "length": "13:53",
+          "why": "The TCP handshake in Wireshark."
         },
         {
           "kind": "v",
@@ -316,7 +685,7 @@
           "title": "TCP connection walkthrough | Networking tutorial (13 of 13)",
           "channel": "Ben Eater",
           "length": "9:31",
-          "why": "A real TCP connection from SYN to FIN in Wireshark, with every flag and sequence number explained."
+          "why": "A TCP connection walkthrough with real packets."
         }
       ]
     },
@@ -328,30 +697,39 @@
       "picks": [
         {
           "kind": "v",
-          "id": "cIHiSR4j3g4",
-          "role": "best",
-          "title": "3 7 TCP Congestion Control",
-          "channel": "JimKurose",
-          "length": "22:28",
-          "why": "Slow start, congestion avoidance, AIMD, Tahoe vs Reno, CUBIC, and delay-based control, with the cwnd graphs interviewers sketch."
-        },
-        {
-          "kind": "v",
           "id": "Fm92xvIp6JY",
-          "role": "next",
+          "role": "best",
           "title": "3.6 Principles of Congestion Control",
           "channel": "JimKurose",
           "length": "15:00",
-          "why": "Why congestion collapse happens at all. Watch it first if the cwnd rules feel arbitrary."
+          "why": "Principles of congestion control."
         },
         {
           "kind": "v",
           "id": "E4I6t0mI_is",
-          "role": "deeper",
+          "role": "next",
           "title": "3.5-2 TCP Reliability, Flow Control, and Congestion Control (part 2/2)",
           "channel": "JimKurose",
           "length": "11:47",
-          "why": "Flow control with rwnd and fast retransmit: the half of the topic that's about the receiver, not the network."
+          "why": "TCP's flow and congestion control."
+        },
+        {
+          "kind": "v",
+          "id": "kRS4J-m5n04",
+          "role": "next",
+          "title": "TCP Congestion Control",
+          "channel": "Anand Seetharam",
+          "length": "11:27",
+          "why": "TCP congestion control: slow start, AIMD, Tahoe and Reno."
+        },
+        {
+          "kind": "v",
+          "id": "IRXP1vJ6-vM",
+          "role": "next",
+          "title": "TCP Congestion Control // Hands-On Deep Dive TCP Analysis with Wireshark",
+          "channel": "Chris Greer",
+          "length": "15:53",
+          "why": "Congestion control seen in Wireshark."
         },
         {
           "kind": "v",
@@ -360,7 +738,7 @@
           "title": "Slow Start vs Congestion Avoidance in TCP",
           "channel": "Hussein Nasser",
           "length": "10:08",
-          "why": "The two phases and the threshold between them, in ten minutes."
+          "why": "Slow start vs congestion avoidance."
         }
       ]
     },
@@ -377,25 +755,52 @@
           "title": "2.2 The Web and HTTP (part 1)",
           "channel": "JimKurose",
           "length": "18:19",
-          "why": "Non-persistent vs persistent connections with RTT counting, message formats, cookies and web caches."
+          "why": "The Web and HTTP: requests, responses, persistent connections, cookies, caching."
         },
         {
           "kind": "v",
-          "id": "0OrmKCB0UrQ",
-          "role": "deeper",
-          "title": "Hyper Text Transfer Protocol Crash Course - HTTP 1.0, 1.1, HTTP/2, HTTP/3",
-          "channel": "Hussein Nasser",
-          "length": "45:35",
-          "why": "Every HTTP version and the exact problem each one solved: pipelining, multiplexing, head-of-line blocking, QUIC."
+          "id": "4M39gEPWPYs",
+          "role": "next",
+          "title": "2.2 The Web and HTTP part 2",
+          "channel": "JimKurose",
+          "length": "13:44",
+          "why": "HTTP part 2: cookies, web caches and conditional GET, HTTP/2."
+        },
+        {
+          "kind": "v",
+          "id": "qmpUfWN7hh4",
+          "role": "next",
+          "title": "HTTP Status Codes Explained In 5 Minutes",
+          "channel": "ByteByteGo",
+          "length": "5:07",
+          "why": "Status codes by class."
+        },
+        {
+          "kind": "v",
+          "id": "HiBDZgTNpXY",
+          "role": "next",
+          "title": "Everything you need to know about HTTP Caching",
+          "channel": "the roadmap",
+          "length": "13:33",
+          "why": "HTTP caching: Cache-Control, ETag, validation."
         },
         {
           "kind": "v",
           "id": "UMwQjFzTQXw",
-          "role": "quick",
+          "role": "next",
           "title": "HTTP 1 Vs HTTP 2 Vs HTTP 3!",
           "channel": "ByteByteGo",
           "length": "7:37",
-          "why": "A clean diagram-driven comparison for revision."
+          "why": "HTTP/1 vs HTTP/2 vs HTTP/3."
+        },
+        {
+          "kind": "v",
+          "id": "HnDsMehSSY4",
+          "role": "next",
+          "title": "HOW QUIC WORKS - Intro to the QUIC Transport Protocol",
+          "channel": "Chris Greer",
+          "length": "8:24",
+          "why": "How QUIC works under HTTP/3."
         }
       ]
     },
@@ -412,16 +817,61 @@
           "title": "2.4 The Domain Name System (DNS)",
           "channel": "JimKurose",
           "length": "19:08",
-          "why": "Root, TLD and authoritative servers, iterative vs recursive queries, records and caching."
+          "why": "DNS: hierarchy, resolution and records."
+        },
+        {
+          "kind": "v",
+          "id": "uOfonONtIuk",
+          "role": "next",
+          "title": "How DNS Works - Computerphile",
+          "channel": "Computerphile",
+          "length": "8:04",
+          "why": "How DNS works, by Computerphile."
+        },
+        {
+          "kind": "v",
+          "id": "PS0UppB3-fg",
+          "role": "next",
+          "title": "DNS recursive query vs. Iterative query",
+          "channel": "Sunny Classroom",
+          "length": "7:55",
+          "why": "Recursive vs iterative DNS queries."
         },
         {
           "kind": "v",
           "id": "e6-TaH5bkjo",
-          "role": "quick",
+          "role": "next",
           "title": "DHCP Explained - Dynamic Host Configuration Protocol",
           "channel": "PowerCert Animated Videos",
           "length": "10:10",
-          "why": "The Discover, Offer, Request, Acknowledge exchange and leases, animated."
+          "why": "DHCP."
+        },
+        {
+          "kind": "v",
+          "id": "kS42C3vqFco",
+          "role": "next",
+          "title": "DHCP explained- DORA Process",
+          "channel": "NETWORKING WITH H",
+          "length": "5:51",
+          "why": "The DHCP DORA exchange."
+        },
+        {
+          "kind": "v",
+          "id": "D3GMrOMR2dk",
+          "role": "next",
+          "title": "2.3 Email",
+          "channel": "JimKurose",
+          "length": "10:29",
+          "why": "Email: SMTP, POP3, IMAP."
+        },
+        {
+          "kind": "v",
+          "id": "8X-DZUIZa94",
+          "role": "next",
+          "title": "Active vs Passive FTP - Understanding FTP Ports",
+          "channel": "jscapeus",
+          "length": "10:32",
+          "why": "FTP's control and data connections, active vs passive."
         }
       ]
     },
@@ -433,12 +883,21 @@
       "picks": [
         {
           "kind": "v",
-          "id": "AlE5X1NlHgg",
+          "id": "rg3O48TDrnc",
           "role": "best",
-          "title": "Transport Layer Security, TLS 1.2 and 1.3 (Explained by Example)",
-          "channel": "Hussein Nasser",
-          "length": "24:20",
-          "why": "Key exchange, why TLS 1.3 needs one fewer round trip, and forward secrecy, all worked by example."
+          "title": "What is Network Security? | Computer Networks Ep. 8.1 | Kurose & Ross",
+          "channel": "Epic Networks Lab",
+          "length": "8:37",
+          "why": "What network security has to provide."
+        },
+        {
+          "kind": "v",
+          "id": "dhNgcz8fEd4",
+          "role": "next",
+          "title": "Principles of Cryptography | Computer Networks Ep. 8.2 | Kurose & Ross",
+          "channel": "Epic Networks Lab",
+          "length": "18:35",
+          "why": "Principles of cryptography: symmetric and public key."
         },
         {
           "kind": "v",
@@ -447,7 +906,25 @@
           "title": "What are SSL/TLS Certificates? Why do we Need them? and How do they Work?",
           "channel": "Hussein Nasser",
           "length": "14:36",
-          "why": "Certificates, CAs and how a browser verifies a site: the trust half of HTTPS."
+          "why": "Certificates and why we need them."
+        },
+        {
+          "kind": "v",
+          "id": "86cQJ0MMses",
+          "role": "next",
+          "title": "TLS Handshake Explained - Computerphile",
+          "channel": "Computerphile",
+          "length": "16:59",
+          "why": "The TLS handshake, by Computerphile."
+        },
+        {
+          "kind": "v",
+          "id": "64geP_LAZ5U",
+          "role": "next",
+          "title": "The TLS Handshake Explained with Example (the Math)",
+          "channel": "Hussein Nasser",
+          "length": "5:40",
+          "why": "TLS handshake with the math."
         },
         {
           "kind": "v",
@@ -456,7 +933,7 @@
           "title": "SSL, TLS, HTTPS Explained",
           "channel": "ByteByteGo",
           "length": "5:54",
-          "why": "The whole HTTPS handshake in one diagram for revision."
+          "why": "SSL, TLS and HTTPS."
         }
       ]
     },
@@ -473,16 +950,43 @@
           "title": "1.4 Performance",
           "channel": "JimKurose",
           "length": "13:56",
-          "why": "The four delay components, packet loss, throughput and the bottleneck link, with the formulas numericals use."
+          "why": "Delay, loss and throughput."
         },
         {
           "kind": "v",
           "id": "f1nUcCdQJ8Y",
-          "role": "deeper",
+          "role": "next",
           "title": "1.3 The network core",
           "channel": "JimKurose",
           "length": "19:04",
-          "why": "Store-and-forward and packet vs circuit switching: the model the delay formulas come from."
+          "why": "The network core: packet vs circuit switching."
+        },
+        {
+          "kind": "v",
+          "id": "wo3M5G9ZHo0",
+          "role": "next",
+          "title": "Latency",
+          "channel": "Neso Academy",
+          "length": "6:15",
+          "why": "Latency components."
+        },
+        {
+          "kind": "v",
+          "id": "vPCKWhXSAEo",
+          "role": "next",
+          "title": "Bandwidth Delay Product",
+          "channel": "Neso Academy",
+          "length": "5:23",
+          "why": "Bandwidth-delay product."
+        },
+        {
+          "kind": "v",
+          "id": "TBD_Bj9PCOw",
+          "role": "next",
+          "title": "Delay (Solved Problem)",
+          "channel": "Neso Academy",
+          "length": "3:49",
+          "why": "Delay solved problem."
         }
       ]
     },
@@ -499,16 +1003,16 @@
           "title": "Proxy vs. Reverse Proxy (Explained by Example)",
           "channel": "Hussein Nasser",
           "length": "11:06",
-          "why": "What each proxy hides, from whom, and what it's used for: caching, TLS termination, load balancing."
+          "why": "Proxy vs reverse proxy."
         },
         {
           "kind": "v",
-          "id": "aKMLgFVxZYk",
-          "role": "deeper",
-          "title": "Load balancing in Layer 4 vs Layer 7 with HAPROXY Examples",
-          "channel": "Hussein Nasser",
-          "length": "37:33",
-          "why": "What a load balancer can see and do at layer 4 vs layer 7, demonstrated with HAProxy."
+          "id": "RcarDmgWezY",
+          "role": "next",
+          "title": "What are L4 Load Balancers and how do they work?",
+          "channel": "Arpit Bhayani",
+          "length": "18:07",
+          "why": "How L4 load balancers work."
         },
         {
           "kind": "v",
@@ -517,7 +1021,25 @@
           "title": "2.6 Video Streaming and Content Distribution Networks",
           "channel": "JimKurose",
           "length": "16:41",
-          "why": "How CDNs choose a server for you (DNS redirection) and adaptive streaming with DASH."
+          "why": "Video streaming and CDNs."
+        },
+        {
+          "kind": "v",
+          "id": "4lb3dAtKcJo",
+          "role": "next",
+          "title": "What happens when you type a URL into your browser?",
+          "channel": "Arpit Bhayani",
+          "length": "10:14",
+          "why": "What happens when you type a URL."
+        },
+        {
+          "kind": "v",
+          "id": "AlkDbnbv7dk",
+          "role": "quick",
+          "title": "What happens when you type a URL into your browser?",
+          "channel": "ByteByteGo",
+          "length": "5:20",
+          "why": "The URL walkthrough in five minutes."
         }
       ]
     }

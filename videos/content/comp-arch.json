@@ -1,717 +1,1130 @@
 {
- "id": "comp-arch",
- "name": "Computer Architecture",
- "blurb": "University lectures for real mastery, centred on Onur Mutlu's ETH Zürich and CMU courses, with expert talks connecting the hardware to the code you write. Best picks commonly run close to two hours.",
- "method": "<ul><li><b>Best pick</b>: the most rigorous lecture on the subtopic, usually from Onur Mutlu's ETH Zürich courses. Digital Design and Computer Architecture covers the core; his graduate Computer Architecture course covers memory, coherence and multicore. The most recent complete edition was preferred where a full lecture was on that topic.</li><li><b>Then watch</b>: the rest of a multi-lecture subject.</li><li><b>Go deeper</b>: other university courses and talks by engineers who work with the hardware.</li><li><b>Quick / visual</b>: short explanations for intuition or revision.</li><li>Candidates came from YouTube links in Hacker News comments plus YouTube search for every subtopic. Exam-oriented numerical walkthroughs lost to lectures that explain why the design is what it is. Picks were chosen from lecturer, topic, length and recommendations; they were not all watched end to end.</li></ul>",
- "subtopics": [
-  {
-   "key": "courses",
-   "name": "Full courses",
-   "note": "If you take one course, take the first and follow it in order. The graduate course assumes it.",
-   "picks": [
+  "id": "comp-arch",
+  "name": "Computer Architecture",
+  "blurb": "Short videos only: every pick is 20 minutes or less and covers one or two ideas, ordered as a sequence. Most come from IIT Bombay's CS305, Ben Juurlink's Hennessy & Patterson series and David Black-Schaffer's short lectures.",
+  "method": "<ul><li><b>Length</b>: hard cap of 20 minutes per video; depth comes from a sequence.</li><li><b>Order</b>: picks in a subtopic are in watching order; the first is the starting point.</li><li><b>Sources</b>: IIT Bombay CS305 (Biswabandan Panda), TU Berlin's Ben Juurlink (follows Hennessy &amp; Patterson), David Black-Schaffer (Uppsala), and animated explainers (BitLemon, Core Dumped) where a picture helps.</li></ul>",
+  "subtopics": [
     {
-     "kind": "l",
-     "id": "PL5Q2soXY2Zi9Eo29LMgKVcaydS7V1zZW3",
-     "thumb": "ubhxKNlOlRg",
-     "role": "course",
-     "title": "Livestream - Digital Design and Computer Architecture - ETH Zürich (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "37 videos",
-     "why": "Onur Mutlu's ETH Zürich course from transistors to out-of-order execution, GPUs, caches and virtual memory. Most best picks for the core topics come from this course or its Spring 2023 edition."
+      "key": "courses",
+      "name": "Short-video courses",
+      "note": "Every video on this page is 20 minutes or less, so each subtopic is a sequence of short sittings. These series supply most of them and are worth following in order.",
+      "picks": [
+        {
+          "kind": "l",
+          "id": "PLw6vmiIQrilTWa5twNV8opVJ3ge_kEfsM",
+          "thumb": "-njP5eg7kUQ",
+          "role": "course",
+          "title": "CS305@IITB: Computer Architecture",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "59 videos",
+          "why": "IIT Bombay's CS305 by Prof. Biswabandan Panda, mostly 10–20 minute lectures: ISA, single-cycle and pipelined CPUs, branch prediction, caches, prefetching, coherence, DRAM, out-of-order execution and Spectre."
+        },
+        {
+          "kind": "l",
+          "id": "PL9YOoYsOKCKA-r0uYHnG53jgU0xyScAdh",
+          "thumb": "Rubrgcmd8_g",
+          "role": "course",
+          "title": "Caches by David Black-Schaffer",
+          "channel": "Prashant Laddha",
+          "length": "12 videos",
+          "why": "David Black-Schaffer (Uppsala) on caches in 4–12 minute parts. His Virtual Memory series is the companion."
+        },
+        {
+          "kind": "l",
+          "id": "PLiwt1iVUib9s2Uo5BeYmwkDFUh70fJPxX",
+          "thumb": "qlH4-oHnBb8",
+          "role": "course",
+          "title": "Virtual Memory",
+          "channel": "David Black-Schaffer",
+          "length": "14 videos",
+          "why": "Virtual memory from first principles in 14 short videos: page tables, translation, faults, TLBs and multi-level tables."
+        },
+        {
+          "kind": "l",
+          "id": "PL9vTTBa7QaQOoMfpP3ztvgyQkPWDPfJez",
+          "thumb": "GYlNoAMBY6o",
+          "role": "course",
+          "title": "Computer architecture from scratch",
+          "channel": "Core Dumped",
+          "length": "6 videos",
+          "why": "Core Dumped's animated build-up from transistors to a CPU running loops. Good for intuition before the courses."
+        }
+      ]
     },
     {
-     "kind": "l",
-     "id": "PL5Q2soXY2Zi8tTLVb-9CUHcfKXLWESjOD",
-     "thumb": "7I-JOd51ctA",
-     "role": "course",
-     "title": "Livestream - Computer Architecture (Fall 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "36 videos",
-     "why": "The graduate course: memory systems, memory controllers, prefetching, multiprocessors, coherence, interconnects and accelerators, at research depth."
+      "key": "isa",
+      "name": "ISA, Microarchitecture & Performance",
+      "note": "The ISA as a contract, the tradeoffs among ISAs, the separation from microarchitecture, and performance as instructions × CPI × cycle time.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "-njP5eg7kUQ",
+          "role": "best",
+          "title": "Lecture-0: Introduction to Computer Architecture",
+          "label": "Introduction to Computer Architecture (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "12:36",
+          "why": "What computer architecture is, and the ISA/microarchitecture split."
+        },
+        {
+          "kind": "v",
+          "id": "Cp9hT3NmIEg",
+          "role": "next",
+          "title": "Lecture-9 ISA",
+          "label": "Instruction Set Architecture (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "13:23",
+          "why": "ISA design choices: operand models, instruction formats, register counts."
+        },
+        {
+          "kind": "v",
+          "id": "4MFg-iGe5Ec",
+          "role": "next",
+          "title": "Lecture-10 X86 ARM ISAs",
+          "label": "x86 and ARM ISAs (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "11:04",
+          "why": "x86 vs ARM: how two real ISAs made different choices."
+        },
+        {
+          "kind": "v",
+          "id": "g16wZWKcao4",
+          "role": "next",
+          "title": "RISC vs CISC - Is it Still a Thing?",
+          "channel": "Gary Explains",
+          "length": "11:18",
+          "why": "RISC vs CISC today, now that x86 decodes into micro-ops."
+        },
+        {
+          "kind": "v",
+          "id": "H7Ayro83-jQ",
+          "role": "next",
+          "title": "Lecture-11 Endianness and Alignment",
+          "label": "Endianness and Alignment (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "10:21",
+          "why": "Endianness and alignment, and why misaligned access costs."
+        },
+        {
+          "kind": "v",
+          "id": "JnPB_5jMjrU",
+          "role": "next",
+          "title": "Lecture-14   The Iron Law",
+          "label": "The Iron Law (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "10:48",
+          "why": "The iron law: time = instructions × CPI × cycle time."
+        },
+        {
+          "kind": "v",
+          "id": "Axx2xuB-Xuo",
+          "role": "next",
+          "title": "1 1 6 Amdahl's Law",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "6:48",
+          "why": "Amdahl's law and the limit it puts on any speed-up."
+        },
+        {
+          "kind": "v",
+          "id": "HLBoEFQkE8U",
+          "role": "next",
+          "title": "Lecture-15: Empirical Evaluation",
+          "label": "Empirical Evaluation (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "12:00",
+          "why": "Benchmarks and summarising performance without fooling yourself."
+        }
+      ]
     },
     {
-     "kind": "l",
-     "id": "PLUl4u3cNGP63VIBQVWguXxZZi0566y7Wf",
-     "thumb": "o7h_sYMk_oc",
-     "role": "deeper",
-     "title": "MIT 6.172 Performance Engineering of Software Systems, Fall 2018",
-     "channel": "MIT OpenCourseWare",
-     "length": "23 videos",
-     "why": "MIT 6.172: assembly, compiler behaviour, caching and parallelism applied to making real programs fast."
+      "key": "pipe",
+      "name": "Pipelining & Hazards",
+      "note": "Data, control and structural hazards, forwarding and stalls, and how precise exceptions constrain the pipeline.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "R-mD-otyJ7E",
+          "role": "best",
+          "title": "Lecture-19: Instruction Pipelining",
+          "label": "Instruction Pipelining (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "6:51",
+          "why": "Why pipeline: overlapping instructions and the ideal speed-up."
+        },
+        {
+          "kind": "v",
+          "id": "riJC3sAekpY",
+          "role": "next",
+          "title": "1 3 2 Canonical 5 Stage Pipeline",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "14:49",
+          "why": "The canonical 5-stage pipeline, stage by stage."
+        },
+        {
+          "kind": "v",
+          "id": "HMzWBSySJHo",
+          "role": "next",
+          "title": "Lecture 21: Instruction Pipelining-III",
+          "label": "Instruction Pipelining III (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "15:47",
+          "why": "Pipeline registers and control, and what limits clock speed."
+        },
+        {
+          "kind": "v",
+          "id": "8yxrT1isnpE",
+          "role": "next",
+          "title": "1 3 4 Structural Hazards&Data Hazards",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "10:36",
+          "why": "Structural and data hazards, RAW/WAR/WAW."
+        },
+        {
+          "kind": "v",
+          "id": "7n5VY1k8a4o",
+          "role": "next",
+          "title": "L8 4 forwarding",
+          "channel": "David Black-Schaffer",
+          "length": "9:03",
+          "why": "Forwarding (bypassing) and when a load-use stall is unavoidable."
+        },
+        {
+          "kind": "v",
+          "id": "vSbux6GhOW8",
+          "role": "next",
+          "title": "Lecture 23: Pipeline hazard mitigations",
+          "label": "Pipeline Hazard Mitigations (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "18:51",
+          "why": "Hazard mitigations: stalls, forwarding, scheduling."
+        },
+        {
+          "kind": "v",
+          "id": "Z8YDfizD7Ms",
+          "role": "next",
+          "title": "1 3 6 Control Hazards",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "9:22",
+          "why": "Control hazards and their cost."
+        },
+        {
+          "kind": "v",
+          "id": "2D1iOdKM_2M",
+          "role": "next",
+          "title": "Lecture 24: Branch Delay Slots",
+          "label": "Branch Delay Slots (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "11:23",
+          "why": "Branch delay slots and why later ISAs dropped them."
+        },
+        {
+          "kind": "v",
+          "id": "95CenH3aZcc",
+          "role": "next",
+          "title": "Lecture 27: Interrupt/Exception handling",
+          "label": "Interrupt and Exception Handling (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "11:54",
+          "why": "Interrupts and exceptions, and precise exceptions in a pipeline."
+        },
+        {
+          "kind": "v",
+          "id": "UhJIYram3js",
+          "role": "next",
+          "title": "1 4 2 Challenges for Longer Pipelines",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "18:40",
+          "why": "Longer pipelines and multicycle operations: what gets harder."
+        }
+      ]
     },
     {
-     "kind": "l",
-     "id": "PL0j-r-omG7i0-mnsxN5T4UcVS1Di0isqf",
-     "thumb": "VJ6tuX5bBf4",
-     "role": "deeper",
-     "title": "[CS61C FA20] Lectures - Great Ideas in Computer Architecture | UC Berkeley",
-     "channel": "Pedro Peixoto",
-     "length": "176 videos",
-     "why": "Berkeley's undergraduate machine structures course: RISC-V assembly, datapaths and caches. A gentler route to the same fundamentals."
+      "key": "branch",
+      "name": "Branch Prediction",
+      "note": "Why prediction accuracy dominates deep pipelines, two-bit counters, global history, two-level, hybrid and modern predictors.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "c0AgNybSf9A",
+          "role": "best",
+          "title": "Lecture 25 Branch Prediction",
+          "label": "Branch Prediction (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "15:07",
+          "why": "Why predict, static schemes and the first dynamic predictors."
+        },
+        {
+          "kind": "v",
+          "id": "UbDIoNY9E0w",
+          "role": "next",
+          "title": "How CPU Branch Prediction Works",
+          "channel": "BitLemon",
+          "length": "11:07",
+          "why": "Animated walk through how modern CPUs predict branches."
+        },
+        {
+          "kind": "v",
+          "id": "PFmx2p6NA0A",
+          "role": "next",
+          "title": "2 1 7 Introduction to Dynamic Branch Prediction",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "9:54",
+          "why": "Branch history tables and two-bit saturating counters."
+        },
+        {
+          "kind": "v",
+          "id": "avp3bDqCXYM",
+          "role": "next",
+          "title": "2 1 8 Advanced Branch Prediction",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "13:49",
+          "why": "Correlating (two-level) predictors."
+        },
+        {
+          "kind": "v",
+          "id": "22VOk9k4ahk",
+          "role": "next",
+          "title": "Global history based branch predictor| Gshare and Gselect predictors | Video 16",
+          "channel": "Nanditha Rao",
+          "length": "14:38",
+          "why": "Global history predictors: gshare and gselect."
+        },
+        {
+          "kind": "v",
+          "id": "-T8yDJ8vTuI",
+          "role": "next",
+          "title": "2 1 9 Tournament Predictors and Branch Prediction Accuracy",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "9:42",
+          "why": "Tournament predictors and measured accuracy."
+        },
+        {
+          "kind": "v",
+          "id": "cNAJ2Xu7XlI",
+          "role": "next",
+          "title": "L9 5 branch tables btb",
+          "channel": "David Black-Schaffer",
+          "length": "5:24",
+          "why": "Branch target buffers: predicting where, not just whether."
+        },
+        {
+          "kind": "v",
+          "id": "_qnVcV2WKEQ",
+          "role": "next",
+          "title": "2 1 12 Increasing Instruction Fetch Bandwidth",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "15:45",
+          "why": "Fetch bandwidth: BTBs, return address stacks, trace caches."
+        }
+      ]
+    },
+    {
+      "key": "ooo",
+      "name": "Out-of-Order & Superscalar Execution",
+      "note": "Register renaming, reservation stations, the reorder buffer, Tomasulo's algorithm and load/store handling.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "8P5bcYTqIbU",
+          "role": "best",
+          "title": "Lecture 28: Intro. to superscalar and out-of-order processors",
+          "label": "Superscalar and Out-of-Order Processors (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "16:34",
+          "why": "From in-order to superscalar and out-of-order: the big picture."
+        },
+        {
+          "kind": "v",
+          "id": "vEW70ruIbZ8",
+          "role": "next",
+          "title": "2 1 2 Dependences and Hazards",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "15:48",
+          "why": "True and name dependences, and which hazards they cause."
+        },
+        {
+          "kind": "v",
+          "id": "ltF1kNtm8Bk",
+          "role": "next",
+          "title": "Register renaming and Register Allocation Table (RAT) | Video 6",
+          "channel": "Nanditha Rao",
+          "length": "19:20",
+          "why": "Register renaming with a register alias table."
+        },
+        {
+          "kind": "v",
+          "id": "y-N0Dsc9LmU",
+          "role": "next",
+          "title": "2 1 3 Dynamic Scheduling Using Tomasulo's Algorithm",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "15:03",
+          "why": "Tomasulo's algorithm: reservation stations and the common data bus."
+        },
+        {
+          "kind": "v",
+          "id": "EzEKGlO9w4Y",
+          "role": "next",
+          "title": "Out-of-Order Execution (Tomasulo's Algorithm)",
+          "channel": "BitLemon",
+          "length": "15:30",
+          "why": "Out-of-order execution animated end to end."
+        },
+        {
+          "kind": "v",
+          "id": "mFtX28lH4O8",
+          "role": "next",
+          "title": "2 1 10 Hardware Based Speculation",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "13:52",
+          "why": "Hardware speculation and the reorder buffer for in-order commit."
+        },
+        {
+          "kind": "v",
+          "id": "Zwh3VKU1d_o",
+          "role": "next",
+          "title": "2 1 5 Extending Tomasulo with Memory Accesses",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "5:56",
+          "why": "Loads and stores in Tomasulo: memory disambiguation."
+        },
+        {
+          "kind": "v",
+          "id": "6jhS75zTj94",
+          "role": "next",
+          "title": "Lecture 42: Speculative Execution",
+          "label": "Speculative Execution (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "14:24",
+          "why": "Speculative execution and recovery from mispredictions."
+        },
+        {
+          "kind": "v",
+          "id": "wGpkiNb_V9c",
+          "role": "next",
+          "title": "2 1 11 Multiple Issue",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "16:19",
+          "why": "Multiple issue: superscalar vs VLIW."
+        },
+        {
+          "kind": "v",
+          "id": "ExzaJxOzHfQ",
+          "role": "next",
+          "title": "2 1 13 Limitations of ILP",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "13:59",
+          "why": "The limits of instruction-level parallelism."
+        }
+      ]
+    },
+    {
+      "key": "cache",
+      "name": "Caches",
+      "note": "Locality, hierarchy design, associativity, replacement and write policies, multi-level caches and the sources of misses.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "A9b4wLjjmOU",
+          "role": "best",
+          "title": "Lecture 29: Memory Hierarchy",
+          "label": "Memory Hierarchy (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "15:11",
+          "why": "The memory hierarchy and locality."
+        },
+        {
+          "kind": "v",
+          "id": "Rl3nZfDD_zc",
+          "role": "next",
+          "title": "Lecture 30: Caches",
+          "label": "Caches (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "16:01",
+          "why": "Cache basics: blocks, tags, hits and misses."
+        },
+        {
+          "kind": "v",
+          "id": "HmeieX9VSUA",
+          "role": "next",
+          "title": "Lecture 31: Cache Mapping Techniques",
+          "label": "Cache Mapping Techniques (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "17:46",
+          "why": "Direct-mapped, set-associative and fully associative mapping."
+        },
+        {
+          "kind": "v",
+          "id": "QPmYclDPkJ0",
+          "role": "next",
+          "title": "1 5 5 Cache Equations for Set Associative Caches",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "9:21",
+          "why": "Address breakdown into tag, index and offset for set-associative caches."
+        },
+        {
+          "kind": "v",
+          "id": "p-UsUuQelUY",
+          "role": "next",
+          "title": "L11 9 replacement policy",
+          "channel": "David Black-Schaffer",
+          "length": "5:52",
+          "why": "Replacement policies: LRU, random and their costs."
+        },
+        {
+          "kind": "v",
+          "id": "wfVy85Dqiyc",
+          "role": "next",
+          "title": "CPU Cache Write Policies (Write Through, Write Back, Write Allocate, No Write Allocate)",
+          "channel": "BitLemon",
+          "length": "7:06",
+          "why": "Write-through vs write-back, write-allocate vs no-write-allocate."
+        },
+        {
+          "kind": "v",
+          "id": "YXkfmyb0_eA",
+          "role": "next",
+          "title": "Cache Miss Types Explained (The 4 C's)",
+          "channel": "BitLemon",
+          "length": "6:47",
+          "why": "Compulsory, capacity, conflict and coherence misses."
+        },
+        {
+          "kind": "v",
+          "id": "stdZqqJ0-Ik",
+          "role": "next",
+          "title": "1 5 6 Cache Metrics and Improving AMAT",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "6:42",
+          "why": "Average memory access time and how to improve it."
+        },
+        {
+          "kind": "v",
+          "id": "7yrK_9PderQ",
+          "role": "next",
+          "title": "Cache Hierarchy: How Modern CPU Caches Are Organized (L1, L2 and L3)",
+          "channel": "BitLemon",
+          "length": "6:53",
+          "why": "How L1, L2 and L3 are organised in modern CPUs."
+        },
+        {
+          "kind": "v",
+          "id": "zJzxHxThgPg",
+          "role": "next",
+          "title": "Lecture 11c. Inclusive, exclusive, and NINE caches",
+          "channel": "CSC-ECE 506: Architecture of Parallel Computers",
+          "length": "6:00",
+          "why": "Inclusive, exclusive and NINE multi-level caches."
+        },
+        {
+          "kind": "v",
+          "id": "dkCM0Hc_v3Y",
+          "role": "next",
+          "title": "3 2 1 Reducing Cache Hit Time",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "10:26",
+          "why": "Optimisations that reduce hit time."
+        },
+        {
+          "kind": "v",
+          "id": "uFV9H0NjrLk",
+          "role": "next",
+          "title": "3 2 3 Increasing Cache Bandwidth",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "11:37",
+          "why": "Raising cache bandwidth: pipelined, banked and non-blocking caches."
+        },
+        {
+          "kind": "v",
+          "id": "fEjXcqMtvcE",
+          "role": "next",
+          "title": "Lecture 34: Cache conscious programming optimizations",
+          "label": "Cache-Conscious Programming (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "14:30",
+          "why": "Writing cache-conscious code: blocking, layout and access order."
+        }
+      ]
+    },
+    {
+      "key": "vm",
+      "name": "Virtual Memory & TLBs in Hardware",
+      "note": "Page-walk hardware, TLB organisation, virtually indexed physically tagged caches and page faults as the hardware sees them.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "qlH4-oHnBb8",
+          "role": "best",
+          "title": "Virtual Memory: 3 What is Virtual Memory?",
+          "channel": "David Black-Schaffer",
+          "length": "8:47",
+          "why": "What virtual memory is and the three problems it solves."
+        },
+        {
+          "kind": "v",
+          "id": "KNUJhZCQZ9c",
+          "role": "next",
+          "title": "Virtual Memory: 5 Page Tables",
+          "channel": "David Black-Schaffer",
+          "length": "6:32",
+          "why": "Page tables."
+        },
+        {
+          "kind": "v",
+          "id": "ZjKS1IbiGDA",
+          "role": "next",
+          "title": "Virtual Memory: 6 Address Translation",
+          "channel": "David Black-Schaffer",
+          "length": "7:34",
+          "why": "Address translation step by step."
+        },
+        {
+          "kind": "v",
+          "id": "bShqyf-hDfg",
+          "role": "next",
+          "title": "Virtual Memory: 8 Page Faults",
+          "channel": "David Black-Schaffer",
+          "length": "6:31",
+          "why": "Page faults from the hardware's side."
+        },
+        {
+          "kind": "v",
+          "id": "Z4kSOv49GNc",
+          "role": "next",
+          "title": "Virtual Memory: 12 Multi-level Page Tables",
+          "channel": "David Black-Schaffer",
+          "length": "7:27",
+          "why": "Multi-level page tables and why they save memory."
+        },
+        {
+          "kind": "v",
+          "id": "uyrSn3qbZ8U",
+          "role": "next",
+          "title": "Virtual Memory: 10 Making Virtual Memory Fast",
+          "channel": "David Black-Schaffer",
+          "length": "9:27",
+          "why": "TLBs: making translation fast."
+        },
+        {
+          "kind": "v",
+          "id": "3sX5obQCHNA",
+          "role": "next",
+          "title": "Virtual Memory: 13 TLBs and Caches",
+          "channel": "David Black-Schaffer",
+          "length": "8:00",
+          "why": "How the TLB and cache are accessed together."
+        },
+        {
+          "kind": "v",
+          "id": "YnXb3p57XnE",
+          "role": "next",
+          "title": "Are Caches Accessed with a Virtual or Physical Address?",
+          "channel": "BitLemon",
+          "length": "9:33",
+          "why": "Virtual vs physical addressing of caches, and VIPT."
+        },
+        {
+          "kind": "v",
+          "id": "_5w5MyTPpKc",
+          "role": "next",
+          "title": "Lecture 36: Virtual Caches",
+          "label": "Virtual Caches (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "16:12",
+          "why": "Virtual caches: synonyms, homonyms and their fixes."
+        }
+      ]
+    },
+    {
+      "key": "prefetch",
+      "name": "Prefetching",
+      "note": "Stream, stride and correlation prefetchers; the accuracy, coverage and timeliness tradeoff; what prefetchers do to your data layout.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "cPpMrxUUSbk",
+          "role": "best",
+          "title": "Lecture 35: Hardware Prefetching",
+          "label": "Hardware Prefetching (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "12:22",
+          "why": "Hardware prefetching: what to fetch, when, and the accuracy/coverage/timeliness trade-off."
+        },
+        {
+          "kind": "v",
+          "id": "cDh1AeJ7fLo",
+          "role": "next",
+          "title": "3 2 9 HW Prefetching Sequential and Strided Prefetching",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "11:32",
+          "why": "Sequential and strided prefetchers in detail."
+        },
+        {
+          "kind": "v",
+          "id": "EahLWVG2cNU",
+          "role": "next",
+          "title": "3 2 8 Software Prefetching to Reduce Miss Rate or Miss Penalty",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "12:37",
+          "why": "Software prefetching and when it beats hardware."
+        }
+      ]
+    },
+    {
+      "key": "coherence",
+      "name": "Cache Coherence & False Sharing",
+      "note": "The coherence problem, snooping versus directories, MSI and MESI, and why two threads writing neighbouring data run slowly.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "BNH-3TwmVN0",
+          "role": "best",
+          "title": "4 2 1 Cache Coherence",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "9:01",
+          "why": "The coherence problem in a shared-memory multiprocessor."
+        },
+        {
+          "kind": "v",
+          "id": "_J5xngIULes",
+          "role": "next",
+          "title": "4 2 2 Classes of Cache Coherence Protocols",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "6:04",
+          "why": "Snooping vs directory protocols; invalidate vs update."
+        },
+        {
+          "kind": "v",
+          "id": "ctLdDiCDF28",
+          "role": "next",
+          "title": "4 2 3 MSI Write Invalidate Protocol",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "14:44",
+          "why": "The MSI write-invalidate protocol, state by state."
+        },
+        {
+          "kind": "v",
+          "id": "nrzT044qNIc",
+          "role": "next",
+          "title": "4 2 4 MESI and MOESI Protocols",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "10:08",
+          "why": "MESI and MOESI, and what the extra states save."
+        },
+        {
+          "kind": "v",
+          "id": "-p9tfMMu1PE",
+          "role": "next",
+          "title": "MESI Cache Coherence Protocol | Vasileios Trigonakis",
+          "channel": "Wandida, EPFL",
+          "length": "9:33",
+          "why": "MESI walked through with examples."
+        },
+        {
+          "kind": "v",
+          "id": "g1c82QnOxnM",
+          "role": "next",
+          "title": "4 2 5 SMP Limitations",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "8:38",
+          "why": "Why snooping stops scaling."
+        },
+        {
+          "kind": "v",
+          "id": "rTnp1PdTE4k",
+          "role": "next",
+          "title": "4 3 2 Full Directory Protocol",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "13:50",
+          "why": "Full-map directory protocols."
+        },
+        {
+          "kind": "v",
+          "id": "3gAQ7LvFJSE",
+          "role": "next",
+          "title": "False Sharing: Why your multi-threaded code is mysteriously so slow!",
+          "channel": "Jacob Sorber",
+          "length": "12:16",
+          "why": "False sharing measured in real code, and how to fix it."
+        }
+      ]
+    },
+    {
+      "key": "consistency",
+      "name": "Memory Consistency",
+      "note": "Sequential consistency, x86 TSO and weaker models, store buffers, fences, and how these reach the language memory models.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "edjqmYsivgU",
+          "role": "best",
+          "title": "4 5 1 Memory Consistency Motivation and Introduction",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "9:10",
+          "why": "Why a consistency model is needed at all."
+        },
+        {
+          "kind": "v",
+          "id": "d4CW1ckz8Ow",
+          "role": "next",
+          "title": "4 5 2 Sequential Consistency",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "9:40",
+          "why": "Sequential consistency and what it forbids."
+        },
+        {
+          "kind": "v",
+          "id": "nh9Af9z7cgE",
+          "role": "next",
+          "title": "Advanced Topics: Hardware Memory Barriers",
+          "channel": "Nick",
+          "length": "19:15",
+          "why": "Store buffers and invalidation queues: why hardware reorders, and hardware barriers."
+        },
+        {
+          "kind": "v",
+          "id": "emYmQQZXRT8",
+          "role": "next",
+          "title": "Advanced Topics: Software Memory Barriers",
+          "channel": "Nick",
+          "length": "9:27",
+          "why": "Software memory barriers and how they map to hardware."
+        },
+        {
+          "kind": "v",
+          "id": "6WvQYAksNbs",
+          "role": "next",
+          "title": "ARM vs x86 Memory Models: Why Weak Ordering Breaks Lock-Free Code",
+          "channel": "Why This in Tech?",
+          "length": "7:34",
+          "why": "x86 (TSO) vs ARM (weak) ordering and what breaks when you port lock-free code."
+        },
+        {
+          "kind": "v",
+          "id": "mtIvOU9X_Pw",
+          "role": "next",
+          "title": "4 4 2 Test and Set Synchronization Primitive",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "11:43",
+          "why": "Test-and-set and other atomic primitives that synchronisation builds on."
+        }
+      ]
+    },
+    {
+      "key": "simd",
+      "name": "SIMD, Vector & GPU Architecture",
+      "note": "Vector and array processors, data parallelism, GPU execution, and what this means for code you want vectorised.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "o_n4AKwdfiA",
+          "role": "best",
+          "title": "2 3 1 Introduction to SIMD",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "6:53",
+          "why": "SIMD: one instruction, many data elements."
+        },
+        {
+          "kind": "v",
+          "id": "cldZ5eyBldU",
+          "role": "next",
+          "title": "2 3 2 SIMD Register File, Data Types, and Instructions",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "11:27",
+          "why": "SIMD registers, data types and instructions."
+        },
+        {
+          "kind": "v",
+          "id": "9DTExOPx1p4",
+          "role": "next",
+          "title": "2 3 5 Data Alignment and Reordering",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "10:01",
+          "why": "Data alignment and reordering (shuffles) in SIMD code."
+        },
+        {
+          "kind": "v",
+          "id": "nTHoUuP67xw",
+          "role": "next",
+          "title": "2 3 6 SIMD Control Flow",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "6:06",
+          "why": "Control flow without branches: masks and select."
+        },
+        {
+          "kind": "v",
+          "id": "ROuwm9et7_M",
+          "role": "next",
+          "title": "2 3 7 Case Study Intel SIMD Extensions",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "11:53",
+          "why": "Intel's SIMD extensions from MMX to AVX."
+        },
+        {
+          "kind": "v",
+          "id": "Imj4ROIiMw0",
+          "role": "next",
+          "title": "4x Code Performance with SIMD",
+          "channel": "Keifer",
+          "length": "11:59",
+          "why": "A real 4x speed-up with SIMD, measured."
+        },
+        {
+          "kind": "v",
+          "id": "whPSD8sdx-0",
+          "role": "next",
+          "title": "Modern GPU Architecture | GPU Programming",
+          "channel": "Simon Oz",
+          "length": "11:39",
+          "why": "Modern GPU architecture: SMs, warps and memory."
+        },
+        {
+          "kind": "v",
+          "id": "GveaLmXPJEY",
+          "role": "next",
+          "title": "GPU Warps Explained: How SIMT Really Works Under the Hood (Visual Deep Dive) | M2L3",
+          "channel": "Parallel Routines",
+          "length": "10:24",
+          "why": "How SIMT executes warps."
+        },
+        {
+          "kind": "v",
+          "id": "NQDgzmvm-ss",
+          "role": "next",
+          "title": "GPU Warp Divergence Explained: Why Branches Kill Parallelism (Visual Deep Dive) | M2L4",
+          "channel": "Parallel Routines",
+          "length": "7:37",
+          "why": "Warp divergence and why branches hurt GPUs."
+        }
+      ]
+    },
+    {
+      "key": "multi",
+      "name": "Multicore, Interconnects & NUMA",
+      "note": "Multiprocessor organisation, Amdahl's limits in practice, multithreading, and what non-uniform memory does to placement.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "j3XLX9fX31A",
+          "role": "best",
+          "title": "4 1 1 Multicore motivation",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "11:25",
+          "why": "Why multicore: the power wall and the end of frequency scaling."
+        },
+        {
+          "kind": "v",
+          "id": "F5P8xWPJo6c",
+          "role": "next",
+          "title": "4 1 3 Parallel Processing Challenges",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "6:02",
+          "why": "Parallel processing challenges and Amdahl in practice."
+        },
+        {
+          "kind": "v",
+          "id": "R6eY_6DyaD4",
+          "role": "next",
+          "title": "2 4 2 SW and HW Multithreading",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "7:02",
+          "why": "Software vs hardware multithreading."
+        },
+        {
+          "kind": "v",
+          "id": "gbI4X71FDrY",
+          "role": "next",
+          "title": "2 4 7 Introduction to Simultaneous Multithreading",
+          "channel": "Prof. Dr. Ben H. Juurlink",
+          "length": "10:28",
+          "why": "Simultaneous multithreading."
+        },
+        {
+          "kind": "v",
+          "id": "3uVgzEkPgV0",
+          "role": "next",
+          "title": "Lecture 44: Hyperthreading",
+          "label": "Hyperthreading (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "12:05",
+          "why": "Hyperthreading in real processors."
+        },
+        {
+          "kind": "v",
+          "id": "yG1m7oGZC48",
+          "role": "next",
+          "title": "Apple M1 Ultra & NUMA - Computerphile",
+          "channel": "Computerphile",
+          "length": "15:24",
+          "why": "NUMA, with Apple's M1 Ultra as the example."
+        }
+      ]
+    },
+    {
+      "key": "dram",
+      "name": "DRAM & Memory Controllers",
+      "note": "Banks, rows and row buffers, refresh, controller scheduling, and the RowHammer reliability problem.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "HWw-6SY6VBs",
+          "role": "best",
+          "title": "Lecture 38: DRAM Organization",
+          "label": "DRAM Organization (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "19:25",
+          "why": "DRAM organisation: channels, ranks, banks, rows and the row buffer."
+        },
+        {
+          "kind": "v",
+          "id": "0CaKL0gnaug",
+          "role": "next",
+          "title": "L5 9 dram",
+          "channel": "David Black-Schaffer",
+          "length": "4:38",
+          "why": "How a DRAM cell stores a bit and why it needs refresh."
+        },
+        {
+          "kind": "v",
+          "id": "NAWUb72YOMk",
+          "role": "next",
+          "title": "DRAM 03 - Memory Arrays",
+          "channel": "Open Logic",
+          "length": "6:36",
+          "why": "DRAM memory arrays."
+        },
+        {
+          "kind": "v",
+          "id": "ONVlPFlQ2rQ",
+          "role": "next",
+          "title": "DRAM 04 - DIMM, Rank and Channel",
+          "channel": "Open Logic",
+          "length": "7:08",
+          "why": "DIMMs, ranks and channels."
+        },
+        {
+          "kind": "v",
+          "id": "9BjVUmaXaCQ",
+          "role": "next",
+          "title": "Dynamic Random Access Memory (DRAM). Part 6: Burst Mode and Bank Interleaving",
+          "channel": "Computer Science Lessons",
+          "length": "12:10",
+          "why": "Burst mode and bank interleaving."
+        },
+        {
+          "kind": "v",
+          "id": "ez0awnqG-k4",
+          "role": "next",
+          "title": "DRAM 06 - Storing Data and Memory Interleaving",
+          "channel": "Open Logic",
+          "length": "10:10",
+          "why": "Memory interleaving and address mapping."
+        },
+        {
+          "kind": "v",
+          "id": "rGaF15-ko5w",
+          "role": "next",
+          "title": "Rowhammer attacks explained simply",
+          "channel": "Ymir Vigfusson",
+          "length": "18:49",
+          "why": "RowHammer: flipping bits by hammering neighbouring rows."
+        }
+      ]
+    },
+    {
+      "key": "security",
+      "name": "Microarchitectural Security",
+      "note": "Speculative execution as an attack surface: Spectre, Meltdown, cache side channels and their mitigations.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "PG0B7lQdRw8",
+          "role": "best",
+          "title": "Lecture 43: Spectre and Meltdown",
+          "label": "Spectre and Meltdown (IIT Bombay CS305 (Prof. Biswabandan Panda))",
+          "channel": "Biswabandan (Biswa@IITB)",
+          "length": "19:00",
+          "why": "Spectre and Meltdown from the microarchitecture up."
+        },
+        {
+          "kind": "v",
+          "id": "I5mRwzVvFGE",
+          "role": "next",
+          "title": "Spectre & Meltdown - Computerphile",
+          "channel": "Computerphile",
+          "length": "13:45",
+          "why": "Computerphile's explanation of both attacks."
+        },
+        {
+          "kind": "v",
+          "id": "mgAN4w7LH2o",
+          "role": "next",
+          "title": "Spectre and Meltdown attacks explained understandably",
+          "channel": "Ymir Vigfusson",
+          "length": "16:19",
+          "why": "Spectre and Meltdown with the cache timing side channel shown step by step."
+        },
+        {
+          "kind": "v",
+          "id": "Phmt8UrofDY",
+          "role": "quick",
+          "title": "Spectre Explained - The Attack that took the world by surprise in 2018",
+          "channel": "Hussein Nasser",
+          "length": "10:10",
+          "why": "Spectre explained with the bounds-check bypass example."
+        }
+      ]
+    },
+    {
+      "key": "perf",
+      "name": "Profiling & Performance Engineering",
+      "note": "How to measure hardware behaviour with performance counters, profilers and tracers, and how to avoid being misled by benchmarks.",
+      "picks": [
+        {
+          "kind": "v",
+          "id": "ZVo6GXXcXHQ",
+          "role": "best",
+          "title": "Fastware - perf - How to analyse the performance of my program!",
+          "channel": "Fastware",
+          "length": "12:33",
+          "why": "Using perf to find where a program spends its time."
+        },
+        {
+          "kind": "v",
+          "id": "-CegoKMfgYI",
+          "role": "next",
+          "title": "Profiling with Performance Counters",
+          "channel": "CompilersLab",
+          "length": "8:49",
+          "why": "Hardware performance counters: cycles, cache misses, branch misses."
+        },
+        {
+          "kind": "v",
+          "id": "cE0QFcpCj_M",
+          "role": "next",
+          "title": "Bytes of Architecture: Performance Profiling Basics",
+          "channel": "Nick",
+          "length": "7:24",
+          "why": "Profiling basics from an architecture point of view."
+        },
+        {
+          "kind": "v",
+          "id": "M6ldFtwWup0",
+          "role": "next",
+          "title": "Introduction to Perf - Linux Performance Analysis",
+          "channel": "dolastack devops",
+          "length": "18:19",
+          "why": "A fuller tour of perf: stat, record, report and events."
+        },
+        {
+          "kind": "v",
+          "id": "iJ_eIsA5E1U",
+          "role": "quick",
+          "title": "Linux Performance Tools!",
+          "channel": "ByteByteGo",
+          "length": "6:41",
+          "why": "Map of Linux performance tools."
+        }
+      ]
     }
-   ]
-  },
-  {
-   "key": "isa",
-   "name": "ISA, Microarchitecture & Performance",
-   "note": "The ISA as a contract, the tradeoffs among ISAs, the separation from microarchitecture, and performance as instructions × CPI × cycle time.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "T0Ka9QG9t-o",
-     "role": "best",
-     "title": "Digital Design and Comp. Arch. - L7: Von Neumann Model & Instruction Set Architectures (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:50:31",
-     "why": "The Von Neumann model and what an ISA has to define, with the tradeoffs behind each choice."
-    },
-    {
-     "kind": "v",
-     "id": "o2YvlUCv9d4",
-     "role": "next",
-     "title": "Digital Design and Computer Architecture - L8: Instruction Set Architectures II (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:47:51",
-     "why": "Continues the ISA study: instruction formats, addressing modes and the design decisions behind them."
-    },
-    {
-     "kind": "v",
-     "id": "l8KpCtprJpc",
-     "role": "next",
-     "title": "Digital Design and Computer Architecture - L9:  ISA and Microarchitecture (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:47:53",
-     "why": "The boundary between ISA and microarchitecture and what each is free to change."
-    },
-    {
-     "kind": "v",
-     "id": "kFT54hO1X8M",
-     "role": "deeper",
-     "title": "David Patterson - A New Golden Age for Computer Architecture: History, Challenges and Opportunities",
-     "channel": "UBC Computer Science",
-     "length": "1:21:07",
-     "why": "Turing Award winner David Patterson on the history of RISC versus CISC and why domain-specific architectures followed.",
-     "hn": 2
-    },
-    {
-     "kind": "v",
-     "id": "Ii_pEXKKYUg",
-     "role": "deeper",
-     "title": "Tuesday @ 1130   ISA Shootout – a Comparison of RISC V, ARM, and x86   Chris Celio, UC Berkeley V2",
-     "channel": "RISC-V International",
-     "length": "32:08",
-     "why": "A comparison of RISC-V, ARM and x86 from a processor designer.",
-     "hn": 5
-    }
-   ]
-  },
-  {
-   "key": "pipe",
-   "name": "Pipelining & Hazards",
-   "note": "Data, control and structural hazards, forwarding and stalls, and how precise exceptions constrain the pipeline.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "7EiYH010rf4",
-     "role": "best",
-     "title": "Digital Design and Computer Arch. - L11: Multi-Cycle and Pipelined Processor Design (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:48:05",
-     "why": "From multi-cycle processors to the pipelined design and why it raises throughput."
-    },
-    {
-     "kind": "v",
-     "id": "EkLmDhThlQc",
-     "role": "next",
-     "title": "Digital Design and Computer Arch. - L12: Pipelined Processor Design II (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:48:09",
-     "why": "Continues pipelined processor design, including dependence handling and its costs."
-    },
-    {
-     "kind": "v",
-     "id": "ECp41bY0SMg",
-     "role": "next",
-     "title": "Digital Design and Computer Arch. - L13: Precise Exceptions (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:32:01",
-     "why": "Precise exceptions: what they require and the reorder-buffer idea that leads to out-of-order execution."
-    },
-    {
-     "kind": "v",
-     "id": "BVVNtG5dgks",
-     "role": "deeper",
-     "title": "Matt Godbolt: Advanced Skylake Deep Dive",
-     "channel": "Jane Street",
-     "length": "1:20:57",
-     "why": "Matt Godbolt takes a real Skylake core apart at Jane Street, connecting textbook stages to shipping hardware."
-    },
-    {
-     "kind": "v",
-     "id": "BVNx3wtJ9vs",
-     "role": "quick",
-     "title": "CPU Pipeline - Computerphile",
-     "channel": "Computerphile",
-     "length": "21:48",
-     "why": "A twenty-two minute visual explanation of the pipeline."
-    }
-   ]
-  },
-  {
-   "key": "branch",
-   "name": "Branch Prediction",
-   "note": "Why prediction accuracy dominates deep pipelines, two-bit counters, global history, two-level, hybrid and modern predictors.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "5kGI2EHURSY",
-     "role": "best",
-     "title": "Digital Design and Comp. Arch. - L15: Dataflow, Superscalar Execution & Branch Prediction (S25)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:51:29",
-     "why": "Connects dataflow and superscalar execution to why branches need prediction, then covers the core predictor designs."
-    },
-    {
-     "kind": "v",
-     "id": "d4SSiWvNnpM",
-     "role": "next",
-     "title": "Digital Design and Computer Arch. - L16: Advanced Branch Prediction (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:50:47",
-     "why": "Advanced predictors built on correlation and history, the designs behind modern CPUs."
-    },
-    {
-     "kind": "v",
-     "id": "hgcNM-6wr34",
-     "role": "deeper",
-     "title": "x86 Internals for Fun & Profit • Matt Godbolt • GOTO 2014",
-     "channel": "GOTO Conferences",
-     "length": "54:01",
-     "why": "Matt Godbolt on x86 internals, including how to reason about the branch predictor from code."
-    },
-    {
-     "kind": "v",
-     "id": "nczJ58WvtYo",
-     "role": "quick",
-     "title": "How Branch Prediction Works in CPUs - Computerphile",
-     "channel": "Computerphile",
-     "length": "25:56",
-     "why": "A twenty-six minute visual explanation of how the prediction works.",
-     "hn": 2
-    }
-   ]
-  },
-  {
-   "key": "ooo",
-   "name": "Out-of-Order & Superscalar Execution",
-   "note": "Register renaming, reservation stations, the reorder buffer, Tomasulo's algorithm and load/store handling.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "d7PWsgQs7rI",
-     "role": "best",
-     "title": "Digital Design and Computer Arch. - L14: Out-of-Order Execution (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:36:13",
-     "why": "Out-of-order execution built up from its reasons: renaming, reservation stations and in-order retirement."
-    },
-    {
-     "kind": "v",
-     "id": "zvkIoiJbvvo",
-     "role": "next",
-     "title": "Digital Design and Comp. Arch. - L15c: Load-Store Handling in Out-of-Order Execution (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "24:02",
-     "why": "The hard case: handling loads and stores out of order, with memory dependence."
-    },
-    {
-     "kind": "v",
-     "id": "XIVPdSkLbT4",
-     "role": "deeper",
-     "title": "Comp. Arch. - Lecture 27: VLIW Architectures (Fall 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "52:31",
-     "why": "VLIW, the alternative that moves scheduling to the compiler, and why it largely lost in general-purpose CPUs."
-    },
-    {
-     "kind": "v",
-     "id": "Me0GF5zMfAk",
-     "role": "quick",
-     "title": "Modern CPUs Assign Registers To Speed Up Your Code - Computerphile",
-     "channel": "Computerphile",
-     "length": "22:24",
-     "why": "Register renaming explained on its own in about twenty minutes."
-    },
-    {
-     "kind": "v",
-     "id": "EzEKGlO9w4Y",
-     "role": "quick",
-     "title": "Out-of-Order Execution (Tomasulo's Algorithm)",
-     "channel": "BitLemon",
-     "length": "15:29",
-     "why": "Tomasulo's algorithm in fifteen minutes for revision."
-    }
-   ]
-  },
-  {
-   "key": "cache",
-   "name": "Caches",
-   "note": "Locality, hierarchy design, associativity, replacement and write policies, multi-level caches and the sources of misses.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "EjjbMfHPkbg",
-     "role": "best",
-     "title": "Digital Design and Comp. Arch. - L22: Caches (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:50:39",
-     "why": "Cache organisation and operation in full: tags, associativity, replacement and write handling."
-    },
-    {
-     "kind": "v",
-     "id": "wTz-d6XiB_Y",
-     "role": "next",
-     "title": "Digital Design and Comp. Arch. L21:Memory Organization, Technology, Hierarchy & Caches (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:50:42",
-     "why": "The memory hierarchy and why it exists. Watch this first if locality isn't second nature."
-    },
-    {
-     "kind": "v",
-     "id": "eQiN4tetvHA",
-     "role": "next",
-     "title": "Digital Design and Comp. Arch. - L23: Caches II and Prefetching (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:48:46",
-     "why": "Advanced cache design and the bridge into prefetching."
-    },
-    {
-     "kind": "v",
-     "id": "ohdoVff7vvY",
-     "role": "next",
-     "title": "Digital Design and Comp. Arch. - L23b: Multi-Core Issues in Caching (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "30:45",
-     "why": "What changes when several cores share a cache."
-    },
-    {
-     "kind": "v",
-     "id": "WDIkqP4JbkE",
-     "role": "deeper",
-     "title": "code::dive conference 2014 - Scott Meyers: Cpu Caches and Why You Care",
-     "channel": "NOKIA Technology Center Wrocław",
-     "length": "1:16:57",
-     "why": "Scott Meyers shows what caches do to ordinary code, including false sharing.",
-     "hn": 3
-    },
-    {
-     "kind": "v",
-     "id": "4_smHyqgDTU",
-     "role": "deeper",
-     "title": "Memory & Caches",
-     "channel": "Matt Godbolt",
-     "length": "1:11:20",
-     "why": "Matt Godbolt on memory and caches as a programmer experiences them."
-    },
-    {
-     "kind": "v",
-     "id": "SAk-6gVkio0",
-     "role": "quick",
-     "title": "How CPU Memory & Caches Work - Computerphile",
-     "channel": "Computerphile",
-     "length": "34:53",
-     "why": "A thirty-five minute visual overview of CPU memory and caches."
-    }
-   ]
-  },
-  {
-   "key": "vm",
-   "name": "Virtual Memory & TLBs in Hardware",
-   "note": "Page-walk hardware, TLB organisation, virtually indexed physically tagged caches and page faults as the hardware sees them.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "m0pQ075Brn4",
-     "role": "best",
-     "title": "Computer Architecture - Lecture 32: Virtual Memory (Fall 2024)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "2:13:01",
-     "why": "A graduate-level treatment of virtual memory from the hardware side: translation, TLBs and their interaction with caches."
-    },
-    {
-     "kind": "v",
-     "id": "3sX5obQCHNA",
-     "role": "quick",
-     "title": "Virtual Memory: 13 TLBs and Caches",
-     "channel": "David Black-Schaffer",
-     "length": "7:59",
-     "why": "Eight minutes on how TLBs and caches fit together."
-    },
-    {
-     "kind": "v",
-     "id": "uyrSn3qbZ8U",
-     "role": "quick",
-     "title": "Virtual Memory: 10 Making Virtual Memory Fast",
-     "channel": "David Black-Schaffer",
-     "length": "9:26",
-     "why": "Nine minutes on why translation needs a TLB to be fast."
-    }
-   ]
-  },
-  {
-   "key": "prefetch",
-   "name": "Prefetching",
-   "note": "Stream, stride and correlation prefetchers; the accuracy, coverage and timeliness tradeoff; what prefetchers do to your data layout.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "cLTCEOrB428",
-     "role": "best",
-     "title": "Digital Design and Computer Architecture - Lecture 24: Prefetching (Spring 2023)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:46:47",
-     "why": "Prefetching fundamentals: what to fetch, when, and how to judge a prefetcher."
-    },
-    {
-     "kind": "v",
-     "id": "ZmlBbyTEm9U",
-     "role": "deeper",
-     "title": "Comp. Arch. - Lecture 19: Prefetching and Prefetcher Design II (Fall 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "2:39:16",
-     "why": "A graduate lecture on advanced prefetcher design."
-    }
-   ]
-  },
-  {
-   "key": "coherence",
-   "name": "Cache Coherence & False Sharing",
-   "note": "The coherence problem, snooping versus directories, MSI and MESI, and why two threads writing neighbouring data run slowly.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "aFRboAI_3RU",
-     "role": "best",
-     "title": "Computer Architecture - Lecture 19: Cache Coherence (Fall 2022)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "2:48:28",
-     "why": "A full lecture on coherence: the invariants, snooping and directory protocols, and how the states work."
-    },
-    {
-     "kind": "v",
-     "id": "BP6NxVxDQIs",
-     "role": "next",
-     "title": "CppCon 2016: Timur Doumler “Want fast C++? Know your hardware!\"",
-     "channel": "CppCon",
-     "length": "59:44",
-     "why": "Timur Doumler ties cache lines, false sharing and related hardware effects to measured C++ performance."
-    },
-    {
-     "kind": "v",
-     "id": "-p9tfMMu1PE",
-     "role": "quick",
-     "title": "MESI Cache Coherence Protocol | Vasileios Trigonakis",
-     "channel": "Wandida, EPFL",
-     "length": "9:33",
-     "why": "MESI states and transitions in under ten minutes, for revision."
-    }
-   ]
-  },
-  {
-   "key": "consistency",
-   "name": "Memory Consistency",
-   "note": "Sequential consistency, x86 TSO and weaker models, store buffers, fences, and how these reach the language memory models.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "Suy09mzTbiQ",
-     "role": "best",
-     "title": "Computer Architecture - Lecture 20: Memory Ordering (Memory Consistency) (ETH Zürich, Fall 2020)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:41:38",
-     "why": "A dedicated lecture on memory ordering: sequential consistency, weaker models and how hardware implements them."
-    },
-    {
-     "kind": "v",
-     "id": "T2LxWfefhsc",
-     "role": "next",
-     "title": "Comp. Arch. - Lecture 21: Multiprocessors II, Memory Ordering and Cache Coherence (Fall 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "2:50:06",
-     "why": "The Fall 2025 treatment of memory ordering alongside multiprocessors and coherence."
-    },
-    {
-     "kind": "v",
-     "id": "A8eCGOqgvH4",
-     "role": "deeper",
-     "title": "C++ and Beyond 2012: Herb Sutter - atomic Weapons 1 of 2",
-     "channel": "alexsmail",
-     "length": "1:21:12",
-     "why": "Herb Sutter connects hardware memory models to C++ atomics. Essential if you also write concurrent code."
-    },
-    {
-     "kind": "v",
-     "id": "L7zSU9HI-6I",
-     "role": "deeper",
-     "title": "Herb Sutter @ NWCPP: Machine Architecture: Things Your Programming Language Neve",
-     "channel": "Kevin Frei",
-     "length": "1:56:34",
-     "why": "Herb Sutter on the machine behaviour that programming languages hide, including reordering and caches."
-    }
-   ]
-  },
-  {
-   "key": "simd",
-   "name": "SIMD, Vector & GPU Architecture",
-   "note": "Vector and array processors, data parallelism, GPU execution, and what this means for code you want vectorised.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "gkMaO3yJMz0",
-     "role": "best",
-     "title": "Digital Design and Comp. Arch. - Lecture 19: SIMD Architectures (Vector and Array Processors) (S23)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:52:52",
-     "why": "Vector and array processors from first principles: why they exist and how they are built."
-    },
-    {
-     "kind": "v",
-     "id": "gy6brWRgrnM",
-     "role": "next",
-     "title": "Digital Design and Computer Arch. - L19: GPU Architectures (Spring 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:52:15",
-     "why": "How GPUs execute, including the programming model that shapes them."
-    },
-    {
-     "kind": "v",
-     "id": "S2pWIB7KO-A",
-     "role": "deeper",
-     "title": "Comp. Arch. - Lecture 29: SIMD and GPU Architectures (Fall 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "3:14:43",
-     "why": "Mutlu's graduate lecture on SIMD and GPU architectures, over three hours, for when the undergraduate pair is not enough."
-    },
-    {
-     "kind": "v",
-     "id": "qejTqnxQRcw",
-     "role": "deeper",
-     "title": "Adventures in SIMD-Thinking (part 1 of 2) - Bob Steagall - CppCon 2020",
-     "channel": "CppCon",
-     "length": "56:32",
-     "why": "Bob Steagall on thinking in SIMD for real C++ code. Part one of two."
-    },
-    {
-     "kind": "v",
-     "id": "h9Z4oGN89MU",
-     "role": "quick",
-     "title": "How do Graphics Cards Work?  Exploring GPU Architecture",
-     "channel": "Branch Education",
-     "length": "28:30",
-     "why": "An animated tour of graphics card architecture."
-    }
-   ]
-  },
-  {
-   "key": "multi",
-   "name": "Multicore, Interconnects & NUMA",
-   "note": "Multiprocessor organisation, Amdahl's limits in practice, on-chip interconnects, and what non-uniform memory does to placement.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "9UNHGE7lbbA",
-     "role": "best",
-     "title": "Computer Architecture - Lecture 17: Multiprocessors & Memory Ordering (Fall 2022)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "2:44:55",
-     "why": "How multiprocessors are organised, what limits their scaling and how they keep memory ordering."
-    },
-    {
-     "kind": "v",
-     "id": "yDnAJfiPY-E",
-     "role": "next",
-     "title": "Comp. Arch. - Lecture 23: Interconnects (Fall 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "2:47:20",
-     "why": "Interconnection networks: topologies, routing and the tradeoffs among them."
-    },
-    {
-     "kind": "v",
-     "id": "f0ZKBusa4CI",
-     "role": "deeper",
-     "title": "Non-Uniform Memory Architecture (NUMA): A Nearly Unfathomable Morass of Arcana - Fedor Pikus  CppNow",
-     "channel": "CppNow",
-     "length": "1:47:59",
-     "why": "Fedor Pikus on the practical consequences of NUMA for software."
-    },
-    {
-     "kind": "v",
-     "id": "yG1m7oGZC48",
-     "role": "quick",
-     "title": "Apple M1 Ultra & NUMA - Computerphile",
-     "channel": "Computerphile",
-     "length": "15:24",
-     "why": "A fifteen-minute look at NUMA through a real chip."
-    }
-   ]
-  },
-  {
-   "key": "dram",
-   "name": "DRAM & Memory Controllers",
-   "note": "Banks, rows and row buffers, refresh, controller scheduling, and the RowHammer reliability problem.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "K8F8pKYaQcc",
-     "role": "best",
-     "title": "Memory Systems - Lecture 1.1: Memory and DRAM Basics (Technion, Summer 2018)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "2:00:18",
-     "why": "DRAM organisation and operation from Onur Mutlu's dedicated memory systems course. Part one."
-    },
-    {
-     "kind": "v",
-     "id": "icyliEdf0x0",
-     "role": "next",
-     "title": "Memory Systems - Lecture 1.2: Memory and DRAM Basics (Technion, Summer 2018)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "59:15",
-     "why": "Part two of DRAM basics."
-    },
-    {
-     "kind": "v",
-     "id": "q-rBRYTKPwc",
-     "role": "next",
-     "title": "Computer Architecture - Lecture 9: Memory Latency II and Memory Controllers (Fall 2025)",
-     "channel": "Onur Mutlu Lectures",
-     "length": "2:47:04",
-     "why": "Memory latency and how controllers schedule requests."
-    },
-    {
-     "kind": "v",
-     "id": "sgd7PHQQ1AI",
-     "role": "deeper",
-     "title": "The Story of Rowhammer - Secure Hardware, Architectures, and Operating Systems Keynote - Onur Mutlu",
-     "channel": "Onur Mutlu Lectures",
-     "length": "1:14:42",
-     "why": "How RowHammer was discovered and why it turned a reliability bug into a security problem."
-    },
-    {
-     "kind": "v",
-     "id": "7J7X7aZvMXQ",
-     "role": "quick",
-     "title": "How does Computer Memory Work? 💻🛠",
-     "channel": "Branch Education",
-     "length": "35:32",
-     "why": "An animated look at physical DRAM cells and banks."
-    }
-   ]
-  },
-  {
-   "key": "security",
-   "name": "Microarchitectural Security",
-   "note": "Speculative execution as an attack surface: Spectre, Meltdown, cache side channels and their mitigations.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "_f7O3IfIR2k",
-     "role": "best",
-     "title": "CppCon 2018: Chandler Carruth “Spectre: Secrets, Side-Channels, Sandboxes, and Security”",
-     "channel": "CppCon",
-     "length": "1:27:35",
-     "why": "Chandler Carruth, who worked on the response at Google, explains how Spectre works and what the mitigations cost."
-    },
-    {
-     "kind": "v",
-     "id": "IPhvL3A-e6E",
-     "role": "next",
-     "title": "Meltdown And Spectre",
-     "channel": "Matt Godbolt",
-     "length": "48:03",
-     "why": "Matt Godbolt's walk through Meltdown and Spectre, grounded in how the CPU behaves."
-    },
-    {
-     "kind": "v",
-     "id": "3v5Von-oNUg",
-     "role": "deeper",
-     "title": "16. Side-Channel Attacks",
-     "channel": "MIT OpenCourseWare",
-     "length": "1:22:15",
-     "why": "MIT's lecture on side-channel attacks for the broader security context."
-    },
-    {
-     "kind": "v",
-     "id": "YRohz9VO1YY",
-     "role": "quick",
-     "title": "When you Accidentally Compromise every CPU on Earth",
-     "channel": "Daniel Boctor",
-     "length": "15:59",
-     "why": "A sixteen-minute narrative explanation of the discovery and the attack."
-    }
-   ]
-  },
-  {
-   "key": "perf",
-   "name": "Profiling & Performance Engineering",
-   "note": "How to measure hardware behaviour with performance counters, profilers and tracers, and how to avoid being misled by benchmarks.",
-   "picks": [
-    {
-     "kind": "v",
-     "id": "r-TLSBdHe1A",
-     "role": "best",
-     "title": "\"Performance Matters\" by Emery Berger",
-     "channel": "Strange Loop Conference",
-     "length": "42:15",
-     "why": "Emery Berger on why benchmarks mislead (layout effects) and what causal profiling does about it.",
-     "hn": 10
-    },
-    {
-     "kind": "v",
-     "id": "FJW8nGV4jxY",
-     "role": "next",
-     "title": "Linux Performance Tools, Brendan Gregg, part 1 of 2",
-     "channel": "Brendan Gregg",
-     "length": "54:28",
-     "why": "Brendan Gregg's tour of the Linux performance tools. Part one of two."
-    },
-    {
-     "kind": "v",
-     "id": "zrr2nUln9Kk",
-     "role": "next",
-     "title": "Linux Performance Tools, Brendan Gregg, part 2 of 2",
-     "channel": "Brendan Gregg",
-     "length": "45:26",
-     "why": "Part two: deeper tools and how to choose among them."
-    },
-    {
-     "kind": "v",
-     "id": "nXaxk27zwlk",
-     "role": "deeper",
-     "title": "CppCon 2015: Chandler Carruth \"Tuning C++: Benchmarks, and CPUs, and Compilers! Oh My!\"",
-     "channel": "CppCon",
-     "length": "1:29:53",
-     "why": "Chandler Carruth live-benchmarks C++ with perf, showing how to read what the CPU is doing."
-    },
-    {
-     "kind": "v",
-     "id": "2EWejmkKlxs",
-     "role": "deeper",
-     "title": "CppCon 2017: Chandler Carruth “Going Nowhere Faster”",
-     "channel": "CppCon",
-     "length": "1:00:57",
-     "why": "Chandler Carruth on loops, cycle counts and reading hardware behaviour from profiles.",
-     "hn": 2
-    },
-    {
-     "kind": "v",
-     "id": "L1ung0wil9Y",
-     "role": "deeper",
-     "title": "4. Assembly Language & Computer Architecture",
-     "channel": "MIT OpenCourseWare",
-     "length": "1:17:34",
-     "why": "MIT's lecture on x86 assembly and microarchitecture for performance engineers."
-    }
-   ]
-  }
- ]
+  ]
 }

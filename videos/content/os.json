@@ -1,13 +1,13 @@
 {
   "id": "os",
   "name": "Operating Systems",
-  "blurb": "One best video per subtopic, chosen for correct, interview-depth explanations, with a deeper lecture and a quicker or more visual alternative. Watch the best pick, then do that subtopic's MCQs.",
-  "method": "<ul><li><b>Best pick</b>: the clearest correct explanation at interview depth, usually 10–30 minutes. Most come from Mythili Vutukuru's IIT Bombay course, which follows <i>Operating Systems: Three Easy Pieces</i> closely.</li><li><b>Go deeper</b>: a full university lecture (Berkeley CS162) or an expert talk that Hacker News users recommend. The HN count is how many different HN users linked that video.</li><li><b>Quick / visual</b>: a short or animated explanation that helps the idea stick.</li><li>Candidates came from 3,500 YouTube links in Hacker News comments plus YouTube search for every subtopic. High-view exam channels lost when an English lecture explained the same idea more precisely; numericals (Gantt charts, Banker's, page replacement) are covered by the linked MCQs.</li></ul>",
+  "blurb": "Short videos only: every pick is 20 minutes or less and covers one or two ideas, ordered as a sequence. Most come from Mythili Vutukuru's IIT Bombay course, Neso Academy and David Black-Schaffer's short lectures.",
+  "method": "<ul><li><b>Length</b>: hard cap of 20 minutes per video; depth comes from a sequence.</li><li><b>Order</b>: picks in a subtopic are in watching order; the first is the starting point.</li><li><b>Sources</b>: Mythili Vutukuru (IIT Bombay, follows <i>Three Easy Pieces</i>), Neso Academy (follows Silberschatz), David Black-Schaffer (Uppsala), and animated explainers (Core Dumped, BitLemon) where a picture helps.</li><li>Numericals (Gantt charts, Banker's, page replacement, disk scheduling) are covered by the linked MCQs.</li></ul>",
   "subtopics": [
     {
       "key": "courses",
-      "name": "Full courses",
-      "note": "If you have time for one course, take the first. Every best pick below comes from it.",
+      "name": "Short-video courses",
+      "note": "Every video on this page is 20 minutes or less, so each subtopic is a sequence of short sittings. These series supply most of them and are worth following in order.",
       "picks": [
         {
           "kind": "l",
@@ -17,27 +17,37 @@
           "title": "Operating Systems (OS) Lectures",
           "channel": "Mythili Vutukuru",
           "length": "33 videos",
-          "why": "IIT Bombay course built on OSTEP: 20 concept lectures of 10–30 minutes, then xv6 code walkthroughs showing how a real kernel does traps, context switches, paging and locking."
+          "why": "Mythili Vutukuru's IIT Bombay OS course, 9–30 minute lectures that follow Three Easy Pieces, then xv6. Most lectures fit the 20-minute cap; the few that don't are swapped for shorter videos below."
         },
         {
           "kind": "l",
-          "id": "PL6CdojO56mZ3SeRfpzMBMObSnTziA0gfE",
-          "thumb": "4FpG1DcvHzc",
-          "role": "deeper",
-          "title": "CS162 Spring 2020",
-          "channel": "John Kubiatowicz",
-          "length": "13 videos",
-          "why": "Berkeley's OS course. Long lectures (80+ minutes) that go further than interviews need on scheduling, deadlock and file systems. Use it for topics you want to master, not as a first pass."
+          "id": "PLBlnK6fEyqRiVhbXDGLXDk_OQAeuVcp2O",
+          "thumb": "vBURTt97EkA",
+          "role": "course",
+          "title": "Operating System",
+          "channel": "Neso Academy",
+          "length": "77 videos",
+          "why": "Neso Academy's OS series follows Silberschatz chapter by chapter in 5–20 minute parts, with solved scheduling and synchronization problems. It stops at synchronization."
         },
         {
           "kind": "l",
           "id": "PL9vTTBa7QaQPdvEuMTqS9McY-ieaweU8M",
           "thumb": "M9HHWFp84f0",
-          "role": "quick",
+          "role": "course",
           "title": "Operating Systems Theory",
           "channel": "Core Dumped",
           "length": "11 videos",
-          "why": "Carefully animated explanations of processes, threads, scheduling and IPC. Good for revision once you know the terms."
+          "why": "Core Dumped's animated OS videos: processes, privilege bits, IPC, threads and race conditions. Good for intuition."
+        },
+        {
+          "kind": "l",
+          "id": "PLiwt1iVUib9s2Uo5BeYmwkDFUh70fJPxX",
+          "thumb": "qlH4-oHnBb8",
+          "role": "course",
+          "title": "Virtual Memory",
+          "channel": "David Black-Schaffer",
+          "length": "14 videos",
+          "why": "David Black-Schaffer's virtual memory series in 2–9 minute parts: page tables, translation, faults, TLBs, multi-level tables."
         }
       ]
     },
@@ -54,25 +64,61 @@
           "title": "Operating Systems Lecture 1: Introduction",
           "channel": "Mythili Vutukuru",
           "length": "14:26",
-          "why": "Frames the OS as virtualising the CPU and memory and handling concurrency and persistence: the map that every later topic fits into."
+          "why": "What an OS does: virtualize the CPU and memory, handle concurrency, persist data."
         },
         {
           "kind": "v",
-          "id": "4FpG1DcvHzc",
-          "role": "deeper",
-          "title": "CS162 Lecture 2: Four Fundamental OS Concepts",
-          "channel": "John Kubiatowicz",
-          "length": "1:22:19",
-          "why": "Threads, address spaces, processes and dual-mode operation, explained from the hardware up. Watch it when \"what happens on a system call\" questions feel shaky."
+          "id": "vBURTt97EkA",
+          "role": "next",
+          "title": "Introduction to Operating Systems",
+          "channel": "Neso Academy",
+          "length": "16:45",
+          "why": "The textbook view of what an OS is and what it manages."
         },
         {
           "kind": "v",
-          "id": "H4SDPLiUnv4",
+          "id": "lhToWeuWWfw",
+          "role": "next",
+          "title": "System Calls",
+          "channel": "Neso Academy",
+          "length": "12:39",
+          "why": "System calls: how a program asks the kernel for something."
+        },
+        {
+          "kind": "v",
+          "id": "EavqupVh8ls",
+          "role": "next",
+          "title": "Types of System Calls",
+          "channel": "Neso Academy",
+          "length": "11:23",
+          "why": "The kinds of system calls: process, file, device, information, communication."
+        },
+        {
+          "kind": "v",
+          "id": "GB7JTXeGcs0",
+          "role": "next",
+          "title": "Kernel Mode vs User Mode: Why it Matters, What You Need to Know",
+          "channel": "Dave's Garage",
+          "length": "16:24",
+          "why": "User mode vs kernel mode from a former Windows kernel developer, and why the split matters."
+        },
+        {
+          "kind": "v",
+          "id": "XXPBl20J22w",
+          "role": "next",
+          "title": "Structures of Operating System",
+          "channel": "Neso Academy",
+          "length": "19:27",
+          "why": "Monolithic, layered, microkernel and modular OS structures."
+        },
+        {
+          "kind": "v",
+          "id": "eP_P4KOjwhs",
           "role": "quick",
-          "title": "How a Single Bit Inside Your Processor Shields Your Operating System's Integrity",
+          "title": "Why Applications Are Operating-System Specific",
           "channel": "Core Dumped",
-          "length": "21:30",
-          "why": "Animated walk through the mode bit, privileged instructions and traps. Makes user vs kernel mode concrete."
+          "length": "13:09",
+          "why": "Why binaries are tied to one OS: system calls, ABIs and executable formats."
         }
       ]
     },
@@ -84,21 +130,75 @@
       "picks": [
         {
           "kind": "v",
-          "id": "8ad4DzlZwgI",
+          "id": "lIZN6UgoxOc",
           "role": "best",
-          "title": "Operating Systems Lecture 3: System Calls for Process Management",
+          "title": "Operating Systems Lecture 2: Process Abstraction",
           "channel": "Mythili Vutukuru",
-          "length": "21:03",
-          "why": "fork, exec, wait and exit with real code, including zombies, orphans and how a shell runs a command: exactly what interviewers ask."
+          "length": "11:59",
+          "why": "The process abstraction: address space, registers, states."
         },
         {
           "kind": "v",
-          "id": "RxLJvh-nzQ8",
-          "role": "deeper",
-          "title": "Operating Systems Lecture 4: Process Execution Mechanisms",
-          "channel": "Mythili Vutukuru",
-          "length": "24:14",
-          "why": "Limited direct execution: the kernel stack, the trap into the kernel and the context switch, step by step."
+          "id": "7ge7u5VUSbE",
+          "role": "next",
+          "title": "A PROGRAM is not a PROCESS.",
+          "channel": "Core Dumped",
+          "length": "8:08",
+          "why": "Program vs process, animated."
+        },
+        {
+          "kind": "v",
+          "id": "jZ_6PXoaoxo",
+          "role": "next",
+          "title": "Process State",
+          "channel": "Neso Academy",
+          "length": "8:53",
+          "why": "Process states and transitions."
+        },
+        {
+          "kind": "v",
+          "id": "4s2MKuVYKV8",
+          "role": "next",
+          "title": "Process Control Block",
+          "channel": "Neso Academy",
+          "length": "7:02",
+          "why": "The process control block: what the kernel keeps per process."
+        },
+        {
+          "kind": "v",
+          "id": "vTgccrbYHYs",
+          "role": "next",
+          "title": "Context Switch",
+          "channel": "Neso Academy",
+          "length": "10:34",
+          "why": "Context switch: what gets saved and restored."
+        },
+        {
+          "kind": "v",
+          "id": "DKmBRl8j3Ak",
+          "role": "next",
+          "title": "OS Context Switching - Computerphile",
+          "channel": "Computerphile",
+          "length": "14:49",
+          "why": "Context switching explained on a whiteboard by Computerphile."
+        },
+        {
+          "kind": "v",
+          "id": "pSW9d3Oaie8",
+          "role": "next",
+          "title": "Operation on Processes – Process Creation",
+          "channel": "Neso Academy",
+          "length": "12:15",
+          "why": "Process creation: parent, child, fork."
+        },
+        {
+          "kind": "v",
+          "id": "SFc3jt8t5rU",
+          "role": "next",
+          "title": "Operation on Processes – Process Termination",
+          "channel": "Neso Academy",
+          "length": "9:16",
+          "why": "Process termination, zombies and orphans."
         },
         {
           "kind": "v",
@@ -107,7 +207,7 @@
           "title": "The Weird Way Linux Creates Processes",
           "channel": "Core Dumped",
           "length": "17:51",
-          "why": "Why Unix splits creation into fork + exec and how copy-on-write makes it cheap, with clear animation."
+          "why": "Why Linux creates processes with fork then exec, animated."
         }
       ]
     },
@@ -124,25 +224,61 @@
           "title": "Operating Systems Lecture 6: Inter-process communication",
           "channel": "Mythili Vutukuru",
           "length": "11:50",
-          "why": "Shared memory, signals, sockets, pipes and message queues in 12 minutes, each tied to the system calls that create it."
-        },
-        {
-          "kind": "v",
-          "id": "Mqb2dVRe0uo",
-          "role": "deeper",
-          "title": "Communicating between processes (using pipes) in C",
-          "channel": "CodeVault",
-          "length": "14:00",
-          "why": "Hands-on: pipe() + fork() in C, closing the right ends, and why reads block. Good if you're asked to write it."
+          "why": "IPC mechanisms: shared memory, pipes, message queues, sockets."
         },
         {
           "kind": "v",
           "id": "Y2mDwW2pMv4",
-          "role": "quick",
+          "role": "next",
           "title": "IPC: To Share Memory Or To Send Messages",
           "channel": "Core Dumped",
           "length": "14:15",
-          "why": "Visual comparison of the two IPC models and what each costs."
+          "why": "Shared memory vs message passing, animated."
+        },
+        {
+          "kind": "v",
+          "id": "uHtzOFwgD74",
+          "role": "next",
+          "title": "Shared Memory Systems",
+          "channel": "Neso Academy",
+          "length": "14:30",
+          "why": "Shared memory with the producer-consumer buffer."
+        },
+        {
+          "kind": "v",
+          "id": "LuuSXWkDJOo",
+          "role": "next",
+          "title": "Message Passing Systems (Part 1)",
+          "channel": "Neso Academy",
+          "length": "10:40",
+          "why": "Message passing: direct vs indirect communication."
+        },
+        {
+          "kind": "v",
+          "id": "Mqb2dVRe0uo",
+          "role": "next",
+          "title": "Communicating between processes (using pipes) in C",
+          "channel": "CodeVault",
+          "length": "14:00",
+          "why": "Pipes in C, hands-on."
+        },
+        {
+          "kind": "v",
+          "id": "uagKTbohimU",
+          "role": "next",
+          "title": "Sockets in Operating System",
+          "channel": "Neso Academy",
+          "length": "11:31",
+          "why": "Sockets as IPC."
+        },
+        {
+          "kind": "v",
+          "id": "QmhTjsOOrlw",
+          "role": "next",
+          "title": "Remote Procedure Calls (RPC)",
+          "channel": "Neso Academy",
+          "length": "14:32",
+          "why": "Remote procedure calls."
         }
       ]
     },
@@ -154,31 +290,57 @@
       "picks": [
         {
           "kind": "v",
-          "id": "SVHLonf5AGY",
+          "id": "LOfGJcVnvAk",
           "role": "best",
-          "title": "Operating Systems Lecture 12: Introduction to threads and concurrency",
-          "channel": "Mythili Vutukuru",
-          "length": "20:39",
-          "why": "What a thread shares with its process, pthreads basics, and how a data race arises at the instruction level."
-        },
-        {
-          "kind": "v",
-          "id": "KXuZi9aeGTw",
-          "role": "deeper",
-          "title": "User-level threads....... with threads. - Paul Turner - Google",
-          "channel": "Linux Plumbers Conference",
-          "length": "34:00",
-          "hn": 20,
-          "why": "The most-recommended OS video on Hacker News (20 users). A Google kernel engineer on the real costs of kernel vs user threads and how Google combined them."
+          "title": "Introduction to Threads",
+          "channel": "Neso Academy",
+          "length": "14:06",
+          "why": "What a thread is and what threads share."
         },
         {
           "kind": "v",
           "id": "M9HHWFp84f0",
-          "role": "quick",
+          "role": "next",
           "title": "Why Are Threads Needed On Single Core Processors",
           "channel": "Core Dumped",
           "length": "16:07",
-          "why": "Clears up the usual confusion between concurrency and parallelism, with animation."
+          "why": "Why threads help even on a single core, animated."
+        },
+        {
+          "kind": "v",
+          "id": "5sw9XJokAqw",
+          "role": "next",
+          "title": "Threads On Multicore Systems",
+          "channel": "Core Dumped",
+          "length": "11:27",
+          "why": "Threads on multicore systems."
+        },
+        {
+          "kind": "v",
+          "id": "HW2Wcx-ktsc",
+          "role": "next",
+          "title": "Multithreading Models & Hyperthreading",
+          "channel": "Neso Academy",
+          "length": "17:57",
+          "why": "Multithreading models (many-to-one, one-to-one, many-to-many) and hyperthreading."
+        },
+        {
+          "kind": "v",
+          "id": "o2Sf0GHWpmk",
+          "role": "next",
+          "title": "Threading Issues [fork() & exec() System Calls]",
+          "channel": "Neso Academy",
+          "length": "10:01",
+          "why": "Threading issues: what fork() and exec() do in a multithreaded process."
+        },
+        {
+          "kind": "v",
+          "id": "wNns0kIDC68",
+          "role": "next",
+          "title": "Threading Issues (Thread Cancellation)",
+          "channel": "Neso Academy",
+          "length": "10:33",
+          "why": "Thread cancellation: asynchronous vs deferred."
         }
       ]
     },
@@ -195,25 +357,88 @@
           "title": "Operating Systems Lecture 5: Scheduling Policies",
           "channel": "Mythili Vutukuru",
           "length": "10:20",
-          "why": "FIFO, SJF, STCF, Round Robin and MLFQ with the metric each one optimises, in ten minutes."
+          "why": "Scheduling policies and metrics from OSTEP: FIFO, SJF, STCF, RR, MLFQ."
         },
         {
           "kind": "v",
-          "id": "U7P4FbrraYs",
-          "role": "deeper",
-          "title": "CS162 Lecture 10: Scheduling 1: Concepts and Classic Policies",
-          "channel": "John Kubiatowicz",
-          "length": "1:28:06",
-          "why": "The same policies with the reasoning behind them: starvation, the convoy effect, and how to compare policies properly."
+          "id": "4DhFmL-6SDA",
+          "role": "next",
+          "title": "Preemptive and Non-Preemptive Scheduling",
+          "channel": "Neso Academy",
+          "length": "18:57",
+          "why": "Preemptive vs non-preemptive scheduling."
         },
         {
           "kind": "v",
-          "id": "O2tV9q6784k",
+          "id": "bWHFY8-rL5I",
+          "role": "next",
+          "title": "Scheduling Criteria",
+          "channel": "Neso Academy",
+          "length": "13:35",
+          "why": "Scheduling criteria: throughput, turnaround, waiting, response."
+        },
+        {
+          "kind": "v",
+          "id": "7DoP1L9nAAs",
+          "role": "next",
+          "title": "Scheduling Algorithms - First Come First Served (FCFS)",
+          "channel": "Neso Academy",
+          "length": "17:00",
+          "why": "FCFS and the convoy effect."
+        },
+        {
+          "kind": "v",
+          "id": "lpM14aWgl3Q",
+          "role": "next",
+          "title": "Shortest Job First Scheduling (Solved Problem 1)",
+          "channel": "Neso Academy",
+          "length": "11:59",
+          "why": "SJF worked example."
+        },
+        {
+          "kind": "v",
+          "id": "yKD3pcFvGmY",
+          "role": "next",
+          "title": "Scheduling Algorithms - Priority Scheduling",
+          "channel": "Neso Academy",
+          "length": "17:11",
+          "why": "Priority scheduling, starvation and aging."
+        },
+        {
+          "kind": "v",
+          "id": "YzBBJYfwdi8",
+          "role": "next",
+          "title": "Scheduling Algorithms - Round Robin Scheduling",
+          "channel": "Neso Academy",
+          "length": "15:16",
+          "why": "Round Robin and choosing the time quantum."
+        },
+        {
+          "kind": "v",
+          "id": "fvkSXMZaBNY",
+          "role": "next",
+          "title": "Multilevel Queue Scheduling Algorithm",
+          "channel": "Neso Academy",
+          "length": "14:36",
+          "why": "Multilevel queue scheduling."
+        },
+        {
+          "kind": "v",
+          "id": "1KLuC0knvs8",
+          "role": "next",
+          "title": "Multilevel Feedback-Queue Scheduling Algorithm",
+          "channel": "Neso Academy",
+          "length": "14:13",
+          "why": "Multilevel feedback queue."
+        },
+        {
+          "kind": "v",
+          "id": "1HHeyUVz43k",
           "role": "quick",
-          "title": "The Fancy Algorithms That Make Your Computer Feel Smoother",
+          "title": "How Hardware Assist Software When Multitasking",
           "channel": "Core Dumped",
-          "length": "45:02",
-          "why": "Animated tour from FCFS to MLFQ and Linux's CFS. Long, but the best visual intuition for why real schedulers look the way they do."
+          "length": "13:15",
+          "why": "How timer interrupts let the OS preempt, animated."
         }
       ]
     },
@@ -221,16 +446,43 @@
       "key": "sync",
       "name": "Process Synchronization",
       "mcq": "../mcq/#/d/os/sync",
-      "note": "The most-asked OS topic. Race conditions, how a lock is built from atomic instructions, condition variables (and why you wait in a while loop), semaphores, producer-consumer and readers-writers.",
+      "note": "The most-asked OS topic. Race conditions, how a lock is built from atomic instructions, condition variables (and why you wait in a while loop), semaphores, and the classic problems.",
       "picks": [
         {
           "kind": "v",
-          "id": "EBevKfTDXUI",
+          "id": "bhpzTWtee2A",
           "role": "best",
-          "title": "Operating Systems Lecture 13: Locks",
-          "channel": "Mythili Vutukuru",
-          "length": "25:14",
-          "why": "Why disabling interrupts and plain flag variables fail, test-and-set and compare-and-swap, spinning vs sleeping locks."
+          "title": "The Weirdest Bug in Programming - Race Conditions",
+          "channel": "Core Dumped",
+          "length": "18:19",
+          "why": "Race conditions, animated."
+        },
+        {
+          "kind": "v",
+          "id": "UtEORPakw5Y",
+          "role": "next",
+          "title": "The Critical-Section Problem",
+          "channel": "Neso Academy",
+          "length": "13:50",
+          "why": "The critical-section problem and its three requirements."
+        },
+        {
+          "kind": "v",
+          "id": "5oZYS5dTrmk",
+          "role": "next",
+          "title": "Test and Set Lock",
+          "channel": "Neso Academy",
+          "length": "19:01",
+          "why": "Test-and-set: building a lock from an atomic instruction."
+        },
+        {
+          "kind": "v",
+          "id": "1tZhmTnk-vc",
+          "role": "next",
+          "title": "how does a Mutex even work? (atoms in the computer??)",
+          "channel": "Low Level",
+          "length": "4:17",
+          "why": "How a mutex works down at the atomic instruction."
         },
         {
           "kind": "v",
@@ -239,7 +491,7 @@
           "title": "Operating Systems Lecture 14: Condition variables",
           "channel": "Mythili Vutukuru",
           "length": "16:14",
-          "why": "Producer-consumer done correctly with condition variables, including why you re-check the condition in a while loop."
+          "why": "Condition variables, and why the wait goes in a while loop."
         },
         {
           "kind": "v",
@@ -248,16 +500,52 @@
           "title": "Operating Systems Lecture 15: Semaphores",
           "channel": "Mythili Vutukuru",
           "length": "8:59",
-          "why": "Semaphores as locks and as ordering tools, and the bounded-buffer solution."
+          "why": "Semaphores and how they relate to locks and condition variables."
         },
         {
           "kind": "v",
-          "id": "gRX-YxdFQzk",
-          "role": "deeper",
-          "title": "CS162 Lecture 7: Synchronization 2: Semaphores (Con't), Lock Implementation, Atomic Instructions",
-          "channel": "John Kubiatowicz",
-          "length": "1:27:34",
-          "why": "Building locks from atomic instructions and the hardware underneath. Go here for depth on implementation questions."
+          "id": "ZpRN3XQY4AA",
+          "role": "next",
+          "title": "Difference between Binary Semaphores and Mutexes",
+          "channel": "CodeVault",
+          "length": "6:04",
+          "why": "Binary semaphore vs mutex: ownership is the difference."
+        },
+        {
+          "kind": "v",
+          "id": "Qx3P2wazwI0",
+          "role": "next",
+          "title": "The Bounded Buffer Problem",
+          "channel": "Neso Academy",
+          "length": "15:48",
+          "why": "Bounded buffer (producer-consumer) with semaphores."
+        },
+        {
+          "kind": "v",
+          "id": "p2XDhW5INOo",
+          "role": "next",
+          "title": "The Readers Writers Problem",
+          "channel": "Neso Academy",
+          "length": "15:32",
+          "why": "Readers-writers."
+        },
+        {
+          "kind": "v",
+          "id": "ufdQ0GR855M",
+          "role": "next",
+          "title": "Monitors",
+          "channel": "Neso Academy",
+          "length": "13:46",
+          "why": "Monitors."
+        },
+        {
+          "kind": "v",
+          "id": "ukM_zzrIeXs",
+          "role": "quick",
+          "title": "What is a semaphore? How do they work? (Example in C)",
+          "channel": "Jacob Sorber",
+          "length": "13:27",
+          "why": "Semaphores in C, hands-on."
         }
       ]
     },
@@ -274,16 +562,52 @@
           "title": "Operating Systems Lecture 16: Concurrency bugs",
           "channel": "Mythili Vutukuru",
           "length": "11:33",
-          "why": "Deadlock conditions and how real code prevents each one, plus atomicity and ordering bugs: the practical side interviewers care about."
+          "why": "Concurrency bugs: atomicity, order violations and deadlock, and fixing them with lock ordering."
         },
         {
           "kind": "v",
-          "id": "FDwJ6EW4dCM",
-          "role": "deeper",
-          "title": "CS162 Lecture 12: Scheduling 3: Deadlock",
-          "channel": "John Kubiatowicz",
-          "length": "1:26:21",
-          "why": "Full treatment: resource-allocation graphs, detection, and Banker's algorithm worked through."
+          "id": "x9FF723STvo",
+          "role": "next",
+          "title": "Lec19 Deadlock | Necessary conditions for Deadlock | Operating Systems",
+          "channel": "Jenny's Lectures CS IT",
+          "length": "13:15",
+          "why": "The four necessary conditions for deadlock."
+        },
+        {
+          "kind": "v",
+          "id": "-VksGXfiK7k",
+          "role": "next",
+          "title": "Resource Allocation Graph",
+          "channel": "TutorialsPoint",
+          "length": "6:53",
+          "why": "Resource allocation graphs."
+        },
+        {
+          "kind": "v",
+          "id": "GAde3Skbs8I",
+          "role": "next",
+          "title": "deadlock prevention in os | deadlock prevention in operating system",
+          "channel": "Sudhakar Atchala",
+          "length": "13:06",
+          "why": "Prevention: breaking each of the four conditions."
+        },
+        {
+          "kind": "v",
+          "id": "-VoZvNvYt-A",
+          "role": "next",
+          "title": "Deadlock Avoidance, Banker's Algorithm with Example",
+          "channel": "TutorialsPoint",
+          "length": "19:37",
+          "why": "Avoidance with Banker's algorithm, worked example."
+        },
+        {
+          "kind": "v",
+          "id": "2-7JGoy52Qo",
+          "role": "next",
+          "title": "Lec25 Deadlock Detection and Recovery : Wait-for Graph and Banker's algorithm | Operating System",
+          "channel": "Jenny's Lectures CS IT",
+          "length": "19:07",
+          "why": "Detection with the wait-for graph, and recovery."
         },
         {
           "kind": "v",
@@ -292,7 +616,7 @@
           "title": "Banker's Algorithm | Operating Systems | GeeksforGeeks",
           "channel": "GeeksforGeeks",
           "length": "4:20",
-          "why": "A worked safe-sequence example in about four minutes. Watch it before the Banker's MCQs."
+          "why": "Banker's algorithm in four minutes."
         }
       ]
     },
@@ -304,12 +628,21 @@
       "picks": [
         {
           "kind": "v",
-          "id": "PTh2kL8ENzU",
+          "id": "eSPFB-xF5iM",
           "role": "best",
-          "title": "Operating Systems Lecture 9: Paging",
-          "channel": "Mythili Vutukuru",
-          "length": "20:36",
-          "why": "Page tables, page-table entries, the TLB and multi-level tables, with the arithmetic for page-table sizes."
+          "title": "Virtual Memory: 2 Three problems with Memory",
+          "channel": "David Black-Schaffer",
+          "length": "7:27",
+          "why": "Three problems with raw physical memory that virtual memory solves."
+        },
+        {
+          "kind": "v",
+          "id": "qlH4-oHnBb8",
+          "role": "next",
+          "title": "Virtual Memory: 3 What is Virtual Memory?",
+          "channel": "David Black-Schaffer",
+          "length": "8:47",
+          "why": "What virtual memory is: a per-process mapping."
         },
         {
           "kind": "v",
@@ -318,26 +651,97 @@
           "title": "Operating Systems Lecture 8: Mechanism of address translation",
           "channel": "Mythili Vutukuru",
           "length": "12:59",
-          "why": "Base/bound and segmentation: the problems paging was invented to solve. Watch it first if paging feels arbitrary."
+          "why": "Address translation: base and bounds, segmentation."
         },
         {
-          "kind": "l",
-          "id": "PLiwt1iVUib9s2Uo5BeYmwkDFUh70fJPxX",
-          "thumb": "qlH4-oHnBb8",
-          "role": "deeper",
-          "title": "Virtual Memory",
+          "kind": "v",
+          "id": "p9yZNLeOj4s",
+          "role": "next",
+          "title": "Segmented, Paged and Virtual Memory",
+          "channel": "Computer Science Lessons",
+          "length": "7:48",
+          "why": "Segmented, paged and virtual memory compared."
+        },
+        {
+          "kind": "v",
+          "id": "KNUJhZCQZ9c",
+          "role": "next",
+          "title": "Virtual Memory: 5 Page Tables",
           "channel": "David Black-Schaffer",
-          "length": "14 videos",
-          "why": "Fourteen short, precise videos (Uppsala University) on translation, page faults, multi-level tables and TLBs, each with worked examples."
+          "length": "6:32",
+          "why": "Page tables."
+        },
+        {
+          "kind": "v",
+          "id": "ZjKS1IbiGDA",
+          "role": "next",
+          "title": "Virtual Memory: 6 Address Translation",
+          "channel": "David Black-Schaffer",
+          "length": "7:34",
+          "why": "Address translation with page tables."
+        },
+        {
+          "kind": "v",
+          "id": "6neHHkI0Z0o",
+          "role": "next",
+          "title": "Virtual Memory: 7 Address Translation Example Walkthrough",
+          "channel": "David Black-Schaffer",
+          "length": "4:46",
+          "why": "A worked address translation."
+        },
+        {
+          "kind": "v",
+          "id": "uyrSn3qbZ8U",
+          "role": "next",
+          "title": "Virtual Memory: 10 Making Virtual Memory Fast",
+          "channel": "David Black-Schaffer",
+          "length": "9:27",
+          "why": "Making it fast: the TLB."
+        },
+        {
+          "kind": "v",
+          "id": "95QpHJX55bM",
+          "role": "next",
+          "title": "Virtual Memory: 11 TLB Example",
+          "channel": "David Black-Schaffer",
+          "length": "4:26",
+          "why": "A TLB example."
+        },
+        {
+          "kind": "v",
+          "id": "Z4kSOv49GNc",
+          "role": "next",
+          "title": "Virtual Memory: 12 Multi-level Page Tables",
+          "channel": "David Black-Schaffer",
+          "length": "7:27",
+          "why": "Multi-level page tables."
+        },
+        {
+          "kind": "v",
+          "id": "Xbej8Z09Ybs",
+          "role": "next",
+          "title": "Hierarchical Paging,Hashed Paged Table,Inverted Page Table",
+          "channel": "Vinay Mishra",
+          "length": "8:51",
+          "why": "Hierarchical, hashed and inverted page tables."
         },
         {
           "kind": "v",
           "id": "bq3_uT5Z424",
-          "role": "quick",
+          "role": "next",
           "title": "Operating Systems Lecture 11: Memory allocation and free space management algorithms",
           "channel": "Mythili Vutukuru",
           "length": "16:37",
-          "why": "First/best/worst fit, buddy allocation and slab allocators. Covers \"how does malloc work?\""
+          "why": "Free-space management: first fit, best fit, buddy allocation."
+        },
+        {
+          "kind": "v",
+          "id": "B6tJxvYBNrU",
+          "role": "quick",
+          "title": "Page Tables and MMU: How Virtual Memory Actually Works Behind the Scenes (Animation)",
+          "channel": "BitLemon",
+          "length": "11:40",
+          "why": "Page tables and the MMU, animated."
         }
       ]
     },
@@ -349,40 +753,84 @@
       "picks": [
         {
           "kind": "v",
-          "id": "r9NwqtqS2Ac",
+          "id": "bShqyf-hDfg",
           "role": "best",
-          "title": "Operating Systems Lecture 10: Demand Paging",
-          "channel": "Mythili Vutukuru",
-          "length": "20:26",
-          "why": "The page-fault path, swap, replacement policies, the clock approximation of LRU and thrashing."
-        },
-        {
-          "kind": "v",
-          "id": "IBgkKX6DUTM",
-          "role": "deeper",
-          "title": "CS162 Lecture 15: Memory 3: Caching and TLBs (Con't), Demand Paging",
-          "channel": "John Kubiatowicz",
-          "length": "1:27:15",
-          "why": "Demand paging as caching: effective access time, replacement policies and Belady's anomaly, rigorously."
-        },
-        {
-          "kind": "v",
-          "id": "beefUhRH5lU",
-          "role": "deeper",
-          "title": "SREcon19 Asia/Pacific - Linux Memory Management at Scale: Under the Hood",
-          "channel": "USENIX",
-          "length": "",
-          "hn": 1,
-          "why": "Chris Down (Linux kernel memory developer, Meta) on page cache, reclaim and swap in production. Very good for \"how does Linux actually do it\" follow-ups."
-        },
-        {
-          "kind": "v",
-          "id": "qlH4-oHnBb8",
-          "role": "quick",
-          "title": "Virtual Memory: 3 What is Virtual Memory?",
+          "title": "Virtual Memory: 8 Page Faults",
           "channel": "David Black-Schaffer",
-          "length": "8:47",
-          "why": "The clearest nine-minute explanation of what virtual memory is for."
+          "length": "6:31",
+          "why": "Page faults: what happens step by step."
+        },
+        {
+          "kind": "v",
+          "id": "lgmws9oraXE",
+          "role": "next",
+          "title": "Page Fault in Virtual Memory",
+          "channel": "TutorialsPoint",
+          "length": "11:14",
+          "why": "Demand paging and the cost of a fault."
+        },
+        {
+          "kind": "v",
+          "id": "DXU7SqsYDvg",
+          "role": "next",
+          "title": "Lec29 Page Replacement Algorithms | LRU and optimal | Operating Systems",
+          "channel": "Jenny's Lectures CS IT",
+          "length": "16:18",
+          "why": "LRU and Optimal page replacement, worked."
+        },
+        {
+          "kind": "v",
+          "id": "u5obgqo4rZ8",
+          "role": "next",
+          "title": "FIFO vs Optimal vs LRU Page Replacement Algorithms Comparison with Example | Operating Systems",
+          "channel": "Simple Snippets",
+          "length": "16:37",
+          "why": "FIFO vs Optimal vs LRU on the same reference string."
+        },
+        {
+          "kind": "v",
+          "id": "lfOOkEZLG-w",
+          "role": "next",
+          "title": "Lec30 Belady's Anomaly in FIFO page replacement algorithm with example | Operating System",
+          "channel": "Jenny's Lectures CS IT",
+          "length": "11:27",
+          "why": "Belady's anomaly in FIFO."
+        },
+        {
+          "kind": "v",
+          "id": "C26qsPwf-Js",
+          "role": "next",
+          "title": "Second Chance Algorithm",
+          "channel": "Dr. Robert Dimpsey",
+          "length": "10:04",
+          "why": "Second-chance (clock) approximation of LRU."
+        },
+        {
+          "kind": "v",
+          "id": "v0QVLJFTAFs",
+          "role": "next",
+          "title": "thrashing in operating system | Techniques to handle Thrashing | working set model",
+          "channel": "Sudhakar Atchala",
+          "length": "15:43",
+          "why": "Thrashing and the working-set model."
+        },
+        {
+          "kind": "v",
+          "id": "3sX5obQCHNA",
+          "role": "deeper",
+          "title": "Virtual Memory: 13 TLBs and Caches",
+          "channel": "David Black-Schaffer",
+          "length": "8:00",
+          "why": "How TLBs and caches interact."
+        },
+        {
+          "kind": "v",
+          "id": "fGP6VHxqkIM",
+          "role": "quick",
+          "title": "Virtual Memory Explained (including Paging)",
+          "channel": "BitLemon",
+          "length": "7:54",
+          "why": "Virtual memory and paging, animated."
         }
       ]
     },
@@ -394,30 +842,66 @@
       "picks": [
         {
           "kind": "v",
-          "id": "JoTIG_ElTyY",
-          "role": "best",
-          "title": "Operating Systems Lecture 19: File system implementation",
-          "channel": "Mythili Vutukuru",
-          "length": "27:14",
-          "why": "On-disk layout (superblock, bitmaps, inodes, data blocks), what open/read/write actually touch, caching, and journaling."
-        },
-        {
-          "kind": "v",
           "id": "sBQeOJvbOvw",
-          "role": "next",
+          "role": "best",
           "title": "Operating Systems Lecture 18: Files and directories",
           "channel": "Mythili Vutukuru",
           "length": "14:49",
-          "why": "The file API, the open-file table, hard vs symbolic links: the user-facing half."
+          "why": "Files, directories, file descriptors and the open-file table."
         },
         {
           "kind": "v",
-          "id": "a_h0AWNOqWU",
-          "role": "deeper",
-          "title": "CS162 Lecture 20 (4/14/2020): Filesystems (Con't), Reliability, Transactions",
-          "channel": "John Kubiatowicz",
-          "length": "1:25:17",
-          "why": "Crash consistency in depth: journaling, copy-on-write file systems and transactions."
+          "id": "6KjMlm8hhFA",
+          "role": "next",
+          "title": "Linux inodes Explained",
+          "channel": "tutoriaLinux",
+          "length": "8:53",
+          "why": "Inodes on Linux."
+        },
+        {
+          "kind": "v",
+          "id": "lW_V8oFxQgA",
+          "role": "next",
+          "title": "MicroNuggets: Hard Links versus Soft Links Explained",
+          "channel": "CBT Nuggets",
+          "length": "7:03",
+          "why": "Hard links vs soft links."
+        },
+        {
+          "kind": "v",
+          "id": "gK6L3v1b8AM",
+          "role": "next",
+          "title": "Allocation Methods | File Allocation Methods | Contiguous | linked | indexed | chain | os | files",
+          "channel": "Sudhakar Atchala",
+          "length": "11:01",
+          "why": "Allocation methods: contiguous, linked, indexed."
+        },
+        {
+          "kind": "v",
+          "id": "5z6R8J2GLoI",
+          "role": "next",
+          "title": "Deep dive into file system Inodes and how they work",
+          "channel": "Adam Billyard",
+          "length": "12:43",
+          "why": "Inodes in depth: direct and indirect blocks."
+        },
+        {
+          "kind": "v",
+          "id": "Fq0ks85G6-o",
+          "role": "next",
+          "title": "VFS | How your system knows where files are",
+          "channel": "Maple Circuit",
+          "length": "15:15",
+          "why": "The VFS layer: how a path becomes an inode."
+        },
+        {
+          "kind": "v",
+          "id": "wSTX4Wi3eco",
+          "role": "next",
+          "title": "How filesystem journaling actually prevents data corruption",
+          "channel": "Red Hat Enterprise Linux",
+          "length": "5:12",
+          "why": "Journaling and how it prevents corruption after a crash."
         }
       ]
     },
@@ -434,25 +918,52 @@
           "title": "Operating Systems Lecture 20: Hard disk internals",
           "channel": "Mythili Vutukuru",
           "length": "11:45",
-          "why": "The disk-access-time model and the scheduling algorithms built on it, in twelve minutes."
+          "why": "Hard disk internals: seek, rotation, transfer, and disk scheduling."
         },
         {
           "kind": "v",
-          "id": "KcOpkz2Q4h4",
-          "role": "deeper",
-          "title": "CS162 Lecture 18 (4/2/2020): Queueing Theory, Disk Scheduling & File Systems",
-          "channel": "John Kubiatowicz",
-          "length": "1:25:23",
-          "why": "Disk scheduling with the queueing theory that explains when it matters."
+          "id": "DOnrmOGzooA",
+          "role": "next",
+          "title": "SSTF Disk Scheduling Algorithm",
+          "channel": "TutorialsPoint",
+          "length": "4:09",
+          "why": "SSTF disk scheduling, worked."
+        },
+        {
+          "kind": "v",
+          "id": "EgUctpbHUsQ",
+          "role": "next",
+          "title": "C-SCAN Disk Scheduling Algorithm",
+          "channel": "TutorialsPoint",
+          "length": "5:37",
+          "why": "C-SCAN disk scheduling, worked."
         },
         {
           "kind": "v",
           "id": "U-OCdTeZLac",
-          "role": "quick",
+          "role": "next",
           "title": "What is RAID 0, 1, 5, & 10?",
           "channel": "PowerCert Animated Videos",
           "length": "5:04",
-          "why": "Striping, mirroring and parity, animated in five minutes. Enough for RAID interview questions."
+          "why": "RAID 0, 1, 5 and 10."
+        },
+        {
+          "kind": "v",
+          "id": "UuUgfCvt9-Q",
+          "role": "next",
+          "title": "RAID 5 vs RAID 6",
+          "channel": "PowerCert Animated Videos",
+          "length": "4:22",
+          "why": "RAID 5 vs RAID 6."
+        },
+        {
+          "kind": "v",
+          "id": "7F4qQOSJGDw",
+          "role": "deeper",
+          "title": "Operating Systems Lecture 17: Communication with I/O devices",
+          "channel": "Mythili Vutukuru",
+          "length": "15:44",
+          "why": "How the OS talks to devices: polling, interrupts, DMA."
         }
       ]
     },
@@ -469,25 +980,43 @@
           "title": "Virtualization and Cloud Computing Lecture 1: Introduction",
           "channel": "Mythili Vutukuru",
           "length": "19:00",
-          "why": "What a hypervisor must do, the hypervisor types, and where containers fit, from the same IIT Bombay instructor."
+          "why": "Virtualization from first principles: what a hypervisor must do."
         },
         {
           "kind": "v",
-          "id": "sK5i-N34im8",
-          "role": "deeper",
-          "title": "Cgroups, namespaces, and beyond: what are containers made from?",
-          "channel": "Docker",
-          "length": "54:25",
-          "why": "Jérôme Petazzoni builds a container from kernel primitives. After this, \"container vs VM\" questions are easy."
+          "id": "LMAEbB2a50M",
+          "role": "next",
+          "title": "What is a Hypervisor?",
+          "channel": "IBM Technology",
+          "length": "6:32",
+          "why": "What a hypervisor is."
+        },
+        {
+          "kind": "v",
+          "id": "UEk0CKoeUnA",
+          "role": "next",
+          "title": "Type 1 vs. Type 2 Hypervisors",
+          "channel": "Pluralsight",
+          "length": "5:11",
+          "why": "Type 1 vs type 2 hypervisors."
         },
         {
           "kind": "v",
           "id": "cjXI-yxqGTI",
-          "role": "quick",
+          "role": "next",
           "title": "Containers vs VMs: What's the difference?",
           "channel": "IBM Technology",
           "length": "8:08",
-          "why": "An eight-minute comparison for revision."
+          "why": "Containers vs VMs."
+        },
+        {
+          "kind": "v",
+          "id": "el7768BNUPw",
+          "role": "next",
+          "title": "Containers: cgroups, Linux kernel namespaces, ufs, Docker, and intro to Kubernetes pods",
+          "channel": "Sean",
+          "length": "4:28",
+          "why": "What containers are made of: namespaces, cgroups, union filesystems."
         }
       ]
     }
