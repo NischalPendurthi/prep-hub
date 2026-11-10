@@ -11,7 +11,8 @@
   var PRIVATE_DATA = "https://api.github.com/repos/NischalPendurthi/prep-hub-private/contents/plan.json";
   var $ = function (id) { return document.getElementById(id); };
 
-  function cached() { try { return JSON.parse(localStorage.getItem(DATA_KEY) || "null"); } catch (e) { return null; } }
+  function cachedRaw() { try { return localStorage.getItem(DATA_KEY); } catch (e) { return null; } }
+  function cached() { try { return JSON.parse(cachedRaw() || "null"); } catch (e) { return null; } }
   function cache(p) { try { localStorage.setItem(DATA_KEY, JSON.stringify(p)); } catch (e) {} }
 
   function fetchPrivate() {
@@ -27,14 +28,16 @@
   var started = false;
   if (window.PLAN) { cache(window.PLAN); start(window.PLAN); }
   else {
-    var c = cached();
+    /* Keep the raw string: start() fills in defaults on the object (b.tasks = []), so comparing
+       the fresh copy to the started object would always differ and reload forever. */
+    var raw = cachedRaw(), c = cached();
     if (c) start(c);
     fetchPrivate().then(function (p) {
       if (!p || !p.days) {
         if (!started) $("day").textContent = "Sign in to load the plan.";
         return;
       }
-      var changed = JSON.stringify(p) !== JSON.stringify(c);
+      var changed = JSON.stringify(p) !== raw;
       cache(p);
       if (!started) start(p);
       else if (changed) location.reload();
