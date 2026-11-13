@@ -5,7 +5,7 @@
   "use strict";
   var KEY = "applications.v1";
   /* Bump the suffix when the seed list should be merged in again. */
-  var SEED_DONE = "applications.seeded.v1";
+  var SEED_DONE = "applications.seeded.v2";
   var PRIVATE_SEED = "https://api.github.com/repos/NischalPendurthi/prep-hub-private/contents/applications.json";
   var STATUSES = [
     { id: "rejected", name: "Rejected" },
