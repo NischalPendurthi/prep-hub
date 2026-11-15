@@ -47,6 +47,17 @@
   function start(P) {
   started = true;
 
+  /* Hrefs in the plan use the local-build path ../projects/<slug>/#chNN. The published site has no such
+     folders: private guides are served by the shell at ../projects/?p=<slug>, so rewrite them there.
+     A local build is the one that serves data.js (window.PLAN). #ch00 is the overview, the guide's top. */
+  var LOCAL = !!window.PLAN;
+  function link(h) {
+    var m = /^\.\.\/projects\/([a-z0-9-]+)\/(#[\w-]*)?$/.exec(h || "");
+    if (!m) return h;
+    var hash = m[2] === "#ch00" ? "" : (m[2] || "");
+    return (LOCAL ? "../projects/" + m[1] + "/" : "../projects/?p=" + m[1]) + hash;
+  }
+
   function read(k) { try { return JSON.parse(localStorage.getItem(k) || "null") || {}; } catch (e) { return {}; } }
   function write(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
   var done = read(KEY), rev = read(REV_KEY);
@@ -178,7 +189,7 @@
     var meta = el("div", "meta");
     meta.appendChild(el("span", "mins", fmtMins(t.mins)));
     if (t.note) meta.appendChild(el("span", "", t.note));
-    if (t.href) { var a = el("a", "open", "Open →"); a.href = t.href; meta.appendChild(a); }
+    if (t.href) { var a = el("a", "open", "Open →"); a.href = link(t.href); meta.appendChild(a); }
     if (t.video) { var v = el("a", "vid", "▶ watch if stuck"); v.href = t.video; meta.appendChild(v); }
     if (done[t.id] && done[t.id] !== DAY_OF[t.id]) meta.appendChild(el("span", "when", "ticked " + short(done[t.id])));
     body.appendChild(meta);
@@ -269,7 +280,7 @@
         var lab = el("label", "", t.text);
         lab.htmlFor = id;
         li.append(cb, lab);
-        if (t.href) { var a = el("a", "open", "Open →"); a.href = t.href; li.appendChild(a); }
+        if (t.href) { var a = el("a", "open", "Open →"); a.href = link(t.href); li.appendChild(a); }
         ul.appendChild(li);
       });
       card.appendChild(ul);
@@ -348,7 +359,7 @@
   /* ---------- optional + export/import ---------- */
   (P.optional || []).forEach(function (o) {
     var li = el("li"), a = el("a", "", o.text);
-    a.href = o.href;
+    a.href = link(o.href);
     li.appendChild(a);
     $("optional-list").appendChild(li);
   });

@@ -76,6 +76,13 @@ main a { color: var(--hub-accent); }
     document.open();
     document.write(html);
     document.close();
+    /* document.write doesn't jump to the URL's #anchor, so do it once the guide is in */
+    if (isGuide && location.hash.length > 1) {
+      setTimeout(function () {
+        var t = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+        if (t) t.scrollIntoView();
+      }, 0);
+    }
   }
 
   /* Download the guides not stored yet, one at a time, so the first click on each is instant too. */
