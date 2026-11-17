@@ -4,8 +4,10 @@
 (function () {
   "use strict";
   var KEY = "applications.v1";
-  /* Bump the suffix when the seed list should be merged in again. */
-  var SEED_DONE = "applications.seeded.v4";
+  /* Keys of seed entries this browser has already merged, so a deleted entry stays deleted.
+     The seed is checked on every load, so publishing a new seed needs no site deploy. */
+  var SEED_SEEN = "applications.seedSeen.v1";
+  var OLD_SEED_DONE = "applications.seeded.v4";   /* set by the previous version, which merged the current seed */
   var PRIVATE_SEED = "https://api.github.com/repos/NischalPendurthi/prep-hub-private/contents/applications.json";
   var STATUSES = [
     { id: "rejected", name: "Rejected" },
@@ -216,8 +218,13 @@
     render();
   });
 
-  function seeded() {
-    try { return !!localStorage.getItem(SEED_DONE); } catch (e) { return true; }
+  function readSeen() {
+    try {
+      var raw = localStorage.getItem(SEED_SEEN);
+      if (raw) return new Set(JSON.parse(raw));
+      if (localStorage.getItem(OLD_SEED_DONE)) return "migrate";
+    } catch (e) { return null; }
+    return new Set();
   }
 
   function json(r) { return r.ok ? r.json() : null; }
@@ -232,30 +239,36 @@
     }).then(json);
   }
 
-  /* Runs once per browser, so a removed entry stays removed and a tag you chose is kept.
-     Entries that are missing are added, and untagged ones take the tag from the seed. */
+  /* Seed entries this browser hasn't seen before are added; ones it has seen are left alone,
+     so a removed entry stays removed and a tag you chose is kept. Untagged entries take the seed's tag. */
   function mergeSeed(data) {
     var seed = clean(data);
-    if (!seed) return;
+    var seen = readSeen();
+    if (!seed || !seen) return;
+    if (seen === "migrate") seen = new Set(seed.map(keyOf));   /* the old version already merged this seed */
     var byKey = new Map(apps.map(function (a) { return [keyOf(a), a]; }));
+    var changed = false;
     seed.forEach(function (d) {
-      var have = byKey.get(keyOf(d));
-      if (!have) { apps.push(d); byKey.set(keyOf(d), d); }
-      else if (!have.status) have.status = d.status;
+      var k = keyOf(d), have = byKey.get(k);
+      if (!seen.has(k)) {
+        seen.add(k);
+        if (!have) { apps.push(d); byKey.set(k, d); changed = true; }
+      }
+      if (have && !have.status && d.status) { have.status = d.status; changed = true; }
     });
-    save();
-    try { localStorage.setItem(SEED_DONE, "1"); } catch (e) {}
-    render();
+    try {
+      localStorage.setItem(SEED_SEEN, JSON.stringify(Array.from(seen)));
+      localStorage.removeItem(OLD_SEED_DONE);
+    } catch (e) {}
+    if (changed) { save(); render(); }
   }
 
   apps = read() || [];
   render();
-  if (!seeded()) {
-    fetch("seed.json")
-      .then(json)
-      .catch(function () { return null; })
-      .then(function (local) { return local || fetchPrivateSeed(); })
-      .then(mergeSeed)
-      .catch(function () {});
-  }
+  fetch("seed.json", { cache: "no-cache" })
+    .then(json)
+    .catch(function () { return null; })
+    .then(function (local) { return local || fetchPrivateSeed(); })
+    .then(mergeSeed)
+    .catch(function () {});
 })();

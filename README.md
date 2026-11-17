@@ -55,7 +55,7 @@ The hub bar has a GitHub sign-in. You paste a GitHub token, and `shared/hub.js` 
 
 ## Applications
 
-The list is kept in the browser's localStorage. `applications/seed.json` is gitignored, so the list never reaches the public repo or site. Each browser merges it in once: a local build reads the file directly, and the published site reads a copy from the private repo after sign-in (`projects/publish.sh` uploads it). Merging keeps any tag you've set and doesn't bring back entries you removed. Export and Import use the same format.
+The list is kept in the browser's localStorage. `applications/seed.json` is gitignored, so the list never reaches the public repo or site. Each browser checks it on every load and adds only entries it hasn't seen before: a local build reads the file directly, and the published site reads a copy from the private repo after sign-in. To add applications, edit the seed and run `projects/publish.sh`; no site deploy is needed. Merging keeps any tag you've set and doesn't bring back entries you removed. Export and Import use the same format.
 
 ## Video picks
 
