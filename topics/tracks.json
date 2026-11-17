@@ -11,6 +11,7 @@
   "agents",
   "rl",
   "speech",
+  "databases",
   "system-design",
   "software-design",
   "data-analytics",
@@ -526,6 +527,65 @@
      ]
     },
     {
+     "name": "Database internals",
+     "items": [
+      {
+       "id": "db-storage",
+       "text": "Disks, RAID, slotted pages, buffer replacement and column stores",
+       "guide": "databases",
+       "ch": "01"
+      },
+      {
+       "id": "db-index",
+       "text": "B+-trees, LSM trees, Bloom filters and bitmap indices",
+       "guide": "databases",
+       "ch": "02"
+      },
+      {
+       "id": "db-qproc",
+       "text": "External sort and join algorithms with their costs",
+       "guide": "databases",
+       "ch": "03"
+      },
+      {
+       "id": "db-qopt",
+       "text": "Size estimation, join ordering and subquery decorrelation",
+       "guide": "databases",
+       "ch": "04"
+      },
+      {
+       "id": "db-sched",
+       "text": "Serializability, recoverability and isolation levels",
+       "guide": "databases",
+       "ch": "05"
+      },
+      {
+       "id": "db-cc",
+       "text": "2PL, MVCC, snapshot isolation and write skew",
+       "guide": "databases",
+       "ch": "06"
+      },
+      {
+       "id": "db-recovery",
+       "text": "WAL, checkpoints and ARIES",
+       "guide": "databases",
+       "ch": "07"
+      },
+      {
+       "id": "db-parallel",
+       "text": "Partitioning, skew, MapReduce and parallel joins",
+       "guide": "databases",
+       "ch": "08"
+      },
+      {
+       "id": "db-dist",
+       "text": "2PC, quorums, Raft and Spanner",
+       "guide": "databases",
+       "ch": "09"
+      }
+     ]
+    },
+    {
      "name": "Languages",
      "items": [
       {
@@ -628,6 +688,23 @@
        "text": "pandas and Spark",
        "guide": "data-analytics",
        "ch": "01"
+      }
+     ]
+    },
+    {
+     "name": "Database internals",
+     "items": [
+      {
+       "id": "db-qopt",
+       "text": "How a query is planned: estimates, join order, EXPLAIN",
+       "guide": "databases",
+       "ch": "04"
+      },
+      {
+       "id": "db-parallel",
+       "text": "Partitioning, MapReduce, Spark and parallel aggregation",
+       "guide": "databases",
+       "ch": "08"
       }
      ]
     },

@@ -999,6 +999,402 @@
   "hash": "5d8dc7cc986f6ff1",
   "out": "(None, 86400)\n86400"
  },
+ "python:db-c01-c-clock": {
+  "hash": "167b958b0e62b51a",
+  "out": "['A', 'D', 'C'] 4\nerror: all frames pinned"
+ },
+ "python:db-c01-c-fsm": {
+  "hash": "fb0205a43371eba5",
+  "out": "[2, 1, 7] 8 None\n[2, 1, 3] 9"
+ },
+ "python:db-c01-columnar": {
+  "hash": "46c5454d4147f86e",
+  "out": "row store, compressed:    59333\ncolumn store, compressed: 14062\nbytes read for avg(rating), columnar: 7184"
+ },
+ "python:db-c01-d-iops": {
+  "hash": "275d79f7d8ae4c5f",
+  "out": "8.33 12.17 82"
+ },
+ "python:db-c01-d-mru": {
+  "hash": "13ca481b66c555ca",
+  "out": "20 8"
+ },
+ "python:db-c01-d-mttf": {
+  "hash": "f8137f2ad262f1a3",
+  "out": "1200.0 hours = 50.0 days; 7.3 failures a year"
+ },
+ "python:db-c01-d-parity": {
+  "hash": "1a7d45d2f85f2736",
+  "out": "1100 1011"
+ },
+ "python:db-c01-disk": {
+  "hash": "d25ec465cd8023c7",
+  "out": "rotation 6.0 ms, avg latency 3.0 ms, sector 0.0240 ms\n1500 random reads 19.54 s, 1500 sequential reads 61.00 ms, ratio 320x"
+ },
+ "python:db-c01-lru-mru": {
+  "hash": "8743d88abc3f06f2",
+  "out": "3 frames: {'LRU': 40, 'MRU': 16}\n4 frames: {'LRU': 4, 'MRU': 4}"
+ },
+ "python:db-c01-mttdl": {
+  "hash": "26a5fabe799e55bf",
+  "out": "500000000 hours = 57,078 years\nannual failure rate at MTTF 1,200,000 h: 0.73%"
+ },
+ "python:db-c01-parity": {
+  "hash": "4c736d0d6ab479fa",
+  "out": "parity 1111, rebuilt d2 0110, correct: True"
+ },
+ "python:db-c01-slotted": {
+  "hash": "b10cbd2dbf9ba052",
+  "out": "[0, 1, 2, 3] b'dave' 69 -> 91"
+ },
+ "python:db-c02-bitmap": {
+  "hash": "f733acd6b25a5fa5",
+  "out": "10100101 AND 10101011 = 10100001, count 3"
+ },
+ "python:db-c02-bloom": {
+  "hash": "3d177d81549e2faf",
+  "out": "10 bits/key, 1 hash(es): 9.516%\n10 bits/key, 2 hash(es): 3.286%\n10 bits/key, 3 hash(es): 1.741%\n10 bits/key, 7 hash(es): 0.819%\nmissed inserted keys: 0  measured FP rate: 0.808%"
+ },
+ "python:db-c02-c-extendable": {
+  "hash": "0ce3c75aedce70f2",
+  "out": "global depth 3 | directory size 8 | buckets 4\n000 ld=3 [0, 8]\n001 ld=1 [1, 5]\n010 ld=2 [2]\n011 ld=1 [1, 5]\n100 ld=3 [4]\n101 ld=1 [1, 5]\n110 ld=2 [2]\n111 ld=1 [1, 5]"
+ },
+ "python:db-c02-c-lsm": {
+  "hash": "4c672e0d237953cf",
+  "out": "2 10 None 3\n[[('a', 10)]] 10"
+ },
+ "python:db-c02-d-bits": {
+  "hash": "ccee0f0532a80877",
+  "out": "10100001 3"
+ },
+ "python:db-c02-d-height": {
+  "hash": "6325ab5cd3f6a4c1",
+  "out": "[4, 6]"
+ },
+ "python:db-c02-d-lsm": {
+  "hash": "7a0b6870418948a1",
+  "out": "120 1.2"
+ },
+ "python:db-c02-d-occupancy": {
+  "hash": "c837b40676f7553a",
+  "out": "leaf keys: 3 to 5 | internal children: 3 to 6"
+ },
+ "python:db-c02-height": {
+  "hash": "d83a8d1d28894996",
+  "out": "n=102, K=1,000,000: at most 4 levels, about 3 when nodes are full; binary tree ~20\nn=102, K=1,000,000,000: at most 6 levels, about 5 when nodes are full; binary tree ~30"
+ },
+ "python:db-c02-hnsw-levels": {
+  "hash": "bfba21fa9c7bd019",
+  "out": "{0: 100000, 1: 25210, 2: 6201, 3: 1581, 4: 404, 5: 85, 6: 31, 7: 9, 8: 3, 9: 1, 10: 1}"
+ },
+ "python:db-c02-insert": {
+  "hash": "48324e237b882fa1",
+  "out": "[5]\n  [3]\n    [1, 2]\n    [3, 4]\n  [7, 9]\n    [5, 6]\n    [7, 8]\n    [9, 10]\nrange 4..8: [4, 5, 6, 7, 8]"
+ },
+ "python:db-c02-lsm-cost": {
+  "hash": "0a6dc0006a4e68da",
+  "out": "stepped merge lookup, no Bloom filters: 120 random I/Os\nwith 1% Bloom filters, key in one tree: 4.17 I/Os"
+ },
+ "python:db-c02-sqlite-plan": {
+  "hash": "4965ac85f86a39cb",
+  "out": "no index:       SCAN emp\ncomposite:      SEARCH emp USING COVERING INDEX emp_dept_sal (dept=? AND salary<?)\nleading column missing: SCAN emp USING COVERING INDEX emp_dept_sal"
+ },
+ "python:db-c03-c-grace": {
+  "hash": "7cc452f79b837863",
+  "out": "961 True"
+ },
+ "python:db-c03-c-merge": {
+  "hash": "e8df5189b807d7c6",
+  "out": "3 True 80"
+ },
+ "python:db-c03-d-bnl": {
+  "hash": "d5d7f3d717e37ffc",
+  "out": "P outer 90300 300 10.23 s\nQ outer 90600 600 11.46 s"
+ },
+ "python:db-c03-d-hybrid": {
+  "hash": "4e3042fee2a1469f",
+  "out": "1500 1300"
+ },
+ "python:db-c03-d-sel": {
+  "hash": "fe1b6650610e2aa5",
+  "out": "4.12 s vs 1.0 s"
+ },
+ "python:db-c03-d-sort": {
+  "hash": "569349df8892f2ed",
+  "out": "4 2 60 44"
+ },
+ "python:db-c03-hybrid": {
+  "hash": "0bf31aaddec27d25",
+  "out": "plain hash join: 1500  hybrid: 1300"
+ },
+ "python:db-c03-index-vs-scan": {
+  "hash": "99e4167db0758c1f",
+  "out": "   10 matches: index   0.06 s, scan 1.00 s\n  100 matches: index   0.43 s, scan 1.00 s\n 1000 matches: index   4.12 s, scan 1.00 s"
+ },
+ "python:db-c03-iterators": {
+  "hash": "7cd525e8b7e60f81",
+  "out": "[7, 14, 21] tuples scanned: 21"
+ },
+ "python:db-c03-join-costs": {
+  "hash": "fea218b34164fdfa",
+  "out": "NL, student outer:        2000100\nNL, takes outer:          1000400\nblock NL, worst, student outer: 40100\nblock NL, M=22:           2100\nhash join, nh=6:          1524\nmerge join, pre-sorted:   500"
+ },
+ "python:db-c03-rollup": {
+  "hash": "669ccadb82d8d46c",
+  "out": "ABC [(('x', 1, 'p'), 5), (('x', 1, 'q'), 2), (('x', 2, 'p'), 4), (('y', 1, 'p'), 8)]\nAB [(('x', 1), 7), (('x', 2), 4), (('y', 1), 8)]\nA [('x', 11), ('y', 8)]"
+ },
+ "python:db-c03-semijoin": {
+  "hash": "23c6c9402f4b987f",
+  "out": "[(1, 'a'), (3, 'c'), (3, 'c2')]"
+ },
+ "python:db-c03-sort": {
+  "hash": "cac600c05a35d443",
+  "out": "br=    12 M=  3 bb=1:    4 runs, 2 merge passes,     60 transfers,     44 seeks\nbr= 10000 M=101 bb=1:  100 runs, 1 merge passes,  30000 transfers,  10200 seeks\nbr= 10000 M= 22 bb=2:  455 runs, 3 merge passes,  70000 transfers,  25910 seeks\nbr= 10000 M= 22 bb=1:  455 runs, 3 merge passes,  70000 transfers,  50910 seeks"
+ },
+ "python:db-c04-c-hist": {
+  "hash": "04f70c51051f6295",
+  "out": "true 80844, equi-depth 80383, equi-width 869"
+ },
+ "python:db-c04-c-push": {
+  "hash": "62d02803b9166210",
+  "out": "on r (pushable)        equal: True  [(2, 2, None, None)]\non s, null-rejecting   equal: True  [(1, 1, 1, 5)]\non s, keeps nulls      equal: False  [(2, 2, None, None)]"
+ },
+ "python:db-c04-count": {
+  "hash": "c86ba77af29fd1a8",
+  "out": "n= 3:               12 join trees,          6 left-deep, DP over subsets ~27\nn= 5:            1,680 join trees,        120 left-deep, DP over subsets ~243\nn= 7:          665,280 join trees,      5,040 left-deep, DP over subsets ~2,187\nn=10:   17,643,225,600 join trees,  3,628,800 left-deep, DP over subsets ~59,049"
+ },
+ "python:db-c04-d-chain": {
+  "hash": "dfe1dd6f6b439ea1",
+  "out": "200 200 400"
+ },
+ "python:db-c04-d-hist": {
+  "hash": "eb8693db7193529d",
+  "out": "520000"
+ },
+ "python:db-c04-d-join": {
+  "hash": "785a98604092788b",
+  "out": "1000000"
+ },
+ "python:db-c04-d-left": {
+  "hash": "da0d3ea23f96374a",
+  "out": "5040"
+ },
+ "python:db-c04-decorrelate": {
+  "hash": "70e917a658782890",
+  "out": "[(1, 10)] [(1, 10)]\n[(1, 2), (2, 1), (3, 0)] [(1, 2), (2, 1)] [(1, 2), (2, 1), (3, 0)]"
+ },
+ "python:db-c04-dp": {
+  "hash": "797596e352ff6fe7",
+  "out": "(300.0, '(((r ⋈ u) ⋈ s) ⋈ t)')"
+ },
+ "python:db-c04-estimates": {
+  "hash": "76259ec62ba865bb",
+  "out": "student ⋈ takes, no key info: 10000\nwith ID a key of student and a foreign key in takes: exactly 10000\nr ⋈ s on B: 1000000"
+ },
+ "python:db-c04-expensive": {
+  "hash": "a8113d7905b78074",
+  "out": "(10500.0, 10000.0)\n(10080.0, 17000.0)"
+ },
+ "python:db-c04-histogram": {
+  "hash": "02521ff486be5254",
+  "out": "50 < A < 900: 800.0\n25 < A < 220: 520000.0"
+ },
+ "python:db-c04-loj": {
+  "hash": "c09c1a560c8e0fce",
+  "out": "(r ⟕ s) ⟕ t: [(1, 1, 1, None, None)]\nr ⟕ (s ⟕ t): [(1, 1, None)]"
+ },
+ "python:db-c05-c-lost": {
+  "hash": "2f177eee474acc17",
+  "out": "naive read-modify-write: 9\natomic update:           8\nt1 writes: True | t2 writes: False\nt2 retries: True | stock 8"
+ },
+ "python:db-c05-c-view": {
+  "hash": "9db565a93d8b3855",
+  "out": "('T27', 'T28', 'T29')\nNone"
+ },
+ "python:db-c05-d-cls": {
+  "hash": "39321816c9d0940c",
+  "out": "[('T1', 'T2'), ('T2', 'T1')]"
+ },
+ "python:db-c05-d-rec": {
+  "hash": "522845eb9f005291",
+  "out": "[('T1', 'T2'), ('T3', 'T2')]"
+ },
+ "python:db-c05-lost-update": {
+  "hash": "05c9673f5e249a38",
+  "out": "950 2100.0 3050.0"
+ },
+ "python:db-c05-precedence": {
+  "hash": "ad92143f562f051a",
+  "out": "[('T1', 'T2')] serializable as T1 -> T2\n[('T3', 'T4'), ('T4', 'T3')] not conflict serializable"
+ },
+ "python:db-c05-recoverable": {
+  "hash": "441c2a9d781c2736",
+  "out": "recoverable, cascadeless: (True, False)\nT2 commits first:         (False, False)"
+ },
+ "python:db-c05-sqlite-isolation": {
+  "hash": "cc354254585f5cfe",
+  "out": "b sees before a commits: (100,)\nb cannot start writing: database is locked\nb sees after commit:    (70,)"
+ },
+ "python:db-c06-c-lockmgr": {
+  "hash": "fea588b73079babc",
+  "out": "T1 S: granted\nT2 X: waits\nT3 S: waits (queued behind the X request)\nT1 releases, granted: ['T2']\nT2 releases, granted: ['T3']"
+ },
+ "python:db-c06-c-prevent": {
+  "hash": "8316825e2b97931a",
+  "out": "wait-die   T2 gets A; T1 gets B; T3 dies; T1 waits for T2; T2 dies\nwound-wait T2 gets A; T1 gets B; T3 waits for T1; T1 wounds T2; T2 waits for T1"
+ },
+ "python:db-c06-d-skew": {
+  "hash": "2f8879c6f85443d5",
+  "out": "17 3"
+ },
+ "python:db-c06-d-tso": {
+  "hash": "1967719b2dd3f366",
+  "out": "T1 R(Y) allowed? False"
+ },
+ "python:db-c06-d-val": {
+  "hash": "4f0e14e45090b280",
+  "out": "T2 rolls back"
+ },
+ "python:db-c06-d-wfg": {
+  "hash": "71b790863fd4f3c0",
+  "out": "['T1', 'T2', 'T4', 'T3', 'T1']"
+ },
+ "python:db-c06-mgl": {
+  "hash": "47a9baa00b77b9fd",
+  "out": "T1/T2 compatible\nT1/T3 compatible\nT2/T3 conflict on ['file']\nT2/T4 conflict on ['db']"
+ },
+ "python:db-c06-mvto": {
+  "hash": "9714ffe6525c86f0",
+  "out": "T8 reads a\nT6 rolls back (version 5 already read by T8)\nT10 creates version 10\n[5, 9, 10]"
+ },
+ "python:db-c06-nextkey": {
+  "hash": "cb6f3b9dc882d399",
+  "out": "scan 7..16 S-locks: [8, 11, 14, 18]\ninsert 15 X-locks [15, 18]: waits on {18}\ninsert 7 X-locks [7, 8]: waits on {8}\ninsert 20 X-locks [20, 24]: proceeds"
+ },
+ "python:db-c06-tso": {
+  "hash": "568f04375ffeef11",
+  "out": "['T27 rolls back on W(Q): obsolete']\n[\"T27's W(Q) ignored (Thomas)\"]\n['T1 rolls back on R(Y)']"
+ },
+ "python:db-c06-validation": {
+  "hash": "c57f43158999e789",
+  "out": "T2 rolls back: read ['X'] written by concurrent T1\nT3 validates"
+ },
+ "python:db-c06-waitfor": {
+  "hash": "2995d1e2616327ca",
+  "out": "None\n['T1', 'T2', 'T3', 'T1']"
+ },
+ "python:db-c06-write-skew": {
+  "hash": "53ef2808bce4e4ef",
+  "out": "commit commit {'A': 17, 'B': 3}\ncommit | abort: first committer wins"
+ },
+ "python:db-c07-aries": {
+  "hash": "19e558f88b7ad3a0",
+  "out": "DPT: {'P1': {'rec': 10, 'page': 70}, 'P3': {'rec': 50, 'page': 50}, 'P2': {'rec': 60, 'page': 60}}\nundo-list with LastLSN: {'T1': 60, 'T3': 70} | RedoLSN: 10\nLSN 10: fetch P1, PageLSN 25 >= 10, skip\nLSN 20: skip, page P2 not fetched\nLSN 25: fetch P1, PageLSN 25 >= 25, skip\nLSN 50: redo on P3\nLSN 60: redo on P2\nLSN 70: redo on P1"
+ },
+ "python:db-c07-c-clr": {
+  "hash": "cc646fb5c2659c48",
+  "out": "undo LSN 3: C = 0\n-- crash --\nundo LSN 2: B = 0\nundo LSN 1: A = 0\n{'A': 0, 'B': 0, 'C': 0}"
+ },
+ "python:db-c07-c-wal": {
+  "hash": "494424dc753afca5",
+  "out": "['P2 written with PageLSN 2 > flushedLSN 1']"
+ },
+ "python:db-c07-d-undo": {
+  "hash": "900b2bbdeeb414ed",
+  "out": "['T1', 'T3'] <T3,I2,11> <T3 abort> <T1,I1,5> <T1 abort>"
+ },
+ "python:db-c07-recover": {
+  "hash": "7ce825de6edd2df7",
+  "out": "after redo: {'I1': 5, 'I2': 5} undo-list: ['T1', 'T3']\nafter undo: {'I1': 5, 'I2': 11}\nlog records written: <T3,I2,11> <T3 abort> <T1,I1,5> <T1 abort>"
+ },
+ "python:db-c08-amdahl": {
+  "hash": "647ae856bfcb3498",
+  "out": "p=0.9, n=  10: speedup <= 5.26\np=0.9, n= 100: speedup <= 9.17\np=0.9, n=1000: speedup <= 9.91\nlimit as n -> inf: 10.0"
+ },
+ "python:db-c08-bitmap-semijoin": {
+  "hash": "f31d74c5cbf156b0",
+  "out": "s tuples shipped with bitmaps: 584 of 20000; result correct: True"
+ },
+ "python:db-c08-c-broadcast": {
+  "hash": "3b525b99c9b956c6",
+  "out": "partitioned join moves 1750 tuples; broadcast moves 14000\nif r must be repartitioned too: 876750 vs broadcast 14000"
+ },
+ "python:db-c08-c-psort": {
+  "hash": "275353f7d982d7a6",
+  "out": "vector [318, 673, 1331] | sizes [54493, 43360, 49210, 52937] | sorted: True\nequal-width vector [3188, 6376, 9564] | sizes [191815, 7807, 362, 16]"
+ },
+ "python:db-c08-d-amdahl": {
+  "hash": "bba0afa20fe2cd6f",
+  "out": "5.26 10.0"
+ },
+ "python:db-c08-d-mr": {
+  "hash": "188c3b5e5bed3948",
+  "out": "{('a', 0): 150, ('a', 1): 10, ('b', 0): 5}"
+ },
+ "python:db-c08-mapreduce": {
+  "hash": "1ca06b69de1f1802",
+  "out": "[(1, 'x', 10, 20), (3, 'x', 10, 20), (2, 'y', None, None)]\n[(('a', 0), 150), (('a', 1), 10), (('b', 0), 5)]"
+ },
+ "python:db-c08-partial": {
+  "hash": "ceb6071ac79509e9",
+  "out": "tuples received per node, raw repartition: [12491, 87509]\ntuples received per node, partial agg:      [4, 8]\n{'a': 75032, 'b': 12491, 'c': 12477}"
+ },
+ "python:db-c08-skew": {
+  "hash": "fcb6c2518aa8ef46",
+  "out": "hash on 4 nodes:   [16923, 16978, 18271, 47828]\n64 virtual nodes:  [23034, 23143, 23146, 30677]"
+ },
+ "python:db-c09-2pc": {
+  "hash": "ee109741a1b59cbd",
+  "out": "commit\nabort\ncoordinator down: sites with only <ready T> must wait"
+ },
+ "python:db-c09-c-2pc-recover": {
+  "hash": "1b93a064ccbbf572",
+  "out": "crashed ['ready', 'ready']\nafter coordinator recovery: commit ['commit', 'commit']"
+ },
+ "python:db-c09-c-election": {
+  "hash": "7bb5b335962635f9",
+  "out": "B runs for term 4: 2 votes, loses\nE runs for term 4: 1 votes, loses\nA runs for term 4: 5 votes, wins"
+ },
+ "python:db-c09-commit-wait": {
+  "hash": "e8825edbd9f760e9",
+  "out": "clock off by -4 ms: commit ts 1000, locks held from true time 1000 to 1008; covers ts: True\nclock off by +0 ms: commit ts 1004, locks held from true time 1000 to 1008; covers ts: True\nclock off by +4 ms: commit ts 1008, locks held from true time 1000 to 1008; covers ts: True"
+ },
+ "python:db-c09-d-quorum": {
+  "hash": "0f06484470c72410",
+  "out": "(4, 4) True\n(1, 7) True\n(3, 5) True\n(2, 5) False\n(4, 3) False"
+ },
+ "python:db-c09-d-raftmaj": {
+  "hash": "3a7c3174e0e8ecd6",
+  "out": "[1, 2, 3, 4, 5, 6]"
+ },
+ "python:db-c09-d-vv": {
+  "hash": "a5a7776ee758107a",
+  "out": "False False [2, 1, 1]"
+ },
+ "python:db-c09-exactly-once": {
+  "hash": "9ab7963cbbe4ca2c",
+  "out": "send attempts: 3 | deliveries: 2 | balance: 50"
+ },
+ "python:db-c09-majority": {
+  "hash": "b8e95a6389ca225d",
+  "out": "replica versions: [3, 3, 2, 3, 1]\nread: ('c', [3, 2, 3])\nread: ('c', [3, 3, 2])\nread: ('c', [3, 3, 1])"
+ },
+ "python:db-c09-merkle": {
+  "hash": "2d470805814d21fc",
+  "out": "False\n([('k123', -1), ('k123', 123), ('k777', -7), ('k777', 777)], 12)"
+ },
+ "python:db-c09-raft": {
+  "hash": "8c596340b52ada5a",
+  "out": "(False, [(1, 'x=1'), (1, 'y=2'), (2, 'x=9')], 1)\n(True, [(1, 'x=1'), (1, 'y=2'), (3, 'y=5'), (3, 'z=1')], 4)"
+ },
+ "python:db-c09-vv": {
+  "hash": "29d96f9046f4a75b",
+  "out": "newer concurrent\nmerged: [2, 1, 1]"
+ },
+ "python:db-home-hero": {
+  "hash": "6bea321ca289c4af",
+  "out": "100 1 30000"
+ },
  "python:dl-c01-broadcast": {
   "hash": "850c9e065f7ec292",
   "out": "correct, target (N, 1)   err shape (64, 1)  w 2.000  b 1.000  loss 0.000\nbug, target (N,)         err shape (64, 64)  w 0.000  b 1.134  loss 3.327\nmean of y 1.134, variance of y 3.327"
