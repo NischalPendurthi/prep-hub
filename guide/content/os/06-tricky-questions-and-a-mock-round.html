@@ -1,0 +1,578 @@
+---
+title: Tricky questions and a mock round
+part: Part C · Review
+lede: Short questions where the obvious answer is wrong, on threads, locks and networking, then a timed mock round on networking and the OS boundary.
+desc: Threads and locks traps, networking traps, and a timed round on sockets, TCP and the kernel boundary.
+hours: 3
+---
+<section id="ch06-thread-traps" data-roles="dr"><div class="sec-head"><h2>Threads and locks traps</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+  <p>Ownership questions turn into concurrency questions as soon as a second thread can see the object. Background is in <a href="#ch01">Ch 1</a>, <a href="#ch02">Ch 2</a> and <a href="#ch03">Ch 3</a>.</p>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>Every access to <code>status_</code> holds the mutex, yet ThreadSanitizer reports a race. Where is the unprotected access?</p>
+<pre data-run="ch25-getter" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Session</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">const</span> std::string&amp; <span class="hljs-title">status</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+        <span class="hljs-keyword">return</span> status_;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">set_status</span><span class="hljs-params">(std::string s)</span> </span>{
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+        status_ = std::<span class="hljs-built_in">move</span>(s);
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">mutable</span> std::mutex m_;
+    std::string status_ = <span class="hljs-string">&quot;connecting&quot;</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Session s;
+    <span class="hljs-function">std::thread <span class="hljs-title">writer</span><span class="hljs-params">([&amp;] {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i) s.set_status(i % <span class="hljs-number">2</span> ? <span class="hljs-string">&quot;logged-in-and-streaming-quotes&quot;</span> : <span class="hljs-string">&quot;heartbeat-overdue-reconnecting&quot;</span>);
+    })</span></span>;
+    std::<span class="hljs-type">size_t</span> total = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i) total += s.<span class="hljs-built_in">status</span>().<span class="hljs-built_in">size</span>();
+    writer.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, total &gt; <span class="hljs-number">0</span>);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>status()</code> returns a reference, and its <code>lock_guard</code> is released when the function returns. The caller reads the string (here <code>size()</code>, in real code a copy or a log line) after the unlock, while the writer may be move-assigning a new value into it and freeing the old buffer. The read is unprotected: a data race, and with long strings a possible use after free. TSan reports the race between the move assignment and the read.</p>
+      <p><b>Fix.</b> Return by value (<code>std::string status() const</code> copies under the lock), or offer <code>with_status(f)</code> that runs <code>f</code> under the lock, or publish immutable snapshots as <code>std::shared_ptr&lt;const std::string&gt;</code>. A lock protects the accesses made inside its scope, and references, pointers, iterators and <code>string_view</code>s that escape the scope escape the protection with them. The wrong answer blames the <code>mutable</code> mutex, which is correct and necessary for a <code>const</code> getter. The <code>Synchronized</code> exercise below has the same pitfall.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>This function crashes rarely, and only in production. The <code>shared_ptr</code> is supposed to keep <code>feed</code> alive. What is wrong?</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">start</span><span class="hljs-params">(std::shared_ptr&lt;Feed&gt; feed)</span> </span>{
+    std::<span class="hljs-built_in">thread</span>([&amp;feed] { feed-&gt;<span class="hljs-built_in">run</span>(); }).<span class="hljs-built_in">detach</span>();
+}</code></pre>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The lambda captures the parameter <code>feed</code> <b>by reference</b>. No copy of the <code>shared_ptr</code> is made, so the reference count never goes up. <code>start</code> returns, the parameter is destroyed, and the detached thread later reads a dangling reference to a dead <code>shared_ptr</code> object on a stack frame that has been reused. If that was the last owner, the <code>Feed</code> is gone as well.</p>
+      <p><b>Why.</b> It works most of the time because the new thread usually reads <code>feed</code> before <code>start</code> returns. Capture by value, <code>[feed]</code> or <code>[feed = std::move(feed)]</code>, so the thread owns a reference. The member-function version of this bug is <code>[this]</code> in a lambda given to a thread or a timer: capture <code>self = shared_from_this()</code> instead. Also question the <code>detach()</code>: a detached thread that touches globals can still be running while static destructors run after <code>main</code> returns.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>Double-checked locking: the fast path avoids the lock and the slow path checks again under it. What is wrong?</p>
+<pre data-run="ch25-dclp" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Registry</span> { <span class="hljs-type">int</span> ready = <span class="hljs-number">42</span>; };
+
+<span class="hljs-type">static</span> Registry* instance = <span class="hljs-literal">nullptr</span>;
+<span class="hljs-type">static</span> std::mutex mtx;
+
+<span class="hljs-function"><span class="hljs-type">static</span> Registry* <span class="hljs-title">get</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">if</span> (!instance) {
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">lock</span><span class="hljs-params">(mtx)</span></span>;
+        <span class="hljs-keyword">if</span> (!instance) instance = <span class="hljs-keyword">new</span> Registry;
+    }
+    <span class="hljs-keyword">return</span> instance;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> a = <span class="hljs-number">0</span>, b = <span class="hljs-number">0</span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">t1</span><span class="hljs-params">([&amp;] { a = get()-&gt;ready; })</span></span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">t2</span><span class="hljs-params">([&amp;] { b = get()-&gt;ready; })</span></span>;
+    t1.<span class="hljs-built_in">join</span>();
+    t2.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d\n&quot;</span>, a, b);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The unlocked read of <code>instance</code> races with the locked write. A reader that sees a non-null pointer on the fast path never takes the mutex, so nothing orders its reads of <code>*instance</code> after the writer's construction of the <code>Registry</code>. The compiler or CPU may publish the pointer before the <code>ready = 42</code> store, and on ARM or POWER the reader can see the pointer and still read a stale <code>ready</code>. TSan reports the race on <code>instance</code>.</p>
+      <p><b>Fix.</b> The simplest correct singleton is a function-local static: <code>static Registry r; return &amp;r;</code>. Since C++11 its initialisation is thread-safe, and compilers implement it with exactly this double-check, done correctly with an acquire load of a guard byte. If you need the pointer form, make <code>instance</code> a <code>std::atomic&lt;Registry*&gt;</code>, load it with <code>memory_order_acquire</code> and store it with <code>memory_order_release</code>, or use <code>std::call_once</code>. The coding section has the atomic version. Saying "x86 is strongly ordered, so it is fine" is wrong twice: the compiler may reorder the stores, and the race is undefined behaviour on every architecture.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A server keeps per-request state (the client id and a scratch buffer) in <code>thread_local</code> variables. It worked with one thread per connection. After a move to a fixed thread pool, logs sometimes show the wrong client id and memory keeps growing. What changed?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> A <code>thread_local</code> lives as long as its thread, not as long as the task. With a thread per connection, the thread's exit reset everything. In a pool, each thread runs many unrelated requests, so a task that does not overwrite the id (an error path, an early return, an exception before the assignment) logs the previous client's id. Scratch buffers keep their peak capacity forever, in every pool thread, so one 100 MB request pins 100 MB per thread that ever served one.</p>
+      <p><b>Why.</b> The variable is perfectly thread-safe, which is why the wrong answer "thread_local is not thread-safe" misses. The bug is scope. Tie request state to the request: pass a context object explicitly, or set it with an RAII guard at task start that restores it in its destructor, exceptions included. Shrink or cap scratch buffers after large requests. C++20 coroutines make <code>thread_local</code> request state actively wrong, because a coroutine may resume on a different thread after <code>co_await</code>. Pool threads usually live until shutdown, so their <code>thread_local</code> destructors run then, and leak checkers report the memory as still reachable rather than leaked.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A read-mostly cache uses <code>std::shared_mutex</code>. On a miss, the reader, still holding its <code>std::shared_lock</code>, calls <code>lock()</code> on the same mutex to insert the value. Under load the service hangs. Why, and what is the correct pattern?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>std::shared_mutex</code> has no upgrade operation. <code>lock()</code> waits until every shared owner has released, including the calling thread itself, which never will: a self-deadlock. The standard makes locking a mutex you already own undefined behaviour, and in practice it hangs. Even a real upgrade would deadlock two readers upgrading at the same time, each waiting for the other's shared hold, which is why Boost's <code>upgrade_mutex</code> allows only one upgradable owner at a time.</p>
+      <p><b>Why.</b> The correct pattern: release the shared lock, take a <code>std::unique_lock</code>, <b>check again</b> (another thread may have inserted the value in the gap), then insert. Better still, compute the value with no lock held and insert it with <code>try_emplace</code> under the exclusive lock, keeping whichever copy arrived first. The wrong answer is "writer starvation": this hang has nothing to do with fairness and happens with a single thread. For very hot reads, remember that every <code>lock_shared</code> still writes the mutex's cache line, so snapshot publication (the <code>Published&lt;T&gt;</code> exercise in <a href="../cpp/#ch30">C++ guide ch 30</a>) or RCU scales better.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>Orders are published to three venues "in parallel" with <code>std::async</code>, and the futures are discarded. Venue 0 is the slowest. In what order do the lines appear, and how long does the loop take?</p>
+<pre data-run="ch25-async" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;future&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">publish</span><span class="hljs-params">(<span class="hljs-type">int</span> venue)</span> </span>{
+    std::this_thread::<span class="hljs-built_in">sleep_for</span>(std::chrono::<span class="hljs-built_in">milliseconds</span>(<span class="hljs-number">20</span> * (<span class="hljs-number">3</span> - venue)));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;published to venue %d\n&quot;</span>, venue);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> v = <span class="hljs-number">0</span>; v &lt; <span class="hljs-number">3</span>; ++v)
+        (<span class="hljs-type">void</span>)std::<span class="hljs-built_in">async</span>(std::launch::async, publish, v);  <span class="hljs-comment">// &quot;fire and forget&quot;</span>
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;all sent&quot;</span>);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch25-async">published to venue 0
+published to venue 1
+published to venue 2
+all sent</pre>
+      <p><b>Why.</b> The future returned by <code>std::async</code> with <code>launch::async</code> blocks in its destructor until the task has finished ([futures.async]). The discarded temporary dies at the end of each full expression, so every iteration waits for its own task and the loop is sequential: 60 + 40 + 20 = 120 ms. If the tasks really ran in parallel, venue 2 (20 ms) would print first and the loop would take about 60 ms. The <code>(void)</code> cast silences the <code>[[nodiscard]]</code> warning that recent standard libraries attach to <code>std::async</code>, but not the blocking.</p>
+      <p>Fix: keep the futures in a vector and wait for them after the loop, or submit to a thread pool. Two more traps: with the default policy (<code>launch::async | launch::deferred</code>) the library may defer the task, which then runs only if someone calls <code>get</code> or <code>wait</code>; and only futures from <code>std::async</code> block in the destructor, while those from <code>std::promise</code> or <code>std::packaged_task</code> do not, so the same-looking code behaves differently.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>Four threads each do 100000 increments with <code>memory_order_relaxed</code>. Can increments be lost?</p>
+<pre data-run="ch25-relaxed" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::atomic&lt;<span class="hljs-type">long</span>&gt; hits{<span class="hljs-number">0</span>};
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">4</span>; ++i)
+        ts.<span class="hljs-built_in">emplace_back</span>([&amp;hits] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> k = <span class="hljs-number">0</span>; k &lt; <span class="hljs-number">100000</span>; ++k) hits.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%ld\n&quot;</span>, hits.<span class="hljs-built_in">load</span>());
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch25-relaxed">400000</pre>
+      <p><b>Why.</b> Atomicity and ordering are separate properties. Every atomic read-modify-write is indivisible and sees the latest value in the variable's modification order, whatever memory order you pass ([atomics.order]). <code>relaxed</code> only drops the guarantees about <i>other</i> memory locations, so it is the right choice for statistics counters. The final <code>load()</code> after <code>join()</code> is ordered by the joins. What relaxed cannot do is publish data: if a thread writes a buffer and then sets a relaxed flag, another thread can see the flag and stale buffer contents.</p>
+    </div></details>
+  </div>
+
+</section>
+
+<section id="ch06-net-traps" data-roles="dr"><div class="sec-head"><h2>Networking traps</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+  <p>Socket bugs hide because loopback tests deliver everything at once. Background is in <a href="#ch04">Ch 4</a> and <a href="#ch05">Ch 5</a>.</p>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>Frames are a 4-byte big-endian length followed by the payload. The reader works on every local test. Here the sender's second segment is still in flight. What does the reader return?</p>
+<pre data-run="ch25-shortread"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string <span class="hljs-title">naive_read_frame</span><span class="hljs-params">(<span class="hljs-type">int</span> fd)</span> </span>{
+    <span class="hljs-type">uint32_t</span> len_be = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">recv</span>(fd, &amp;len_be, <span class="hljs-keyword">sizeof</span> len_be, <span class="hljs-number">0</span>);
+    <span class="hljs-type">uint32_t</span> len = <span class="hljs-built_in">ntohl</span>(len_be);
+    <span class="hljs-function">std::string <span class="hljs-title">payload</span><span class="hljs-params">(len, <span class="hljs-string">&#x27;\0&#x27;</span>)</span></span>;
+    <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">recv</span>(fd, payload.<span class="hljs-built_in">data</span>(), len, <span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;asked %u, got %zd\n&quot;</span>, len, n);
+    <span class="hljs-keyword">return</span> payload;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> sv[<span class="hljs-number">2</span>];
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">socketpair</span>(AF_UNIX, SOCK_STREAM, <span class="hljs-number">0</span>, sv) != <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span> msg[] = <span class="hljs-string">&quot;NEW AAPL 100@189.25&quot;</span>;
+    <span class="hljs-type">uint32_t</span> len_be = <span class="hljs-built_in">htonl</span>(<span class="hljs-keyword">sizeof</span> msg - <span class="hljs-number">1</span>);
+    <span class="hljs-built_in">send</span>(sv[<span class="hljs-number">0</span>], &amp;len_be, <span class="hljs-keyword">sizeof</span> len_be, <span class="hljs-number">0</span>);
+    <span class="hljs-built_in">send</span>(sv[<span class="hljs-number">0</span>], msg, <span class="hljs-number">8</span>, <span class="hljs-number">0</span>);  <span class="hljs-comment">// the rest has not arrived yet</span>
+    std::string got = <span class="hljs-built_in">naive_read_frame</span>(sv[<span class="hljs-number">1</span>]);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;payload \&quot;%.8s\&quot;, last byte %d\n&quot;</span>, got.<span class="hljs-built_in">c_str</span>(), got.<span class="hljs-built_in">back</span>());
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">0</span>]);
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">1</span>]);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch25-shortread">asked 19, got 8
+payload "NEW AAPL", last byte 0</pre>
+      <p><b>Answer.</b> A blocking <code>recv</code> returns as soon as <i>some</i> data is available, up to the size you asked for. It got 8 of 19 bytes, the code ignored the count, and the frame was handed on with 11 zero bytes at the end. The next call would then parse <code>" 100@189"</code> as a length header, and the stream is desynchronised for good. The first <code>recv</code> of the header has the same bug: a 4-byte header can arrive as 1 + 3.</p>
+      <p><b>Why.</b> TCP is a byte stream. Segment boundaries, the sender's <code>send</code> calls and the receiver's <code>recv</code> calls are unrelated, and loopback hides this because small writes arrive in one piece. Fix it with a <code>read_exact</code> loop that keeps calling <code>recv</code> until the requested count arrives, returns failure on 0 (peer closed mid-frame) and retries on <code>EINTR</code>. <a href="#ch05">Ch 5</a> builds the full <code>send_all</code>/<code>recv_exact</code> pair and a framer on top of it. Also check <code>len</code> against a maximum before allocating, or a hostile peer can send <code>0xFFFFFFFF</code>.</p>
+      <figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="Two application frames arrive as three TCP segments and two recv calls that cut the frames at arbitrary points">
+        <text x="20" y="40" class="t-bold">frames</text>
+        <rect x="120" y="22" width="60" height="30" class="d-acc"/><text x="150" y="42" text-anchor="middle" class="t-small t-mono">len 19</text>
+        <rect x="180" y="22" width="250" height="30" class="d-key"/><text x="305" y="42" text-anchor="middle" class="t-small t-mono">NEW AAPL 100@189.25</text>
+        <rect x="430" y="22" width="60" height="30" class="d-acc"/><text x="460" y="42" text-anchor="middle" class="t-small t-mono">len 9</text>
+        <rect x="490" y="22" width="150" height="30" class="d-key"/><text x="565" y="42" text-anchor="middle" class="t-small t-mono">CXL 42 ok</text>
+        <text x="20" y="100" class="t-bold">segments</text>
+        <rect x="120" y="82" width="164" height="30" class="d-box"/><text x="202" y="102" text-anchor="middle" class="t-small">segment 1</text>
+        <rect x="284" y="82" width="246" height="30" class="d-box"/><text x="407" y="102" text-anchor="middle" class="t-small">segment 2</text>
+        <rect x="530" y="82" width="110" height="30" class="d-box"/><text x="585" y="102" text-anchor="middle" class="t-small">segment 3</text>
+        <text x="20" y="160" class="t-bold">recv calls</text>
+        <rect x="120" y="142" width="60" height="30" class="d-soft"/><text x="150" y="162" text-anchor="middle" class="t-small">recv 4</text>
+        <rect x="180" y="142" width="104" height="30" class="d-trap"/><text x="232" y="162" text-anchor="middle" class="t-small t-trap">recv 19 → 8</text>
+        <line x1="284" y1="132" x2="284" y2="182" class="d-line-trap d-dash"/>
+        <text x="296" y="162" class="t-small t-trap">frame cut here, 11 bytes still unread</text>
+        <text x="20" y="214" class="t-small t-muted">Boundaries in one row tell you nothing about the other rows. Only a length prefix (or a delimiter) defines a message.</text>
+      </svg></div><figcaption><b>TCP delivers bytes, not messages.</b> The receiver must loop until it has the 4 header bytes, then loop again until it has exactly <code>len</code> payload bytes, whatever the segment and <code>recv</code> boundaries happen to be.</figcaption></figure>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A gateway uses <code>select</code> and has run for months. A configuration change raises the number of client connections past about a thousand, and it starts crashing in unrelated code, or aborting with <code>*** buffer overflow detected ***</code>. Why?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> An <code>fd_set</code> is a fixed bitmap of <code>FD_SETSIZE</code> bits, 1024 on glibc. <code>FD_SET(fd, &amp;set)</code> with <code>fd</code> of 1024 or more writes past the end of the object, usually on the stack, and corrupts whatever lives next to it: an OS limit turning into memory corruption. When the program is built with <code>_FORTIFY_SOURCE</code>, glibc checks the descriptor inside <code>FD_SET</code> and <code>FD_ISSET</code> and aborts with that message, which is the kind outcome. Because descriptors are allocated lowest-free first, the first connection to get number 1024 triggers it, even if few of the others are still active.</p>
+      <p><b>Why.</b> <code>select</code> cannot wait on a descriptor numbered 1024 or above at all, so the fix is <code>poll</code> or <code>epoll</code>, which take arrays or registrations with no limit on descriptor values (<a href="#ch05">Ch 5</a>). Raising <code>ulimit -n</code> is what exposes the bug, and redefining <code>FD_SETSIZE</code> is not supported by glibc. "select is slow with many descriptors" is true but does not explain a crash.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A client connects to a primary gateway whose address is firewalled, so packets are silently dropped. <code>connect</code> blocks for about two minutes and then fails with <code>ETIMEDOUT</code>. Connecting to a reachable host with nothing listening fails at once with <code>ECONNREFUSED</code>. Explain both, and how you bound the wait.</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> A reachable host with a closed port answers the SYN with RST, so <code>connect</code> fails within one round trip. A black-holed address answers nothing, so Linux retransmits the SYN with exponential backoff: an initial timeout of 1 s and <code>net.ipv4.tcp_syn_retries = 6</code> retries give 1 + 2 + 4 + 8 + 16 + 32 + 64 = 127 s before <code>ETIMEDOUT</code>. An ICMP unreachable from a router produces <code>EHOSTUNREACH</code> or <code>ENETUNREACH</code> quickly instead.</p>
+      <p><b>Why.</b> To bound the wait, use a non-blocking connect: set <code>O_NONBLOCK</code>, expect <code>EINPROGRESS</code>, <code>poll</code> for <code>POLLOUT</code> with your own timeout, then read <code>getsockopt(SO_ERROR)</code>, because writability alone does not mean success. On Linux, <code>TCP_SYNCNT</code> lowers the retry count per socket, and <code>SO_SNDTIMEO</code> also limits a blocking <code>connect</code>. For failover, start the backup attempt after a short delay instead of waiting for the first to fail, which is what Happy Eyeballs (RFC 8305) does for IPv6 and IPv4. Wrong answers: "<code>SO_RCVTIMEO</code> limits it" (it does not apply to <code>connect</code>) and "connect times out after 75 s" (an old BSD figure).</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>A connection log line prints the source and destination addresses. What do the two lines print?</p>
+<pre data-run="ch25-ntoa"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    in_addr a{}, b{};
+    <span class="hljs-built_in">inet_pton</span>(AF_INET, <span class="hljs-string">&quot;10.0.0.1&quot;</span>, &amp;a);
+    <span class="hljs-built_in">inet_pton</span>(AF_INET, <span class="hljs-string">&quot;192.168.1.20&quot;</span>, &amp;b);
+
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* src = <span class="hljs-built_in">inet_ntoa</span>(a);
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* dst = <span class="hljs-built_in">inet_ntoa</span>(b);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s -&gt; %s\n&quot;</span>, src, dst);
+
+    <span class="hljs-type">char</span> s1[INET_ADDRSTRLEN], s2[INET_ADDRSTRLEN];
+    <span class="hljs-built_in">inet_ntop</span>(AF_INET, &amp;a, s1, <span class="hljs-keyword">sizeof</span> s1);
+    <span class="hljs-built_in">inet_ntop</span>(AF_INET, &amp;b, s2, <span class="hljs-keyword">sizeof</span> s2);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s -&gt; %s\n&quot;</span>, s1, s2);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch25-ntoa">192.168.1.20 -> 192.168.1.20
+10.0.0.1 -> 192.168.1.20</pre>
+      <p><b>Why.</b> <code>inet_ntoa</code> returns a pointer to a static buffer inside the C library, and every call overwrites it. <code>src</code> and <code>dst</code> are the same pointer, so both print the last address converted. Written as <code>printf("%s -&gt; %s", inet_ntoa(a), inet_ntoa(b))</code> it is even worse: both arguments still alias, and which address wins depends on the unspecified argument evaluation order. glibc makes the buffer thread-local, so threads do not corrupt each other, but POSIX does not require that. Use <code>inet_ntop</code> with your own buffer, which also supports IPv6. <code>strerror</code>, <code>localtime</code>, <code>gethostbyname</code> and <code>strtok</code> share the same static-buffer design, and each has a reentrant replacement (<code>strerror_r</code>, <code>localtime_r</code>, <code>getaddrinfo</code>, <code>strtok_r</code>).</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A load-test client opens and closes 30000 short connections per minute to one server. After a while <code>connect</code> fails with <code>EADDRNOTAVAIL</code>, and <code>ss</code> shows thousands of sockets in TIME_WAIT on the <b>client</b>. Why the client, and what are the fixes?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> TIME_WAIT is held by whichever side closes <b>first</b> (the active closer), and here that is the client. Each TIME_WAIT entry keeps its 4-tuple reserved for 2·MSL (60 seconds on Linux), and with a single server address and port the only free part of the tuple is the client's ephemeral port. Linux's default range is 32768 to 60999, about 28000 ports, so 30000 closes a minute exhausts it.</p>
+      <p><b>Why.</b> TIME_WAIT exists so that a late duplicate segment from an old connection is not accepted by a new one, and so the final ACK can be resent if it is lost (RFC 9293). Fixes, best first: reuse connections (keep-alive, pooling); let the server close first so it holds TIME_WAIT (cheap for a server with one listening port); widen <code>net.ipv4.ip_local_port_range</code>; enable <code>net.ipv4.tcp_tw_reuse</code>, which lets new outgoing connections reuse TIME_WAIT ports safely using timestamps. <code>SO_REUSEADDR</code> is the server-side answer to "bind fails after restart" and does not help here. Never use <code>SO_LINGER</code> with a zero timeout to skip TIME_WAIT, because it sends RST and can drop data.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>A binary market data frame contains a zero byte. The handler turns the received buffer into a <code>std::string</code> in two ways. What are the sizes?</p>
+<pre data-run="ch25-recvnul" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> sv[<span class="hljs-number">2</span>];
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">socketpair</span>(AF_UNIX, SOCK_STREAM, <span class="hljs-number">0</span>, sv) != <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span> frame[] = {<span class="hljs-string">&#x27;H&#x27;</span>, <span class="hljs-string">&#x27;B&#x27;</span>, <span class="hljs-string">&#x27;\0&#x27;</span>, <span class="hljs-string">&#x27;4&#x27;</span>, <span class="hljs-string">&#x27;2&#x27;</span>, <span class="hljs-string">&#x27;\n&#x27;</span>};  <span class="hljs-comment">// binary protocol: a 0 byte is data</span>
+    <span class="hljs-built_in">send</span>(sv[<span class="hljs-number">0</span>], frame, <span class="hljs-keyword">sizeof</span> frame, <span class="hljs-number">0</span>);
+
+    <span class="hljs-type">char</span> buf[<span class="hljs-number">64</span>];
+    <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">recv</span>(sv[<span class="hljs-number">1</span>], buf, <span class="hljs-keyword">sizeof</span> buf, <span class="hljs-number">0</span>);
+    <span class="hljs-function">std::string <span class="hljs-title">as_cstr</span><span class="hljs-params">(buf)</span></span>;      <span class="hljs-comment">// stops at the first 0 byte (and needs one to exist)</span>
+    <span class="hljs-function">std::string <span class="hljs-title">exact</span><span class="hljs-params">(buf, <span class="hljs-keyword">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(n))</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;recv=%zd as_cstr=%zu exact=%zu\n&quot;</span>, n, as_cstr.<span class="hljs-built_in">size</span>(), exact.<span class="hljs-built_in">size</span>());
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">0</span>]);
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">1</span>]);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch25-recvnul">recv=6 as_cstr=2 exact=6</pre>
+      <p><b>Why.</b> <code>std::string(const char*)</code> treats its argument as a C string and stops at the first <code>'\0'</code>, so it keeps <code>"HB"</code> and silently drops the rest. If the received bytes happen to contain no zero, the same constructor reads past the data and possibly past the buffer, which is undefined behaviour (ASan reports a stack-buffer-overflow). The (pointer, length) constructor copies exactly <code>n</code> bytes, embedded zeros included. A <code>std::string</code> holds zeros without trouble, and only APIs built on <code>c_str()</code> (<code>printf("%s")</code>, <code>strlen</code>, C libraries) stop at them.</p>
+      <p>Always carry the count that <code>recv</code> returned: <code>std::string(buf, n)</code>, <code>std::string_view(buf, n)</code> or <code>std::span</code>. Related traps: <code>std::string s = "a\0b";</code> has size 1, while <code>"a\0b"s</code> has size 3 because the literal operator receives the length; and <code>strcpy</code> or <code>strlen</code> in a framer truncate binary payloads. The wrong answer is "6 6".</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>A protocol header is sent with <code>send(fd, &amp;hdr, sizeof hdr, 0)</code>. The spec says it is 7 bytes. What does the program print?</p>
+<pre data-run="ch25-wire"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Header</span> {
+    <span class="hljs-type">uint8_t</span> type;
+    <span class="hljs-type">uint32_t</span> length;
+    <span class="hljs-type">uint16_t</span> seq;
+};
+
+<span class="hljs-keyword">struct</span> [[gnu::packed]] PackedHeader {
+    <span class="hljs-type">uint8_t</span> type;
+    <span class="hljs-type">uint32_t</span> length;
+    <span class="hljs-type">uint16_t</span> seq;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu %zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Header), <span class="hljs-built_in">offsetof</span>(Header, length),
+                <span class="hljs-built_in">sizeof</span>(PackedHeader), <span class="hljs-built_in">offsetof</span>(PackedHeader, length));
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch25-wire">12 4 7 1</pre>
+      <p><b>Why.</b> <code>length</code> needs 4-byte alignment, so 3 padding bytes follow <code>type</code>, <code>seq</code> sits at offset 8, and the struct is padded to 12. Sending the struct sends 12 bytes, including padding with indeterminate contents (an information leak), in host byte order. <code>[[gnu::packed]]</code> removes the padding, but every access to <code>length</code> is now misaligned, taking a reference or pointer to it is dangerous (GCC warns with <code>-Waddress-of-packed-member</code>), and the byte order is still wrong. The portable way is to serialise field by field into a byte buffer: write <code>type</code>, then <code>htonl(length)</code> with <code>memcpy</code>, then <code>htons(seq)</code>, and parse the same way. HFT feed handlers often do use packed structs for speed, but only on a known architecture and with explicit endian conversion of each field.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A server accepts a connection, forks a child to run a helper program, and then the parent closes the connection. The client never sees EOF and hangs. Why?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>fork</code> duplicates the file descriptor table, so the child holds its own descriptor for the same socket. The kernel only sends FIN when the <b>last</b> descriptor referring to the socket is closed. The parent's <code>close</code> just drops a reference, and the helper keeps the connection open for as long as it runs.</p>
+      <p><b>Why.</b> Descriptors refer to shared open file descriptions with a reference count (<a href="#ch01">Ch 1</a>). Fixes: open sockets with <code>SOCK_CLOEXEC</code> (or <code>accept4(..., SOCK_CLOEXEC)</code>) so they close automatically on <code>exec</code>, close unneeded descriptors in the child, or call <code>shutdown(fd, SHUT_WR)</code> in the parent, which sends FIN regardless of how many descriptors exist. The same mechanism causes "port still in use" after a server restarts, when a forked child still holds the listening socket.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>What do the return values of <code>recv</code> on a TCP socket mean: a positive count, 0, and -1 with <code>errno</code> set to <code>EAGAIN</code>, <code>EINTR</code> or <code>ECONNRESET</code>?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> A positive value is the number of bytes copied, possibly fewer than requested. 0 means orderly shutdown: the peer sent FIN and no more data will arrive in that direction (it is not "no data right now"). -1 with <code>EAGAIN</code>/<code>EWOULDBLOCK</code> means a non-blocking socket has nothing to read yet, so go back to <code>poll</code>/<code>epoll</code>. <code>EINTR</code> means a signal interrupted the call before any data arrived, so retry. <code>ECONNRESET</code> means the peer sent RST (it crashed, or closed with unread data), so the connection is dead.</p>
+      <p><b>Why.</b> A loop that treats 0 as "try again" spins at 100% CPU after the peer leaves, and a loop that treats <code>EAGAIN</code> as fatal drops healthy connections. Note that <code>recv</code> with a length of 0 also returns 0, so do not call it with an empty buffer and then mistake that for EOF.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>Timeouts are configured in milliseconds and passed to an API that takes whole seconds. What does each conversion produce?</p>
+<pre data-run="ch25-chrono"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">using</span> <span class="hljs-keyword">namespace</span> std::chrono;
+    <span class="hljs-keyword">auto</span> timeout = <span class="hljs-built_in">milliseconds</span>(<span class="hljs-number">1999</span>);
+    seconds s = <span class="hljs-built_in">duration_cast</span>&lt;seconds&gt;(timeout);
+    microseconds us = timeout;                <span class="hljs-comment">// widening: implicit and exact</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;cast=%lld floor=%lld ceil=%lld round=%lld us=%lld\n&quot;</span>,
+                <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;(s.<span class="hljs-built_in">count</span>()), <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;(<span class="hljs-built_in">floor</span>&lt;seconds&gt;(timeout).<span class="hljs-built_in">count</span>()),
+                <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;(<span class="hljs-built_in">ceil</span>&lt;seconds&gt;(timeout).<span class="hljs-built_in">count</span>()), <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;(<span class="hljs-built_in">round</span>&lt;seconds&gt;(timeout).<span class="hljs-built_in">count</span>()),
+                <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;(us.<span class="hljs-built_in">count</span>()));
+    <span class="hljs-keyword">auto</span> ratio = <span class="hljs-built_in">milliseconds</span>(<span class="hljs-number">1500</span>) / <span class="hljs-built_in">seconds</span>(<span class="hljs-number">1</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ratio=%lld neg=%lld\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;(ratio),
+                <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;(<span class="hljs-built_in">duration_cast</span>&lt;seconds&gt;(<span class="hljs-built_in">milliseconds</span>(<span class="hljs-number">-1500</span>)).<span class="hljs-built_in">count</span>()));
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch25-chrono">cast=1 floor=1 ceil=2 round=2 us=1999000
+ratio=1 neg=-1</pre>
+      <p><b>Why.</b> <code>duration_cast</code> truncates toward zero, like integer division, so 1999 ms becomes 1 s and -1500 ms becomes -1 s (where <code>floor</code> would give -2). A conversion that can lose precision must be written explicitly, while a widening one (milliseconds to microseconds) is implicit and exact. C++17 adds <code>floor</code>, <code>ceil</code> and <code>round</code> (ties to even) so you can choose. Dividing two durations gives a plain count, also truncated: 1500 ms / 1 s is 1. The wrong answer is "it rounds to the nearest second".</p>
+      <p>For timeouts, round up. A 1999 ms deadline truncated to 1 s fires early, and a sub-millisecond timeout truncated to 0 makes <code>poll</code> (which takes an <code>int</code> of milliseconds) return immediately, so the event loop busy-spins at 100% CPU.</p>
+    </div></details>
+  </div>
+</section>
+
+<section id="ch06-round-4" data-roles="dr cd"><div class="sec-head"><h2>Round 4: networking and the OS boundary</h2><div class="sec-tools"><span class="role dr">Drills</span><span class="role cd">Coding</span></div></div>
+  <p><b>Time limit: 30 minutes. Scoring: 18 points</b> (2 concept × 1, 2 tricky × 2, 2 output × 2, 2 bug × 2, code 4). 15 or more is a strong pass. Expect this round for networking, backend and exchange-connectivity roles. Review material: <a href="#ch04">Ch 4</a>, <a href="#ch05">Ch 5</a> and <a href="#ch01">Ch 1</a>.</p>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>You type <code>https://example.com/</code> into a browser on a fresh laptop. List the network steps until the first byte of the page arrives, in order.</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> (1) DHCP has already given the laptop an IP address, a default gateway and a DNS server. (2) The browser resolves <code>example.com</code>: it checks its own and the OS caches, then sends a UDP query to the resolver. Because the resolver is on another network, the packet goes to the gateway, whose MAC address the laptop learns with ARP. The resolver walks root, <code>.com</code> and the authoritative server if it has no cached answer. (3) A TCP three-way handshake to port 443 (one RTT). (4) A TLS 1.3 handshake (one more RTT): ClientHello with a key share and SNI, ServerHello, certificate and Finished, then keys are derived. (5) An encrypted HTTP request (HTTP/2 negotiated through ALPN), and the server's response.</p>
+      <p><b>Why.</b> The interviewer listens for layering (ARP below IP, DNS over UDP, TLS over TCP) and for where round trips go: DNS, TCP and TLS each cost at least one RTT before the request. Bonus points: NAT rewrites the source address at the home router, HTTP/3 replaces TCP and TLS with QUIC to merge those handshakes, and connection reuse skips everything after step 2 for later requests.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>What does a socket's receive buffer (<code>SO_RCVBUF</code>) do, and what happens to a UDP market data feed when the application falls behind and the buffer fills?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The receive buffer is the kernel memory where packets wait between arriving from the NIC and being read by the application. For TCP, a full buffer shrinks the advertised window to zero and the sender is told to wait, so no data is lost. UDP has no flow control, so once the buffer is full the kernel silently <b>drops</b> every new datagram. The application only notices through sequence-number gaps, and the kernel counts the drops (<code>RcvbufErrors</code> in <code>netstat -su</code> or <code>/proc/net/snmp</code>).</p>
+      <p><b>Why.</b> Bursts at the market open can be many times the average rate, so feed handlers set a large <code>SO_RCVBUF</code> (Linux caps it at <code>net.core.rmem_max</code>, and reports back double the value you asked for, because it reserves room for bookkeeping) and, more importantly, keep the reading thread from ever blocking. A big buffer only absorbs bursts. It does not help if the consumer is slower on average, and it adds queueing delay to every packet behind the backlog.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>Your client is blocked in <code>recv</code> on a TCP connection. What does it see if the server <b>process</b> crashes, and what if the server <b>machine</b> loses power?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> If the process crashes, the server's kernel closes its sockets: it sends FIN (or RST if unread data was pending), and the client's <code>recv</code> returns 0 or fails with <code>ECONNRESET</code> almost immediately. If the machine loses power, nothing is sent at all. The client's <code>recv</code> keeps blocking indefinitely, because an idle TCP connection exchanges no packets and so cannot notice that the peer is gone.</p>
+      <p><b>Why.</b> TCP detects a dead peer only when it tries to send: retransmissions of unacknowledged data eventually time out (with the Linux default <code>tcp_retries2 = 15</code>, after about 924.6 seconds, roughly 15 minutes), or <code>TCP_USER_TIMEOUT</code> sets a shorter limit. For idle connections, enable keepalive and shorten it (<code>TCP_KEEPIDLE</code>, <code>TCP_KEEPINTVL</code>, <code>TCP_KEEPCNT</code>), since keepalive is off unless you set <code>SO_KEEPALIVE</code>, and even then the first probe comes only after 2 hours of silence (<code>tcp_keepalive_time = 7200</code>), followed by 9 probes 75 seconds apart. Trading protocols such as FIX add application-level heartbeats for exactly this reason: a missed heartbeat interval is the reliable signal. When the machine reboots and the client then sends, the fresh kernel answers with RST.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>Exchanges publish market data over UDP multicast, not TCP. Why, and what does a feed handler do when it sees sequence number 1005 right after 1003?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Multicast lets the network replicate one stream to every subscriber, so the exchange sends each packet once and all participants receive it at nearly the same time. TCP would need one connection per client, and one slow client's retransmissions and flow control would never be allowed to delay the others. A gap from 1003 to 1005 means 1004 was lost or reordered. The handler buffers 1005 onward, waits briefly in case 1004 arrives late or on the second feed, and otherwise requests a retransmission or rebuilds its state from a snapshot channel.</p>
+      <p><b>Why.</b> Exchanges usually publish two identical feeds (A and B) over separate network paths, and the handler takes whichever copy of each sequence number arrives first (line arbitration), which hides most single-path losses. Recovery uses a separate TCP or unicast retransmission service and periodic snapshots. The order book must not be updated past a gap, since applying 1005 without 1004 can leave a phantom order. Every packet carries a sequence number precisely because UDP itself gives no ordering or delivery guarantee.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>A thread blocks in <code>read</code> on an empty pipe, and a timer signal arrives after 50 ms. What does <code>read</code> return?</p>
+<pre data-run="ch26-eintr"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cerrno&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;csignal&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/time.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">on_alarm</span><span class="hljs-params">(<span class="hljs-type">int</span>)</span> </span>{}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> p[<span class="hljs-number">2</span>];
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">pipe</span>(p) != <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">sigaction</span> sa {};
+    sa.sa_handler = on_alarm;
+    <span class="hljs-built_in">sigemptyset</span>(&amp;sa.sa_mask);
+    sa.sa_flags = <span class="hljs-number">0</span>;  <span class="hljs-comment">// no SA_RESTART</span>
+    <span class="hljs-built_in">sigaction</span>(SIGALRM, &amp;sa, <span class="hljs-literal">nullptr</span>);
+
+    itimerval t{};
+    t.it_value.tv_usec = <span class="hljs-number">50000</span>;
+    <span class="hljs-built_in">setitimer</span>(ITIMER_REAL, &amp;t, <span class="hljs-literal">nullptr</span>);
+
+    <span class="hljs-type">char</span> c;
+    <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">read</span>(p[<span class="hljs-number">0</span>], &amp;c, <span class="hljs-number">1</span>);
+    <span class="hljs-type">int</span> err = errno;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;read=%zd errno=%s\n&quot;</span>, n, err == EINTR ? <span class="hljs-string">&quot;EINTR&quot;</span> : std::<span class="hljs-built_in">strerror</span>(err));
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-eintr">read=-1 errno=EINTR</pre>
+      <p><b>Why.</b> When a signal handler runs while a thread is blocked in a "slow" system call (reads from pipes, sockets and terminals, <code>accept</code>, <code>connect</code>, waits), the call is interrupted. Without <code>SA_RESTART</code> it returns -1 with <code>errno == EINTR</code>, and no data has been lost. With <code>SA_RESTART</code> the kernel restarts most such calls transparently, and this program would block forever. Some calls never restart, whatever the flag (on Linux <code>epoll_wait</code>, <code>poll</code>, <code>select</code> and calls with a timeout such as <code>nanosleep</code>), so robust I/O code always retries on <code>EINTR</code>. Signals installed with the old <code>signal()</code> function get <code>SA_RESTART</code> semantics on glibc and BSD, which is why the bug often hides until someone switches to <code>sigaction</code>.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>Which numbers does the kernel hand out? The program prints them relative to the first descriptor.</p>
+<pre data-run="ch26-fdnum"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;fcntl.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> a = <span class="hljs-built_in">open</span>(<span class="hljs-string">&quot;/dev/null&quot;</span>, O_RDONLY);
+    <span class="hljs-type">int</span> b = <span class="hljs-built_in">open</span>(<span class="hljs-string">&quot;/dev/null&quot;</span>, O_RDONLY);
+    <span class="hljs-built_in">close</span>(a);
+    <span class="hljs-type">int</span> c = <span class="hljs-built_in">open</span>(<span class="hljs-string">&quot;/dev/null&quot;</span>, O_RDONLY);
+    <span class="hljs-type">int</span> d = <span class="hljs-built_in">dup</span>(b);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a=+%d b=+%d c=+%d d=+%d\n&quot;</span>, a - a, b - a, c - a, d - a);
+    <span class="hljs-built_in">close</span>(b);
+    <span class="hljs-built_in">close</span>(c);
+    <span class="hljs-built_in">close</span>(d);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-fdnum">a=+0 b=+1 c=+0 d=+2</pre>
+      <p><b>Why.</b> POSIX requires <code>open</code>, <code>socket</code>, <code>accept</code>, <code>dup</code> and friends to return the <b>lowest-numbered</b> descriptor not currently open. After <code>close(a)</code>, the next <code>open</code> immediately reuses <code>a</code>'s number. <code>dup(b)</code> gets the lowest free number, which is now after <code>b</code>. In a normal process 0, 1 and 2 are taken, so <code>a</code> is 3. This rule is how shells redirect output (close 1, then open a file, and it becomes stdout), and it is what makes the next bug dangerous.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>The receive helper failed with a reset connection, yet the code went on to parse a header. Why?</p>
+<pre data-run="ch26-ssize"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/types.h&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Header</span> { <span class="hljs-type">unsigned</span> <span class="hljs-type">char</span> bytes[<span class="hljs-number">8</span>]; };
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">ssize_t</span> <span class="hljs-title">fake_recv</span><span class="hljs-params">(<span class="hljs-type">void</span>*, std::<span class="hljs-type">size_t</span>)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">-1</span>; }  <span class="hljs-comment">// as if errno == ECONNRESET</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Header h;
+    <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">fake_recv</span>(&amp;h, <span class="hljs-keyword">sizeof</span> h);
+    <span class="hljs-keyword">if</span> (n &lt; <span class="hljs-keyword">sizeof</span> h) {
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;short read or error, handle it&quot;</span>);
+        <span class="hljs-keyword">return</span> <span class="hljs-number">0</span>;
+    }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;header complete, parsing&quot;</span>);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-ssize">header complete, parsing</pre>
+      <p><b>Answer.</b> <code>n &lt; sizeof h</code> compares a signed <code>ssize_t</code> with an unsigned <code>size_t</code>. The usual arithmetic conversions convert <code>n</code> to <code>size_t</code>, so -1 becomes <code>SIZE_MAX</code>, the comparison is false, and the error path is skipped. The code then parses an uninitialised header. <code>-Wall -Wextra</code> warns about it (<code>-Wsign-compare</code>), which is the cheapest bug fix in this chapter.</p>
+      <p><b>Fix.</b> Check for errors first and separately: <code>if (n &lt; 0) { handle errno } if (static_cast&lt;std::size_t&gt;(n) &lt; sizeof h) { short read }</code>, or use <code>std::cmp_less(n, sizeof h)</code> from C++20, which compares mixed signs by value. Better, put the loop and both checks inside one <code>recv_exact</code> helper (<a href="#ch05">Ch 5</a>), so call sites never see a raw return value.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>An error path closes a connection early, and later the audit log stops working. Connect the two.</p>
+<pre data-run="ch26-doubleclose"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cerrno&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;fcntl.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Conn</span> {
+    <span class="hljs-type">int</span> fd;
+    ~<span class="hljs-built_in">Conn</span>() { <span class="hljs-built_in">close</span>(fd); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> log = <span class="hljs-number">-1</span>;
+    {
+        Conn c{<span class="hljs-built_in">open</span>(<span class="hljs-string">&quot;/dev/null&quot;</span>, O_RDONLY)};
+        <span class="hljs-built_in">close</span>(c.fd);                        <span class="hljs-comment">// error path closes early</span>
+        log = <span class="hljs-built_in">open</span>(<span class="hljs-string">&quot;/dev/zero&quot;</span>, O_RDONLY);  <span class="hljs-comment">// gets the lowest free number</span>
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;same number: %s\n&quot;</span>, log == c.fd ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    }                                       <span class="hljs-comment">// ~Conn closes c.fd again</span>
+    <span class="hljs-type">char</span> buf[<span class="hljs-number">4</span>];
+    <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">read</span>(log, buf, <span class="hljs-keyword">sizeof</span> buf);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;read from log: %zd (%s)\n&quot;</span>, n, n &lt; <span class="hljs-number">0</span> ? std::<span class="hljs-built_in">strerror</span>(errno) : <span class="hljs-string">&quot;ok&quot;</span>);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-doubleclose">same number: yes
+read from log: -1 (Bad file descriptor)</pre>
+      <p><b>Answer.</b> A double close. The error path closes <code>c.fd</code> but leaves the number in the object, the log file is opened and receives the same number (lowest free descriptor), and then <code>~Conn</code> closes that number again, which closes the <b>log</b>. Every later write to the log fails with <code>EBADF</code>, or worse, a third open reuses the number and log lines go into some other file or socket.</p>
+      <p><b>Fix.</b> Make one owner responsible for closing: a move-only RAII handle whose <code>reset()</code> closes and sets the stored value to -1, and never call <code>close</code> on a descriptor you do not own. In multi-threaded programs the same bug is a race: another thread's <code>accept</code> can grab the number between the two closes. No sanitizer catches it, but <code>strace -e trace=close</code> shows two closes of one number, and a failed <code>close</code> returning <code>EBADF</code> is a sign of it. Also note that on Linux you must not retry <code>close</code> after <code>EINTR</code>, since the descriptor is already released.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Write <code>LineReader</code>, which turns arbitrary chunks from a stream socket into complete lines.</p>
+    <p><code>feed(chunk, on_line)</code> appends the bytes and calls <code>on_line(std::string_view)</code> once per complete line, without the trailing <code>\n</code> or <code>\r\n</code>. A partial line must be kept until the rest arrives, possibly several chunks later. Lines (complete or partial) longer than <code>max_line</code> bytes must make <code>feed</code> return false so the caller can drop the connection. Scanning must stay linear even when a long line arrives one byte at a time.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> Keep a buffer of unconsumed bytes and the position up to which it has already been searched for a newline, so that bytes are scanned only once. Each <code>feed</code> appends, then repeatedly finds the next <code>\n</code> from the scan position, strips an optional <code>\r</code>, and hands out a view of the line. After the loop, the consumed prefix is erased in one step and the length limit is checked on whatever partial line is left.</p>
+<pre data-run="ch26-linereader" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">LineReader</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">LineReader</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> max_line)</span> : max_(max_line) {</span>}
+
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">feed</span><span class="hljs-params">(std::string_view chunk, F&amp;&amp; on_line)</span> </span>{
+        buf_.<span class="hljs-built_in">append</span>(chunk);
+        std::<span class="hljs-type">size_t</span> start = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> nl; (nl = buf_.<span class="hljs-built_in">find</span>(<span class="hljs-string">&#x27;\n&#x27;</span>, scan_)) != std::string::npos;) {
+            std::<span class="hljs-type">size_t</span> end = (nl &gt; start &amp;&amp; buf_[nl - <span class="hljs-number">1</span>] == <span class="hljs-string">&#x27;\r&#x27;</span>) ? nl - <span class="hljs-number">1</span> : nl;
+            <span class="hljs-keyword">if</span> (end - start &gt; max_) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+            <span class="hljs-built_in">on_line</span>(std::<span class="hljs-built_in">string_view</span>(buf_).<span class="hljs-built_in">substr</span>(start, end - start));
+            start = nl + <span class="hljs-number">1</span>;
+            scan_ = start;
+        }
+        buf_.<span class="hljs-built_in">erase</span>(<span class="hljs-number">0</span>, start);
+        scan_ = buf_.<span class="hljs-built_in">size</span>();
+        <span class="hljs-keyword">return</span> buf_.<span class="hljs-built_in">size</span>() &lt;= max_;
+    }
+
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">size_t</span> max_;
+    std::string buf_;
+    std::<span class="hljs-type">size_t</span> scan_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">LineReader <span class="hljs-title">r</span><span class="hljs-params">(<span class="hljs-number">64</span>)</span></span>;
+    <span class="hljs-keyword">auto</span> print = [](std::string_view line) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;[%.*s]\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(line.<span class="hljs-built_in">size</span>()), line.<span class="hljs-built_in">data</span>());
+    };
+    r.<span class="hljs-built_in">feed</span>(<span class="hljs-string">&quot;GET /a HT&quot;</span>, print);
+    r.<span class="hljs-built_in">feed</span>(<span class="hljs-string">&quot;TP/1.1\r\nHost: x\r\n\r\npart&quot;</span>, print);
+    r.<span class="hljs-built_in">feed</span>(<span class="hljs-string">&quot;ial&quot;</span>, print);
+    r.<span class="hljs-built_in">feed</span>(<span class="hljs-string">&quot;\n&quot;</span>, print);
+    <span class="hljs-function">LineReader <span class="hljs-title">small</span><span class="hljs-params">(<span class="hljs-number">8</span>)</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;oversize rejected: %s\n&quot;</span>, small.<span class="hljs-built_in">feed</span>(<span class="hljs-string">&quot;0123456789&quot;</span>, print) ? <span class="hljs-string">&quot;no&quot;</span> : <span class="hljs-string">&quot;yes&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch26-linereader">[GET /a HTTP/1.1]
+[Host: x]
+[]
+[partial]
+oversize rejected: yes</pre>
+      <p><b>Complexity and pitfalls.</b> Amortised O(n) in the bytes received: each byte is scanned once and the erase moves only the leftover partial line. Pitfalls: searching from the start of the buffer on every chunk (quadratic for a slow sender), forgetting the partial line at the end of a chunk, assuming a <code>\r\n</code> pair never splits across two chunks (it can, which is why the <code>\r</code> is stripped only once the <code>\n</code> is seen), and no length limit, which lets a peer that never sends a newline exhaust memory. Views passed to <code>on_line</code> are valid only during the call, since the next <code>feed</code> modifies the buffer.</p>
+      <p class="rating">Estimated rating: ~1300 · simple parsing, judged on partial input, the length limit and linear scanning.</p>
+    </div></details>
+  </div>
+</section>

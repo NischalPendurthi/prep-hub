@@ -1,0 +1,1529 @@
+---
+title: Object pools
+part: Part C · Memory management
+lede: An object pool keeps fully constructed objects and lends them out, so the expensive part of creating an object (its buffers, its connection, its thread) happens once. This chapter covers acquire and release, reset semantics, RAII handles, exhaustion policies, the bugs pools invite (stale state, double release, use after release) and the generation-counter handles that catch them. Interviewers ask about object pools because they test lifetime reasoning more than allocation tricks.
+desc: Reusing constructed objects, acquire and release, RAII handles
+hours: 4
+prereqs: [Ch 9](#ch09), [Ch 10](#ch10), [Ch 13](#ch13)
+---
+<section id="ch14-vs-memory" data-roles="th"><div class="sec-head"><h2>Object pools vs memory pools</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A memory pool (<a href="#ch13">Ch 13</a>) recycles <em>raw blocks</em>: you construct an object in a block, destroy it, and the block goes back. An object pool recycles <em>live objects</em>: they are constructed once, handed out, <b>reset</b> to a clean state when returned, and destroyed only when the pool dies. The destructor and constructor do not run per use.</p>
+<p>That distinction decides when each one helps:</p>
+<ul>
+  <li>A memory pool helps when the <b>allocation</b> is the cost: many small objects of one size, created and destroyed often.</li>
+  <li>An object pool helps when <b>construction</b> is the cost: an object that owns a 64 KiB buffer, a TCP connection with a completed TLS handshake, a thread, a database statement handle, a game entity with components wired up. Resetting such an object (clear the buffer but keep its capacity, keep the socket open) is far cheaper than building a new one.</li>
+</ul>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 250" role="img" aria-label="Object pool lifecycle compared with a memory pool lifecycle">
+<defs><marker id="ch14-c16a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="24" class="t-small t-bold">Object pool</text>
+<rect x="20" y="40" width="130" height="44" rx="6" class="d-soft"/>
+<text x="85" y="58" text-anchor="middle" class="t-small">constructed once</text>
+<text x="85" y="74" text-anchor="middle" class="t-small t-muted">(pool start-up)</text>
+<rect x="210" y="40" width="140" height="44" rx="6" class="d-key"/>
+<text x="280" y="58" text-anchor="middle" class="t-small">idle, clean</text>
+<text x="280" y="74" text-anchor="middle" class="t-small t-muted">in the free list</text>
+<rect x="450" y="40" width="130" height="44" rx="6" class="d-acc"/>
+<text x="515" y="66" text-anchor="middle" class="t-small">in use</text>
+<rect x="610" y="40" width="96" height="44" rx="6" class="d-box"/>
+<text x="658" y="58" text-anchor="middle" class="t-small">destroyed</text>
+<text x="658" y="74" text-anchor="middle" class="t-small t-muted">pool dies</text>
+<path d="M150,62 L206,62" class="d-line" marker-end="url(#ch16-c16a)"/>
+<path d="M350,52 L446,52" class="d-line" marker-end="url(#ch16-c16a)"/>
+<text x="398" y="46" text-anchor="middle" class="t-mono t-small">acquire</text>
+<path d="M446,74 L354,74" class="d-line-key" marker-end="url(#ch16-c16a)"/>
+<text x="398" y="98" text-anchor="middle" class="t-mono t-small t-key">release + reset</text>
+<path d="M280,84 C280,120 658,120 658,88" class="d-line d-dash" marker-end="url(#ch16-c16a)"/>
+<text x="470" y="128" text-anchor="middle" class="t-small t-muted">only at pool destruction</text>
+<line x1="20" y1="148" x2="700" y2="148" class="d-grid"/>
+<text x="20" y="172" class="t-small t-bold">Memory pool</text>
+<rect x="20" y="186" width="130" height="44" rx="6" class="d-soft"/>
+<text x="85" y="212" text-anchor="middle" class="t-small">raw block</text>
+<rect x="290" y="186" width="130" height="44" rx="6" class="d-acc"/>
+<text x="355" y="212" text-anchor="middle" class="t-small">live object</text>
+<path d="M150,198 L286,198" class="d-line" marker-end="url(#ch16-c16a)"/>
+<text x="218" y="192" text-anchor="middle" class="t-mono t-small">allocate + construct</text>
+<path d="M286,220 L154,220" class="d-line-trap" marker-end="url(#ch16-c16a)"/>
+<text x="218" y="242" text-anchor="middle" class="t-mono t-small t-trap">destroy + deallocate</text>
+<text x="450" y="200" class="t-small">Constructor and destructor run</text>
+<text x="450" y="216" class="t-small">on every use. The pool only</text>
+<text x="450" y="232" class="t-small">saves the allocation.</text>
+</svg></div><figcaption><b>An object pool skips construction, a memory pool skips allocation.</b> Objects in an object pool cycle between idle and in use, and the reset on release replaces the destructor and constructor.</figcaption></figure>
+
+<div class="table-wrap"><table>
+<thead><tr><th>Key facts</th><th>Memory pool</th><th>Object pool</th></tr></thead>
+<tbody>
+<tr><td>Recycles</td><td>Raw storage</td><td>Constructed objects</td></tr>
+<tr><td>Per-use cost saved</td><td><code>malloc</code>/<code>free</code></td><td>Construction, destruction and their allocations</td></tr>
+<tr><td>Per-use cost added</td><td>Placement new and destructor call</td><td><code>reset()</code> on release (or on acquire)</td></tr>
+<tr><td>Typical API</td><td><code>void* allocate()</code>, <code>deallocate(p)</code></td><td><code>Handle acquire()</code>, release via the handle's destructor</td></tr>
+<tr><td>Main bug risk</td><td>Use after free, wrong size</td><td>Stale state from the previous user, use after release</td></tr>
+<tr><td>Objects are</td><td>One type or one size class</td><td>One type, often heavy (buffers, sockets, threads)</td></tr>
+<tr><td>Memory held</td><td>Peak block count</td><td>Peak object count, plus every buffer each object grew</td></tr>
+</tbody></table></div>
+<p>The two combine: an object pool can store its objects in memory from a memory pool or an arena, and many systems call both of them "pools". In an interview, define which one you mean first.</p>
+</section>
+
+<section id="ch14-acquire-release" data-roles="th"><div class="sec-head"><h2>Acquire, release and reset semantics</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The interface has two operations. <code>acquire()</code> removes an idle object from the pool and gives the caller exclusive use. <code>release(obj)</code> gives it back. Between the two, the pool must not hand that object to anyone else, and after release the caller must not touch it.</p>
+
+<h3 id="ch14-reset">What reset means</h3>
+<p><b>Reset</b> returns the object to a state that is indistinguishable, for the next user, from a freshly constructed one, while keeping whatever made construction expensive. Examples:</p>
+<ul>
+  <li>A buffer: <code>clear()</code> (size 0) but keep the capacity. Do not <code>shrink_to_fit()</code>, or you lose the point of pooling.</li>
+  <li>A request object: clear every field, including the optional ones (authentication token, user id, error flags). Missing one field is the classic stale-state bug.</li>
+  <li>A connection: roll back any open transaction, reset session variables, keep the socket and TLS session.</li>
+  <li>A game entity: reset position, health and timers, unsubscribe it from events, keep its allocated component storage.</li>
+</ul>
+
+<h3 id="ch14-reset-when">Reset on release or on acquire?</h3>
+<p>Both are used, and the trade-offs are real:</p>
+<ul>
+  <li><b>On release</b> (most common): the previous user's data and resources are dropped as soon as they are done. Secrets do not linger in idle objects, references to other objects are cut early so they can be freed, and the acquire path stays fast. The releasing thread pays the cost.</li>
+  <li><b>On acquire</b>: lazy, so objects that are never reused are never reset, and the cost lands on the thread that needs the object. Idle objects still hold the previous user's data, which is a security and memory concern.</li>
+</ul>
+<p>Whichever you choose, also <b>validate</b>: a pool of connections typically checks on acquire that the connection is still alive (the server may have closed it while it sat idle) and discards it if not.</p>
+
+<h3 id="ch14-basic-pool">A basic object pool</h3>
+<p>This version owns every object through a <code>std::vector&lt;std::unique_ptr&lt;T&gt;&gt;</code> and keeps a stack of idle ones. The free stack is reserved up front, so <code>release</code> never allocates and can be <code>noexcept</code>.</p>
+<pre data-run="ch16-basic" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ObjectPool</span> {
+    std::vector&lt;std::unique_ptr&lt;T&gt;&gt; all_;   <span class="hljs-comment">// owns every object</span>
+    std::vector&lt;T*&gt; idle_;                  <span class="hljs-comment">// objects ready to hand out</span>
+    std::function&lt;<span class="hljs-type">void</span>(T&amp;)&gt; reset_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">ObjectPool</span>(std::<span class="hljs-type">size_t</span> n, std::function&lt;<span class="hljs-built_in">void</span>(T&amp;)&gt; reset) : <span class="hljs-built_in">reset_</span>(std::<span class="hljs-built_in">move</span>(reset)) {
+        all_.<span class="hljs-built_in">reserve</span>(n);
+        idle_.<span class="hljs-built_in">reserve</span>(n);
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) {
+            all_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;T&gt;());
+            idle_.<span class="hljs-built_in">push_back</span>(all_.<span class="hljs-built_in">back</span>().<span class="hljs-built_in">get</span>());
+        }
+    }
+    <span class="hljs-function">T* <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (idle_.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        T* obj = idle_.<span class="hljs-built_in">back</span>();
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> obj;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(T* obj)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-built_in">reset_</span>(*obj);
+        idle_.<span class="hljs-built_in">push_back</span>(obj);   <span class="hljs-comment">// never reallocates: capacity is all_.size()</span>
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">idle</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> idle_.<span class="hljs-built_in">size</span>(); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Packet</span> { std::string payload; <span class="hljs-type">int</span> retries = <span class="hljs-number">0</span>; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">ObjectPool&lt;Packet&gt; <span class="hljs-title">pool</span><span class="hljs-params">(<span class="hljs-number">2</span>, [](Packet&amp; p) { p.payload.clear(); p.retries = <span class="hljs-number">0</span>; })</span></span>;
+    Packet* p = pool.<span class="hljs-built_in">acquire</span>();
+    p-&gt;payload.<span class="hljs-built_in">assign</span>(<span class="hljs-number">1000</span>, <span class="hljs-string">&#x27;x&#x27;</span>);
+    p-&gt;retries = <span class="hljs-number">3</span>;
+    <span class="hljs-keyword">auto</span> cap = p-&gt;payload.<span class="hljs-built_in">capacity</span>();
+    pool.<span class="hljs-built_in">release</span>(p);
+    Packet* q = pool.<span class="hljs-built_in">acquire</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;same object: %s, size %zu, retries %d, capacity kept: %s\n&quot;</span>,
+                q == p ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>, q-&gt;payload.<span class="hljs-built_in">size</span>(), q-&gt;retries, q-&gt;payload.<span class="hljs-built_in">capacity</span>() == cap ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    pool.<span class="hljs-built_in">release</span>(q);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;idle: %zu\n&quot;</span>, pool.<span class="hljs-built_in">idle</span>());
+}</code></pre>
+<pre class="out" data-out="ch16-basic">same object: yes, size 0, retries 0, capacity kept: yes
+idle: 2</pre>
+<p>The raw <code>T*</code> interface is the weak point: nothing stops a caller from forgetting to release, releasing twice, or keeping the pointer after release. The next section fixes the first two with RAII, and <a href="#ch14-slot-map">generation handles</a> fix the third.</p>
+</section>
+
+<section id="ch14-raii" data-roles="th"><div class="sec-head"><h2>RAII handles</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A pooled object should be returned exactly once, on every path, including exceptions and early returns. That is what RAII is for (<a href="#ch01">Ch 1</a>). The standard tool is <code>std::unique_ptr</code> with a custom deleter (<a href="#ch10">Ch 10</a>) whose call operator returns the object to the pool instead of deleting it.</p>
+<pre data-run="ch16-handle" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Connection</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-type">int</span> queries = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ConnectionPool</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Return</span> {
+        ConnectionPool* pool;
+        <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Connection* c)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ pool-&gt;<span class="hljs-built_in">give_back</span>(c); }
+    };
+    <span class="hljs-keyword">using</span> Handle = std::unique_ptr&lt;Connection, Return&gt;;
+
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ConnectionPool</span><span class="hljs-params">(<span class="hljs-type">int</span> n)</span> </span>{
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) all_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Connection&gt;(Connection{i}));
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; c : all_) idle_.<span class="hljs-built_in">push_back</span>(c.<span class="hljs-built_in">get</span>());
+    }
+    <span class="hljs-function">Handle <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (idle_.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;no connection available&quot;</span>);
+        Connection* c = idle_.<span class="hljs-built_in">back</span>();
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(c, Return{<span class="hljs-keyword">this</span>});
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">idle</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> idle_.<span class="hljs-built_in">size</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">give_back</span><span class="hljs-params">(Connection* c)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        c-&gt;queries = <span class="hljs-number">0</span>;            <span class="hljs-comment">// reset</span>
+        idle_.<span class="hljs-built_in">push_back</span>(c);
+    }
+    std::vector&lt;std::unique_ptr&lt;Connection&gt;&gt; all_;
+    std::vector&lt;Connection*&gt; idle_;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">run_query</span><span class="hljs-params">(ConnectionPool&amp; pool, <span class="hljs-type">bool</span> fail)</span> </span>{
+    <span class="hljs-keyword">auto</span> conn = pool.<span class="hljs-built_in">acquire</span>();
+    ++conn-&gt;queries;
+    <span class="hljs-keyword">if</span> (fail) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;query failed&quot;</span>);
+}   <span class="hljs-comment">// conn returns to the pool here, on both paths</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">ConnectionPool <span class="hljs-title">pool</span><span class="hljs-params">(<span class="hljs-number">2</span>)</span></span>;
+    <span class="hljs-built_in">run_query</span>(pool, <span class="hljs-literal">false</span>);
+    <span class="hljs-keyword">try</span> { <span class="hljs-built_in">run_query</span>(pool, <span class="hljs-literal">true</span>); } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;caught: %s\n&quot;</span>, e.<span class="hljs-built_in">what</span>()); }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;idle after both calls: %zu\n&quot;</span>, pool.<span class="hljs-built_in">idle</span>());
+    {
+        <span class="hljs-keyword">auto</span> a = pool.<span class="hljs-built_in">acquire</span>();
+        <span class="hljs-keyword">auto</span> b = std::<span class="hljs-built_in">move</span>(a);     <span class="hljs-comment">// ownership moves; still exactly one release</span>
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;while held: idle %zu, a empty: %s\n&quot;</span>, pool.<span class="hljs-built_in">idle</span>(), a ? <span class="hljs-string">&quot;no&quot;</span> : <span class="hljs-string">&quot;yes&quot;</span>);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;idle at the end: %zu\n&quot;</span>, pool.<span class="hljs-built_in">idle</span>());
+}</code></pre>
+<pre class="out" data-out="ch16-handle">caught: query failed
+idle after both calls: 2
+while held: idle 1, a empty: yes
+idle at the end: 2</pre>
+<p>Design points:</p>
+<ul>
+  <li><b>Move-only</b> handles make double release impossible by construction: copying is a compile error, and moving leaves the source empty, so its destructor does nothing.</li>
+  <li><b>Size.</b> A deleter holding a pool pointer makes the handle 16 bytes on 64-bit instead of 8. A stateless deleter (for a global or <code>thread_local</code> pool) keeps it at 8, thanks to the empty-member optimisation inside <code>unique_ptr</code>.</li>
+  <li><b>The pool must outlive every handle.</b> If the pool is destroyed first, the deleter calls into a dead object. Either guarantee the order (declare the pool before its users, destroy users first), or make handles hold a <code>std::weak_ptr</code> to shared pool state and delete the object if the pool is gone. The coding section builds the second design.</li>
+  <li><b><code>std::shared_ptr</code> handles</b> work too (<code>std::shared_ptr&lt;T&gt;(raw, deleter)</code>), and are thread-safe to copy, but each one allocates a control block, which puts an allocation back on the path the pool was meant to clear. Use <code>std::allocate_shared</code> with a pool allocator, or an intrusive reference count, if you need sharing.</li>
+</ul>
+</section>
+
+<section id="ch14-exhaustion" data-roles="th"><div class="sec-head"><h2>Pool exhaustion policies</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>When every object is out, <code>acquire</code> has three choices. Pick one deliberately and document it.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Policy</th><th>How</th><th>Good for</th><th>Danger</th></tr></thead>
+<tbody>
+<tr><td><b>Grow</b></td><td>Construct a new object (maybe up to a hard limit)</td><td>Buffers, general services where memory is cheap</td><td>Unbounded memory under a load spike; the expensive construction happens on the hot path at the worst time</td></tr>
+<tr><td><b>Block</b></td><td>Wait on a condition variable until a release, usually with a timeout</td><td>Connection pools, worker pools: the limit protects a downstream resource</td><td>Deadlock if a thread holding one object waits for a second one; latency spikes</td></tr>
+<tr><td><b>Fail</b></td><td>Return an empty handle, <code>std::optional</code>, an error code, or throw</td><td>Trading and real-time systems: shed load, reject the order, raise an alarm</td><td>Callers that do not check the result</td></tr>
+</tbody></table></div>
+<p>Blocking pools have one classic trap: a thread that already holds an object and asks for another can deadlock when every thread does the same (each holds one, all wait for a second). Database connection pools hit this when a request handler opens a nested transaction on a second connection. The fix is to never acquire a second object while holding one, or to size the pool for the nesting depth times the number of threads.</p>
+<p>Always expose a <b>high-water mark</b> (the most objects ever in use) and a counter of exhaustion events. They tell you how to size the pool, and in a grow policy they show whether growth is a rare event or the normal case.</p>
+</section>
+
+<section id="ch14-lifetime-bugs" data-roles="th"><div class="sec-head"><h2>Stale state, double release and use after release</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Object pools turn three kinds of bugs from crashes into silent data corruption, because the memory involved is always valid.</p>
+<ul>
+  <li><b>Stale state.</b> <code>reset()</code> forgets a field, so the next user inherits it: a previous user's authentication token, a "cancelled" flag, a half-filled vector, a pending timer. The object looks valid, so nothing crashes. This is the most common object pool bug in production, and it can be a security hole (one customer's data in another customer's response).</li>
+  <li><b>Double release.</b> The same object is pushed onto the idle list twice, so two later <code>acquire</code> calls return it to two different users, who then overwrite each other's data.</li>
+  <li><b>Use after release.</b> A caller keeps a raw pointer or reference after releasing. The object is reset and handed to someone else, and the old caller now reads or writes the new user's object. No tool sees a problem: the pointer is to a live object of the right type.</li>
+</ul>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"ASan will catch use after release." It will not. The object was never freed: it is a live <code>T</code> inside a live allocation. ASan, Valgrind and the debug heap only see allocator-level frees. The defences have to be in the pool's design: RAII handles for release, generation-checked handles for access, and a debug mode that poisons or cross-checks idle objects.</p></div>
+<p>Defences that work:</p>
+<ul>
+  <li>Make <code>reset()</code> assign a freshly constructed object's state where possible (<code>obj = T{}</code>), but move the buffers you want to keep out first and back afterwards, because the assignment also throws away their capacity (the reading section shows it). Test that a reset object compares equal to a new one.</li>
+  <li>Keep an <code>in_pool</code> flag (or a state enum) per object and check it in both <code>acquire</code> and <code>release</code>. A double release becomes an assertion failure at the second call.</li>
+  <li>In debug builds, fill idle objects with a recognisable pattern after reset, or keep idle objects in a FIFO quarantine so a stale pointer does not immediately alias a new user.</li>
+  <li>Hand out <b>handles</b> rather than pointers, and check them on every access. That is the next section.</li>
+</ul>
+</section>
+
+<section id="ch14-slot-map" data-roles="th"><div class="sec-head"><h2>Generation counters and slot maps</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Instead of a pointer, the user holds a <b>handle</b>: a slot index plus a <b>generation</b> number. Each slot also stores a generation, and the pool increments it every time the slot is released. A lookup succeeds only when the handle's generation equals the slot's. A stale handle (one taken before the release) carries an old generation, so it fails cleanly instead of reaching the new occupant.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 250" role="img" aria-label="Generation-checked handles: a current handle matches the slot generation, a stale handle does not">
+<defs><marker id="ch14-c16b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="230" y="24" class="t-small t-muted">slots</text>
+<rect x="230" y="34" width="90" height="96" rx="4" class="d-soft"/>
+<rect x="330" y="34" width="90" height="96" rx="4" class="d-soft"/>
+<rect x="430" y="34" width="90" height="96" rx="4" class="d-acc"/>
+<rect x="530" y="34" width="90" height="96" rx="4" class="d-soft"/>
+<text x="275" y="54" text-anchor="middle" class="t-mono t-small">[0]</text><text x="275" y="78" text-anchor="middle" class="t-mono t-small">gen 3</text><text x="275" y="100" text-anchor="middle" class="t-small">live</text><text x="275" y="118" text-anchor="middle" class="t-small t-muted">Goblin</text>
+<text x="375" y="54" text-anchor="middle" class="t-mono t-small">[1]</text><text x="375" y="78" text-anchor="middle" class="t-mono t-small">gen 1</text><text x="375" y="100" text-anchor="middle" class="t-small">free</text><text x="375" y="118" text-anchor="middle" class="t-small t-muted">next free: 3</text>
+<text x="475" y="54" text-anchor="middle" class="t-mono t-small">[2]</text><text x="475" y="78" text-anchor="middle" class="t-mono t-small t-bold">gen 7</text><text x="475" y="100" text-anchor="middle" class="t-small">live</text><text x="475" y="118" text-anchor="middle" class="t-small t-muted">Archer</text>
+<text x="575" y="54" text-anchor="middle" class="t-mono t-small">[3]</text><text x="575" y="78" text-anchor="middle" class="t-mono t-small">gen 2</text><text x="575" y="100" text-anchor="middle" class="t-small">free</text><text x="575" y="118" text-anchor="middle" class="t-small t-muted">next free: none</text>
+<rect x="20" y="150" width="170" height="36" rx="5" class="d-key"/>
+<text x="105" y="173" text-anchor="middle" class="t-mono t-small">handle {2, gen 7}</text>
+<rect x="20" y="200" width="170" height="36" rx="5" class="d-trap"/>
+<text x="105" y="223" text-anchor="middle" class="t-mono t-small">handle {2, gen 6}</text>
+<path d="M190,168 C330,168 440,160 470,134" class="d-line-key" marker-end="url(#ch16-c16b)"/>
+<path d="M190,218 C360,218 470,200 480,134" class="d-line-trap d-dash" marker-end="url(#ch16-c16b)"/>
+<text x="540" y="172" class="t-small t-key">7 == 7: returns the Archer</text>
+<text x="540" y="222" class="t-small t-trap">6 ≠ 7: stale, returns null</text>
+<text x="20" y="140" class="t-small t-muted">user code holds handles, never pointers</text>
+</svg></div><figcaption><b>A handle is an index plus a generation.</b> Slot 2 was released when it held generation 6 and then reused for an Archer at generation 7, so a handle kept from the earlier occupant no longer matches.</figcaption></figure>
+
+<h3 id="ch14-gen-pool">A generational pool</h3>
+<pre data-run="ch16-gen" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Handle</span> { std::<span class="hljs-type">uint32_t</span> index; std::<span class="hljs-type">uint32_t</span> gen; };
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">GenPool</span> {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">uint32_t</span> kNone = UINT32_MAX;
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Slot</span> { T value{}; std::<span class="hljs-type">uint32_t</span> gen = <span class="hljs-number">0</span>; <span class="hljs-type">bool</span> live = <span class="hljs-literal">false</span>; std::<span class="hljs-type">uint32_t</span> next_free = kNone; };
+    std::vector&lt;Slot&gt; slots_;
+    std::<span class="hljs-type">uint32_t</span> free_head_ = kNone;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">Handle <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (free_head_ == kNone) {
+            slots_.<span class="hljs-built_in">push_back</span>({});
+            free_head_ = <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">uint32_t</span>&gt;(slots_.<span class="hljs-built_in">size</span>() - <span class="hljs-number">1</span>);
+        }
+        std::<span class="hljs-type">uint32_t</span> i = free_head_;
+        Slot&amp; s = slots_[i];
+        free_head_ = s.next_free;
+        s.live = <span class="hljs-literal">true</span>;
+        <span class="hljs-keyword">return</span> {i, s.gen};
+    }
+    <span class="hljs-function">T* <span class="hljs-title">get</span><span class="hljs-params">(Handle h)</span> </span>{
+        <span class="hljs-keyword">if</span> (h.index &gt;= slots_.<span class="hljs-built_in">size</span>()) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        Slot&amp; s = slots_[h.index];
+        <span class="hljs-keyword">return</span> s.live &amp;&amp; s.gen == h.gen ? &amp;s.value : <span class="hljs-literal">nullptr</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">release</span><span class="hljs-params">(Handle h)</span> </span>{
+        <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">get</span>(h)) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;          <span class="hljs-comment">// stale or double release: refuse</span>
+        Slot&amp; s = slots_[h.index];
+        s.value = T{};                      <span class="hljs-comment">// reset</span>
+        s.live = <span class="hljs-literal">false</span>;
+        ++s.gen;                            <span class="hljs-comment">// invalidates every outstanding handle</span>
+        s.next_free = free_head_;
+        free_head_ = h.index;
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    GenPool&lt;std::string&gt; names;
+    Handle player = names.<span class="hljs-built_in">acquire</span>();
+    *names.<span class="hljs-built_in">get</span>(player) = <span class="hljs-string">&quot;player&quot;</span>;
+    names.<span class="hljs-built_in">release</span>(player);
+    Handle enemy = names.<span class="hljs-built_in">acquire</span>();         <span class="hljs-comment">// reuses slot 0</span>
+    *names.<span class="hljs-built_in">get</span>(enemy) = <span class="hljs-string">&quot;enemy&quot;</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;slot reused: %s\n&quot;</span>, enemy.index == player.index ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;old handle: %s\n&quot;</span>, names.<span class="hljs-built_in">get</span>(player) ? names.<span class="hljs-built_in">get</span>(player)-&gt;<span class="hljs-built_in">c_str</span>() : <span class="hljs-string">&quot;stale (null)&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;new handle: %s\n&quot;</span>, names.<span class="hljs-built_in">get</span>(enemy)-&gt;<span class="hljs-built_in">c_str</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;double release accepted: %s\n&quot;</span>, names.<span class="hljs-built_in">release</span>(player) ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch16-gen">slot reused: yes
+old handle: stale (null)
+new handle: enemy
+double release accepted: no</pre>
+
+<h3 id="ch14-slot-map-design">Slot maps</h3>
+<p>A <b>slot map</b> (the name comes from game engines; SG14's proposal for a <code>std::slot_map</code>, P0661, was never adopted, so you write or borrow one) adds one more idea: the values are kept in a <b>dense</b> array with no holes, and each slot stores the index of its value in that array. Erase moves the last value into the hole and patches the moved value's slot. Lookups cost one extra indirection, but iterating over all live values is a straight walk over contiguous memory, which is what a game loop that updates every entity each frame wants (see <a href="#ch17">Ch 17</a> on cache-friendly layouts). The coding section builds one.</p>
+<ul>
+  <li><b>Handle size.</b> 32-bit index plus 32-bit generation fits in 8 bytes, the same as a pointer, and can be serialised or sent between threads, which a pointer cannot do safely.</li>
+  <li><b>Wrap-around.</b> After 2<sup>32</sup> reuses of one slot, the generation repeats and a very old handle would match again. At one reuse per millisecond of a single slot that takes about 50 days, at one per microsecond about 72 minutes. Either accept the risk because stale handles never live that long, or retire a slot permanently when its generation reaches the maximum. With 16-bit generations, wrap-around is a real risk and retiring is required.</li>
+  <li><b>Pointer stability.</b> In the version above, <code>get()</code> returns a pointer that is valid only until the next <code>acquire</code>, because <code>slots_</code> can reallocate. Users must re-resolve handles instead of caching pointers. A fixed-capacity pool, or chunked storage, keeps addresses stable.</li>
+</ul>
+</section>
+
+<section id="ch14-thread-safe" data-roles="th"><div class="sec-head"><h2>Thread-safe object pools</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Object pools are shared more often than memory pools, because the things they hold (connections, buffers) are used by many request threads. The options mirror <a href="#ch13">Ch 13</a>:</p>
+<ul>
+  <li><b>A mutex around the idle list.</b> Acquire and release are short (a vector push or pop), so the critical section is tiny. Do the reset <em>outside</em> the lock, before taking it in <code>release</code>, so a slow reset does not serialise every thread.</li>
+  <li><b>A mutex plus a condition variable</b> for the blocking policy: <code>acquire</code> waits with a predicate (<code>!idle_.empty()</code>) and a timeout; <code>release</code> notifies one waiter after pushing. Always use the predicate form of <code>wait</code> to handle spurious wake-ups (<a href="../os/#ch03">OS guide ch 3</a>).</li>
+  <li><b>Per-thread caches</b> in front of a shared pool. Each thread keeps a few idle objects locally and moves them to or from the shared pool in batches, which takes the lock once per batch. This is how thread-caching allocators and high-throughput buffer pools work.</li>
+  <li><b>Lock-free stacks</b> with ABA protection, as in <a href="#ch13">Ch 13</a>. Rarely needed for object pools: the work done with each object usually dwarfs the cost of a short lock.</li>
+</ul>
+<p>RAII handles keep working across threads: a handle moved to another thread releases from that thread, so <code>release</code> must be thread safe even if <code>acquire</code> is always called from one thread. The deleter's call into the pool is the only shared access.</p>
+<div class="callout tip"><p class="callout-title">Tip</p><p>Releasing must never throw and should not allocate. Reserve the idle list's capacity for the pool's maximum size, so <code>push_back</code> in <code>release</code> never reallocates, and mark the deleter <code>noexcept</code>. A throwing deleter inside a destructor during stack unwinding calls <code>std::terminate</code>.</p></div>
+</section>
+
+<section id="ch14-uses" data-roles="th"><div class="sec-head"><h2>Typical uses</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<div class="table-wrap"><table>
+<thead><tr><th>Pooled object</th><th>Expensive part kept</th><th>Reset does</th><th>Usual exhaustion policy</th></tr></thead>
+<tbody>
+<tr><td>Database / HTTP connections</td><td>TCP connect, TLS handshake, authentication</td><td>Roll back transaction, reset session state, health check</td><td>Block with timeout (the limit protects the server)</td></tr>
+<tr><td>Threads (a thread pool)</td><td>Thread creation, stack, TLS setup</td><td>Nothing: the thread waits for the next task</td><td>Queue tasks instead of creating threads</td></tr>
+<tr><td>I/O and message buffers</td><td>Large heap buffers, registered or pinned memory for DMA and kernel bypass</td><td><code>clear()</code>, keep capacity; drop buffers that grew too large</td><td>Grow, with a cap</td></tr>
+<tr><td>Game entities, particles, bullets</td><td>Component storage, loaded assets, registration</td><td>Reset transforms and timers, deactivate</td><td>Fail (skip spawning) or recycle the oldest</td></tr>
+<tr><td>Orders and messages in trading</td><td>Pre-faulted memory, pre-sized fields, no allocation on the hot path</td><td>Clear fields, bump a sequence number</td><td>Fail and alarm; pool is sized for the worst day</td></tr>
+<tr><td>Parsers, regex or compression contexts</td><td>Internal tables and work buffers</td><td>Library reset call (for example <code>deflateReset</code>)</td><td>Grow</td></tr>
+</tbody></table></div>
+<p>A thread pool is the object pool everybody already knows, with one difference: threads are not handed to the caller. The caller submits work and the pool's threads acquire tasks, so the pool, not the user, controls the lifetime.</p>
+</section>
+
+<section id="ch14-when-hurt" data-roles="th"><div class="sec-head"><h2>When pools hurt</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>An object pool is a cache of objects, and it has the costs of any cache.</p>
+<ul>
+  <li><b>Memory held forever.</b> Every idle object keeps whatever it grew. One request with a 50 MB payload leaves a 50 MB buffer in the pool for the life of the process. Cap the capacity an object may keep (shrink or discard on release if it exceeds the cap), and cap the number of idle objects.</li>
+  <li><b>Cache effects.</b> Pooled objects allocated one by one are scattered on the heap, and a pool that cycles through many idle objects touches memory that has gone cold. A fresh allocation from a thread-caching malloc can be hotter. LIFO reuse (always hand out the most recently released object) mitigates this.</li>
+  <li><b>Complexity and bugs.</b> Reset functions must be kept in sync with every field added to the class, and lifetime bugs become silent. A pool is a manual memory manager with all the risks that implies.</li>
+  <li><b>Hiding problems from tools.</b> Leak checkers, ASan and heap profilers see one long-lived allocation instead of the real usage pattern.</li>
+  <li><b>Small objects gain little.</b> For an object that is just a few fields with no owned resources, modern allocators already serve the memory in 10 to 30 ns. Pooling it adds code and saves almost nothing; a memory pool or an arena is a better fit.</li>
+</ul>
+
+<h3 id="ch14-measured">What a pool saves, measured</h3>
+<p>This benchmark builds a message object with a 2 KiB payload and four heap-allocated header strings, either fresh each time or from a pool that resets with <code>clear()</code>.</p>
+<pre data-run="ch16-bench" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Message</span> {
+    std::vector&lt;<span class="hljs-type">char</span>&gt; payload;
+    std::vector&lt;std::string&gt; headers;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> </span>{ payload.<span class="hljs-built_in">clear</span>(); headers.<span class="hljs-built_in">clear</span>(); }
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">MessagePool</span> {
+    std::vector&lt;std::unique_ptr&lt;Message&gt;&gt; free_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::unique_ptr&lt;Message&gt; <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (free_.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;Message&gt;();
+        <span class="hljs-keyword">auto</span> m = std::<span class="hljs-built_in">move</span>(free_.<span class="hljs-built_in">back</span>());
+        free_.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> m;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(std::unique_ptr&lt;Message&gt; m)</span> </span>{ m-&gt;<span class="hljs-built_in">reset</span>(); free_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(m)); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">fill</span><span class="hljs-params">(Message&amp; m, <span class="hljs-type">int</span> i)</span> </span>{
+    m.payload.<span class="hljs-built_in">resize</span>(<span class="hljs-number">2048</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>&gt;(i));
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> h = <span class="hljs-number">0</span>; h &lt; <span class="hljs-number">4</span>; ++h) m.headers.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-string">&quot;x-header-with-a-long-name-&quot;</span> + std::<span class="hljs-built_in">to_string</span>(h));
+}
+
+<span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> kIters = <span class="hljs-number">200000</span>, kReps = <span class="hljs-number">7</span>;
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">double</span> <span class="hljs-title">median_ns</span><span class="hljs-params">(F f)</span> </span>{
+    std::vector&lt;<span class="hljs-type">double</span>&gt; v;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> r = <span class="hljs-number">0</span>; r &lt; kReps; ++r) {
+        <span class="hljs-keyword">auto</span> t0 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        <span class="hljs-built_in">f</span>();
+        <span class="hljs-keyword">auto</span> t1 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        v.<span class="hljs-built_in">push_back</span>(std::chrono::<span class="hljs-built_in">duration</span>&lt;<span class="hljs-type">double</span>, std::nano&gt;(t1 - t0).<span class="hljs-built_in">count</span>() / kIters);
+    }
+    std::<span class="hljs-built_in">sort</span>(v.<span class="hljs-built_in">begin</span>(), v.<span class="hljs-built_in">end</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;    min %.1f  max %.1f ns per message\n&quot;</span>, v.<span class="hljs-built_in">front</span>(), v.<span class="hljs-built_in">back</span>());
+    <span class="hljs-keyword">return</span> v[v.<span class="hljs-built_in">size</span>() / <span class="hljs-number">2</span>];
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">long</span> sink = <span class="hljs-number">0</span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;fresh object per message:&quot;</span>);
+    <span class="hljs-type">double</span> fresh = <span class="hljs-built_in">median_ns</span>([&amp;] {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; kIters; ++i) { <span class="hljs-keyword">auto</span> m = std::<span class="hljs-built_in">make_unique</span>&lt;Message&gt;(); <span class="hljs-built_in">fill</span>(*m, i); sink += m-&gt;payload[<span class="hljs-number">7</span>]; }
+    });
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;pooled object, reset on release:&quot;</span>);
+    MessagePool pool;
+    <span class="hljs-type">double</span> pooled = <span class="hljs-built_in">median_ns</span>([&amp;] {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; kIters; ++i) { <span class="hljs-keyword">auto</span> m = pool.<span class="hljs-built_in">acquire</span>(); <span class="hljs-built_in">fill</span>(*m, i); sink += m-&gt;payload[<span class="hljs-number">7</span>]; pool.<span class="hljs-built_in">release</span>(std::<span class="hljs-built_in">move</span>(m)); }
+    });
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;median: fresh %.1f ns, pooled %.1f ns, ratio %.1fx (sink %ld)\n&quot;</span>, fresh, pooled, fresh / pooled, sink &amp; <span class="hljs-number">1</span>);
+}</code></pre>
+<p>Representative numbers on an Apple M1 (macOS, <code>-O2</code>, median of 7 runs of 200,000 messages). The program is tagged <code>ub</code> so timings are never compared.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Build</th><th>Fresh object</th><th>Pooled object</th><th>Ratio</th></tr></thead>
+<tbody>
+<tr><td>GCC 16 + libstdc++</td><td>336 ns</td><td>158 ns</td><td>2.1× faster pooled</td></tr>
+<tr><td>Clang 22 + libc++</td><td>484 to 548 ns</td><td>294 to 322 ns</td><td>1.6 to 1.7× faster pooled</td></tr>
+</tbody></table></div>
+<p>The pool removes the payload allocation and the header vector's allocation, but not the four string allocations: <code>headers.clear()</code> destroys the strings, so their buffers are freed and reallocated on every message. Keeping them would need a reset that reuses the existing strings (assign into them instead of clearing the vector). The lesson for the interview: measure what the reset really keeps, and quote ratios with the platform; the two standard libraries differ by 1.5 times on the same machine.</p>
+</section>
+
+<section id="ch14-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the difference between an object pool and a memory pool, and how do you decide which one a problem needs?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A memory pool recycles raw storage, so the constructor and destructor still run on every use; it saves the <code>malloc</code>/<code>free</code>. An object pool recycles constructed objects and resets them instead, so it saves construction and destruction and everything they allocate or acquire. Profile first: if the time is in the allocator, use a memory pool or arena; if it is in constructors (buffer allocation, connecting, thread start), use an object pool.</p>
+    <p><b>Why.</b> A pool of 32-byte trivially constructible structs gains nothing from an object pool, since the constructor is free. A pool of TLS connections gains nothing from a memory pool, since the cost is the handshake, not the 200 bytes of memory. Candidates who use the terms interchangeably usually get asked to clarify, so state the distinction first.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Should a pool reset an object when it is released or when it is next acquired? Give a case where the choice matters.</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Usually on release. A request object that held a customer's authentication token or personal data should be wiped as soon as the request ends, not when some later request happens to pick it up. Release-time reset also drops references to other objects early (so they can be freed) and keeps <code>acquire</code> fast.</p>
+    <p><b>Why.</b> Acquire-time reset is lazy and avoids resetting objects that are never reused, and it charges the cost to the thread that needs the object, which some designs prefer. But idle objects then hold the previous user's data and resources indefinitely: memory dumps, debugging tools and heap-inspection bugs can expose it, and an idle object may keep a large buffer or a lock alive. A common compromise is a cheap reset on release (drop secrets and references) and a validation on acquire (is the connection still alive?).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why return pooled objects through a <code>std::unique_ptr</code> with a custom deleter instead of a raw pointer and a <code>release()</code> function?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The handle releases the object exactly once on every path out of its scope, including exceptions and early returns, and its move-only type makes double release a compile error. Ownership transfer is explicit (<code>std::move</code>), and the moved-from handle is empty.</p>
+    <p><b>Why.</b> A manual <code>release()</code> is skipped by any exception thrown between acquire and release, which leaks the object from the pool until it runs dry. The deleter's <code>operator()</code> receives the raw pointer and calls the pool instead of <code>delete</code>, which is a direct use of <a href="#ch10">Ch 10</a>'s custom deleters. What the handle does not prevent is a raw pointer taken with <code>get()</code> and kept after the handle dies.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A <code>ConnectionPool</code> is a member of a server object, and handles are stored in a session cache that is also a member. The server's destructor crashes. What is the likely cause and the fix?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Members are destroyed in reverse declaration order. If the pool is declared after the session cache, the pool is destroyed first, and then the cache's handles run their deleters, which call <code>give_back</code> on a destroyed pool: use after free. Declare the pool first (so it dies last), or make handles hold a <code>std::weak_ptr</code> to the pool's shared state so a handle that outlives the pool just deletes its object.</p>
+    <p><b>Why.</b> A deleter that stores <code>Pool*</code> silently assumes the pool outlives every handle. That holds for a pool in <code>main</code> and breaks for pools inside objects, static pools destroyed at exit while some other static still holds a handle, and pools destroyed during shutdown while another thread is still working. The weak-pointer design costs an atomic operation per release, which is usually acceptable. A debug-build check (the pool asserts that all objects are idle in its destructor) catches the order bug early.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Someone makes the pool return <code>std::shared_ptr&lt;T&gt;(raw, [this](T* p) { release(p); })</code> so handles can be shared. What did that cost on the hot path?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Every <code>acquire</code> now allocates a control block on the heap (it holds the counts and the deleter), and every copy of the handle does an atomic increment and decrement. The pool was supposed to remove allocation from this path, and it has added one back.</p>
+    <p><b>Why.</b> The <code>shared_ptr(ptr, deleter)</code> constructor must store the deleter somewhere, and for a type-erased deleter that is a separately allocated control block (<code>make_shared</code> cannot be used because the object already exists). Options: pass a pool allocator as the third argument so control blocks come from a pool (<code>std::shared_ptr&lt;T&gt;(raw, deleter, alloc)</code>), use an intrusive reference count inside <code>T</code>, or keep <code>unique_ptr</code> handles and share only borrowed references within a scope.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>List the three exhaustion policies and choose one for a database connection pool and one for an order pool in a trading engine.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Grow (create another object), block (wait for a release, with a timeout), or fail (return an empty handle or error). A connection pool usually blocks with a timeout, because its size limit exists to protect the database from too many connections. An order pool fails: it rejects or throttles the new order and raises an alarm, because blocking or constructing objects on the hot path would add unpredictable latency.</p>
+    <p><b>Why.</b> The policy follows from what the pool's limit protects. Grow is right when the limit is only a performance hint (buffer pools), and it should still have a hard cap. In every case expose a high-water mark and an exhaustion counter, so the pool can be sized from data rather than guesses.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A blocking connection pool has 10 connections and 10 worker threads. Under load the service hangs with every thread waiting in <code>acquire()</code>. No connection is leaked. What happened?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Each request acquires a connection and then, somewhere deeper (an audit log, a nested transaction), acquires a second one. With all 10 threads holding one connection and waiting for another, nobody can release: a resource deadlock with the hold-and-wait condition.</p>
+    <p><b>Why.</b> This is the dining philosophers problem with a pool as the shared resource (<a href="../os/#ch03">OS guide ch 3</a>). It does not show up in light load, because a second connection is usually free. Fixes: pass the already-held connection down instead of acquiring another, size the pool as threads × maximum nesting depth, or use a timeout on <code>acquire</code> so the request fails instead of hanging forever. Many connection pool libraries detect it by logging when a thread that already holds a connection asks for another.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A slot map uses 16-bit generation counters to keep handles at 6 bytes. What can go wrong, and how do you prevent it?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> After 65,536 reuses of one slot the generation wraps, and a stale handle from 65,536 reuses ago matches again and reaches the wrong object. A busy slot (a bullet in a shooter, an order slot in a trading system) can be reused that often within minutes. Prevent it by retiring a slot whose generation reaches the maximum (never put it back on the free list), or by using 32-bit generations.</p>
+    <p><b>Why.</b> Generation checking is a probabilistic defence that is exact only until the counter wraps. With 32 bits, a slot reused once per microsecond wraps after about 72 minutes, so even 32 bits is not enough for the busiest slots in a long-running system if stale handles can live that long; retirement removes the problem entirely at the cost of a slowly shrinking pool. Spreading reuse across slots (FIFO free list) makes wrap-around much less likely for any single slot.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why do game engines identify entities with slot-map handles instead of raw pointers or an <code>std::unordered_map&lt;EntityId, Entity&gt;</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Handles detect use of a destroyed entity (generation mismatch) instead of silently reaching a recycled one; the lookup is an array index, O(1) with no hashing; and the dense value array makes "update every entity" a linear, cache-friendly loop. Handles are also plain integers, so they can be saved, sent over the network and stored in other components safely.</p>
+    <p><b>Why.</b> A raw pointer cannot tell a dead entity from a new one at the same address, and it is invalidated if storage moves. An <code>unordered_map</code> detects dead ids (lookup fails) but costs a hash and a pointer chase per lookup, scatters entities across nodes, and iterates slowly. The slot map costs one extra indirection per lookup and a swap on erase, which reorders the dense array.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A buffer pool resets buffers with <code>clear()</code>. After a week in production, the process uses 6 GB although typical messages are 4 KiB. Why?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>clear()</code> sets the size to zero and keeps the capacity. Every buffer that ever held a rare large message (say 50 MB) keeps that capacity forever, and over time most pooled buffers have seen one. The pool's memory converges to "number of buffers × largest message ever seen".</p>
+    <p><b>Why.</b> Keeping capacity is the reason to pool buffers, so the reset is doing what it was asked. The fix is a cap: on release, if <code>capacity() &gt; limit</code>, replace the buffer with a fresh one (<code>std::vector&lt;char&gt;().swap(buf)</code> or <code>shrink_to_fit</code> after <code>clear</code>, which is a non-binding request) or discard the object entirely. Separate pools by size class also help. This is the "memory held forever" cost of pools.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>In a mutex-protected object pool, should <code>reset()</code> run inside the lock in <code>release</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. Reset the object first, while the releasing thread still owns it exclusively, then take the lock only to push it onto the idle list. The critical section stays a few instructions long.</p>
+    <p><b>Why.</b> The object is not shared until it is back on the list, so resetting it needs no synchronisation. Doing it inside the lock makes every acquire and release in the process wait for the slowest reset (clearing a large map, closing a cursor). The same reasoning applies to construction when a pool grows: construct outside the lock, then publish. If release notifies a condition variable, notifying after unlocking avoids waking a thread that immediately blocks on the mutex.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is a thread pool an object pool? Explain what is the same and what is different.</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes in purpose, no in interface. It keeps expensive objects (threads: kernel task, stack, thread-local state) alive and reuses them, exactly like an object pool. But callers do not acquire a thread; they submit tasks to a queue, and the pool's threads take tasks. Ownership and lifetime stay inside the pool.</p>
+    <p><b>Why.</b> Handing out threads would let callers hold them indefinitely and would need the same exhaustion policies. Inverting the control (tasks go to threads) gives queueing for free and makes "block when exhausted" the natural behaviour. The reset step exists too, implicitly: a task must not leave thread-local state behind for the next task (a classic bug with <code>thread_local</code> caches in pooled threads).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A pooled <code>Session</code> holds a <code>std::unique_lock&lt;std::mutex&gt;</code> and a <code>std::ofstream</code> as members. The pool resets <code>Session</code> by clearing its string fields. What leaks while sessions are idle?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The lock stays held and the file stays open, possibly for hours, because the destructor (which would release them) does not run when an object returns to the pool. Other threads block on that mutex, and the process can run out of file descriptors.</p>
+    <p><b>Why.</b> RAII members release resources in the destructor, and an object pool deliberately skips the destructor. Reset must therefore release every resource that should not outlive a use: <code>lock.unlock()</code> (or <code>lock = {}</code>), <code>file.close()</code>. A good habit is to write reset as "assign a default-constructed object", which runs the members' assignment operators and releases what they own, then add back only what you want to keep.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Would you put a 24-byte <code>Point3</code> struct in an object pool? When is an object pool the wrong tool?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. Its constructor costs nothing and the allocator serves 24 bytes in tens of nanoseconds; better still, keep such values in a <code>std::vector</code> or on the stack. Object pools are wrong when construction is cheap, when objects are small values, when the peak population is much larger than the steady state (the pool holds the peak forever), and when the extra lifetime bugs outweigh the measured gain.</p>
+    <p><b>Why.</b> The benefit of an object pool is proportional to what reset keeps and construction would rebuild. For a value type that is nothing. A memory pool or an arena (<a href="#ch15">Ch 15</a>) helps with allocation cost, and value semantics in contiguous containers avoid the allocation entirely.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch14-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Two HTTP requests reuse a pooled <code>Request</code>. What does the second request see?</p>
+<pre data-run="ch16-stale" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Request</span> {
+    std::string path;
+    std::vector&lt;std::string&gt; headers;
+    std::optional&lt;std::string&gt; auth_user;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> </span>{ path.<span class="hljs-built_in">clear</span>(); headers.<span class="hljs-built_in">clear</span>(); }
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">RequestPool</span> {
+    std::vector&lt;std::unique_ptr&lt;Request&gt;&gt; idle_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::unique_ptr&lt;Request&gt; <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (idle_.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;Request&gt;();
+        <span class="hljs-keyword">auto</span> r = std::<span class="hljs-built_in">move</span>(idle_.<span class="hljs-built_in">back</span>());
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> r;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(std::unique_ptr&lt;Request&gt; r)</span> </span>{ r-&gt;<span class="hljs-built_in">reset</span>(); idle_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(r)); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">handle</span><span class="hljs-params">(<span class="hljs-type">const</span> Request&amp; r)</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s as %s\n&quot;</span>, r.path.<span class="hljs-built_in">c_str</span>(), r.auth_user ? r.auth_user-&gt;<span class="hljs-built_in">c_str</span>() : <span class="hljs-string">&quot;anonymous&quot;</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    RequestPool pool;
+    <span class="hljs-keyword">auto</span> a = pool.<span class="hljs-built_in">acquire</span>();
+    a-&gt;path = <span class="hljs-string">&quot;/account&quot;</span>;
+    a-&gt;auth_user = <span class="hljs-string">&quot;alice&quot;</span>;
+    <span class="hljs-built_in">handle</span>(*a);
+    pool.<span class="hljs-built_in">release</span>(std::<span class="hljs-built_in">move</span>(a));
+
+    <span class="hljs-keyword">auto</span> b = pool.<span class="hljs-built_in">acquire</span>();     <span class="hljs-comment">// an unauthenticated request</span>
+    b-&gt;path = <span class="hljs-string">&quot;/account&quot;</span>;
+    <span class="hljs-built_in">handle</span>(*b);
+    pool.<span class="hljs-built_in">release</span>(std::<span class="hljs-built_in">move</span>(b));
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch16-stale">/account as alice
+/account as alice</pre>
+    <p><b>Answer.</b> The anonymous second request is treated as Alice. <code>reset()</code> clears <code>path</code> and <code>headers</code> but forgets <code>auth_user</code>, and the pool hands the same object back.</p>
+    <p><b>Why.</b> Stale state is the signature bug of object pools, and here it is a security hole. Nothing crashes and no sanitizer can help: every access is to a live, valid object. Fix: reset every field (<code>auth_user.reset()</code>), or better, write <code>reset()</code> so that new fields cannot be forgotten, for example <code>*this = Request{}</code> followed by restoring the capacities you want to keep, and add a test that a reset object compares equal to a new one.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This pool stores its objects directly in a <code>std::vector</code> and grows it on demand. What does the sanitizer build report?</p>
+<pre data-run="ch16-grow" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Bullet</span> { <span class="hljs-type">float</span> x = <span class="hljs-number">0</span>, y = <span class="hljs-number">0</span>; <span class="hljs-type">bool</span> active = <span class="hljs-literal">false</span>; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">BulletPool</span> {
+    std::vector&lt;Bullet&gt; bullets_;
+    std::vector&lt;std::<span class="hljs-type">size_t</span>&gt; idle_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">Bullet* <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (idle_.<span class="hljs-built_in">empty</span>()) {
+            bullets_.<span class="hljs-built_in">push_back</span>({});            <span class="hljs-comment">// grow</span>
+            idle_.<span class="hljs-built_in">push_back</span>(bullets_.<span class="hljs-built_in">size</span>() - <span class="hljs-number">1</span>);
+        }
+        std::<span class="hljs-type">size_t</span> i = idle_.<span class="hljs-built_in">back</span>();
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        bullets_[i].active = <span class="hljs-literal">true</span>;
+        <span class="hljs-keyword">return</span> &amp;bullets_[i];
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    BulletPool pool;
+    Bullet* first = pool.<span class="hljs-built_in">acquire</span>();
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">10</span>; ++i) pool.<span class="hljs-built_in">acquire</span>();   <span class="hljs-comment">// more bullets</span>
+    first-&gt;x = <span class="hljs-number">5.0f</span>;                               <span class="hljs-comment">// move the first bullet</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%g\n&quot;</span>, first-&gt;x);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>push_back</code> reallocates the vector when it grows, so <code>first</code> points into the old, freed buffer. ASan reports <code>heap-use-after-free</code> on the write <code>first-&gt;x = 5.0f</code>.</p>
+    <p><b>Why.</b> A pool that hands out pointers must never move its objects. A <code>std::vector</code> moves all elements on reallocation, invalidating every pointer and reference. Fixes: reserve the full capacity up front and never grow, store objects in chunks that are never moved (<code>std::deque</code> keeps element addresses stable on <code>push_back</code>, or a vector of <code>unique_ptr&lt;Bullet[]&gt;</code> chunks), or hand out indices / generation handles instead of pointers. This is one of the few object pool bugs ASan does catch, because the old buffer really was freed.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print on a 64-bit platform?</p>
+<pre data-run="ch16-sizes" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Widget</span> { <span class="hljs-type">int</span> v; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pool</span>;                                         <span class="hljs-comment">// only pointers to it are needed</span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">EmptyReturn</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Widget*)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{} };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">PoolReturn</span> { Pool* pool; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Widget*)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{} };
+<span class="hljs-keyword">using</span> FnReturn = <span class="hljs-built_in">void</span> (*)(Widget*);
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu %zu %zu\n&quot;</span>,
+                <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;Widget&gt;) / <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*),
+                <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;Widget, EmptyReturn&gt;) / <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*),
+                <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;Widget, PoolReturn&gt;) / <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*),
+                <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;Widget, FnReturn&gt;) / <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch16-sizes">1 1 2 2</pre>
+    <p><b>Answer.</b> In pointer-sized words: the default deleter and an empty deleter add nothing (1 word), while a deleter that stores the pool pointer and a function-pointer deleter both double the handle to 2 words (16 bytes).</p>
+    <p><b>Why.</b> <code>unique_ptr</code> stores its deleter as a member, using the empty base optimisation or <code>[[no_unique_address]]</code>, so a stateless deleter takes no space. A function pointer is state, even if every handle stores the same one. For a global or <code>thread_local</code> pool, a stateless deleter that finds the pool itself keeps handles pointer-sized, which matters when millions of handles are stored. <a href="#ch10">Ch 10</a> covers deleter costs in detail.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A handle outlives its pool. What does the sanitizer build report?</p>
+<pre data-run="ch16-dead-pool" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Buffer</span> { std::vector&lt;<span class="hljs-type">char</span>&gt; bytes; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">BufferPool</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Return</span> { BufferPool* pool; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Buffer* b)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ pool-&gt;<span class="hljs-built_in">give_back</span>(b); } };
+    <span class="hljs-keyword">using</span> Handle = std::unique_ptr&lt;Buffer, Return&gt;;
+    <span class="hljs-built_in">BufferPool</span>() { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">4</span>; ++i) idle_.<span class="hljs-built_in">push_back</span>(<span class="hljs-keyword">new</span> Buffer); }
+    ~<span class="hljs-built_in">BufferPool</span>() { <span class="hljs-keyword">for</span> (Buffer* b : idle_) <span class="hljs-keyword">delete</span> b; }
+    <span class="hljs-function">Handle <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{ Buffer* b = idle_.<span class="hljs-built_in">back</span>(); idle_.<span class="hljs-built_in">pop_back</span>(); <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(b, Return{<span class="hljs-keyword">this</span>}); }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">give_back</span><span class="hljs-params">(Buffer* b)</span> <span class="hljs-keyword">noexcept</span> </span>{ b-&gt;bytes.<span class="hljs-built_in">clear</span>(); idle_.<span class="hljs-built_in">push_back</span>(b); }
+    std::vector&lt;Buffer*&gt; idle_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> pool = std::<span class="hljs-built_in">make_unique</span>&lt;BufferPool&gt;();
+    BufferPool::Handle h = pool-&gt;<span class="hljs-built_in">acquire</span>();
+    h-&gt;bytes.<span class="hljs-built_in">assign</span>(<span class="hljs-number">64</span>, <span class="hljs-string">&#x27;x&#x27;</span>);
+    pool.<span class="hljs-built_in">reset</span>();                 <span class="hljs-comment">// shutdown order bug: pool first</span>
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;pool destroyed&quot;</span>);
+}                                 <span class="hljs-comment">// h&#x27;s deleter runs here</span></code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> When <code>h</code> is destroyed at the end of <code>main</code>, its deleter calls <code>give_back</code> on the deleted pool, which reads and writes the freed <code>idle_</code> vector. ASan reports <code>heap-use-after-free</code> inside <code>give_back</code>. (The buffer that was out also leaks, since the pool's destructor only deletes idle buffers.)</p>
+    <p><b>Why.</b> A deleter holding a raw <code>Pool*</code> silently requires the pool to outlive every handle. Fixes: destroy users before the pool (declaration order), have the pool's destructor assert that nothing is checked out, or let handles hold a <code>std::weak_ptr</code> to shared pool state and simply <code>delete</code> the object when the pool is gone. The coding section implements the last one.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>After the stale-state incident, the team rewrote <code>reset()</code> so that no field can ever be forgotten. What does this print, and what did the pool stop doing?</p>
+<pre data-run="ch16-assign-reset" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Message</span> {
+    std::vector&lt;<span class="hljs-type">char</span>&gt; payload;
+    <span class="hljs-type">int</span> retries = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> </span>{ *<span class="hljs-keyword">this</span> = Message{}; }   <span class="hljs-comment">// every field back to its default</span>
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">MessagePool</span> {
+    std::vector&lt;std::unique_ptr&lt;Message&gt;&gt; idle_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::unique_ptr&lt;Message&gt; <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (idle_.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;Message&gt;();
+        <span class="hljs-keyword">auto</span> m = std::<span class="hljs-built_in">move</span>(idle_.<span class="hljs-built_in">back</span>());
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> m;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(std::unique_ptr&lt;Message&gt; m)</span> </span>{ m-&gt;<span class="hljs-built_in">reset</span>(); idle_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(m)); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    MessagePool pool;
+    <span class="hljs-type">const</span> Message* first = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">3</span>; ++i) {
+        <span class="hljs-keyword">auto</span> m = pool.<span class="hljs-built_in">acquire</span>();
+        <span class="hljs-keyword">if</span> (!first) first = m.<span class="hljs-built_in">get</span>();
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;request %d: same object %s, capacity %zu\n&quot;</span>, i, m.<span class="hljs-built_in">get</span>() == first ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>, m-&gt;payload.<span class="hljs-built_in">capacity</span>());
+        m-&gt;payload.<span class="hljs-built_in">resize</span>(<span class="hljs-number">4096</span>);
+        m-&gt;retries = <span class="hljs-number">1</span>;
+        pool.<span class="hljs-built_in">release</span>(std::<span class="hljs-built_in">move</span>(m));
+    }
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch16-assign-reset">request 0: same object yes, capacity 0
+request 1: same object yes, capacity 0
+request 2: same object yes, capacity 0</pre>
+    <p><b>Answer.</b> The same <code>Message</code> comes back every time, but its buffer does not. <code>*this = Message{}</code> move-assigns from a temporary, and the vector's move assignment frees the 4 KiB buffer and adopts the temporary's empty one. Every request allocates the payload again, so the pool now saves one small <code>new</code> and nothing else. Most people predict capacity 4096 for requests 1 and 2, because "the pool keeps the object".</p>
+    <p><b>Why.</b> Assignment from a fresh object gives fresh state, and fresh state includes capacity 0: with <code>std::allocator</code> (which propagates on move assignment) both standard libraries free the old buffer and take the source's. The safety idea is right and only needs to keep what the pool exists for: <code>auto keep = std::move(payload); *this = Message{}; payload = std::move(keep); payload.clear();</code> resets every other field, including ones added later, and keeps the buffer. Test both properties: a reset object compares equal to a new one, and its capacity survives.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this not compile, and is the compiler right?</p>
+<pre data-run="ch16-copy" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Conn</span> { <span class="hljs-type">int</span> fd = <span class="hljs-number">-1</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Return</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Conn* c)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">delete</span> c; } };
+<span class="hljs-keyword">using</span> Handle = std::unique_ptr&lt;Conn, Return&gt;;
+
+<span class="hljs-function"><span class="hljs-type">static</span> Handle <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(<span class="hljs-keyword">new</span> Conn{<span class="hljs-number">3</span>}); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Handle h = <span class="hljs-built_in">acquire</span>();
+    std::vector&lt;Handle&gt; in_flight;
+    in_flight.<span class="hljs-built_in">push_back</span>(h);       <span class="hljs-comment">// keep a copy for the retry logic</span>
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>push_back(h)</code> needs to copy the handle, and <code>unique_ptr</code>'s copy constructor is deleted. Both compilers reject it. The compiler is right: two copies of the handle would both return the connection to the pool, which is a double release.</p>
+    <p><b>Why.</b> Move-only handles turn the double-release bug into a compile error. If the vector should own the handle, write <code>in_flight.push_back(std::move(h))</code> and stop using <code>h</code>. If the retry logic only needs to look at the connection, store a reference or the generation handle, not a second owner. Returning <code>Handle</code> by value from <code>acquire</code> compiles because a returned local is moved (or elided, <a href="#ch21">Ch 21</a>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Trace the generations. What does this print?</p>
+<pre data-run="ch16-gens" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Handle</span> { std::<span class="hljs-type">uint32_t</span> index, gen; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Slots</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Slot</span> { std::<span class="hljs-type">uint32_t</span> gen = <span class="hljs-number">0</span>; <span class="hljs-type">bool</span> live = <span class="hljs-literal">false</span>; };
+    std::vector&lt;Slot&gt; slots_ = std::<span class="hljs-built_in">vector</span>&lt;Slot&gt;(<span class="hljs-number">2</span>);
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">Handle <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">uint32_t</span> i = <span class="hljs-number">0</span>; i &lt; slots_.<span class="hljs-built_in">size</span>(); ++i)
+            <span class="hljs-keyword">if</span> (!slots_[i].live) { slots_[i].live = <span class="hljs-literal">true</span>; <span class="hljs-keyword">return</span> {i, slots_[i].gen}; }
+        <span class="hljs-keyword">return</span> {UINT32_MAX, <span class="hljs-number">0</span>};
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">valid</span><span class="hljs-params">(Handle h)</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> h.index &lt; slots_.<span class="hljs-built_in">size</span>() &amp;&amp; slots_[h.index].live &amp;&amp; slots_[h.index].gen == h.gen; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(Handle h)</span> </span>{ <span class="hljs-keyword">if</span> (<span class="hljs-built_in">valid</span>(h)) { slots_[h.index].live = <span class="hljs-literal">false</span>; ++slots_[h.index].gen; } }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Slots s;
+    Handle a = s.<span class="hljs-built_in">acquire</span>();
+    Handle b = s.<span class="hljs-built_in">acquire</span>();
+    s.<span class="hljs-built_in">release</span>(a);
+    Handle c = s.<span class="hljs-built_in">acquire</span>();
+    s.<span class="hljs-built_in">release</span>(c);
+    Handle d = s.<span class="hljs-built_in">acquire</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a{%u,%u} b{%u,%u} c{%u,%u} d{%u,%u}\n&quot;</span>, a.index, a.gen, b.index, b.gen, c.index, c.gen, d.index, d.gen);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;valid: a=%d b=%d c=%d d=%d\n&quot;</span>, s.<span class="hljs-built_in">valid</span>(a), s.<span class="hljs-built_in">valid</span>(b), s.<span class="hljs-built_in">valid</span>(c), s.<span class="hljs-built_in">valid</span>(d));
+    s.<span class="hljs-built_in">release</span>(a);   <span class="hljs-comment">// stale: ignored</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;d still valid: %d\n&quot;</span>, s.<span class="hljs-built_in">valid</span>(d));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch16-gens">a{0,0} b{1,0} c{0,1} d{0,2}
+valid: a=0 b=1 c=0 d=1
+d still valid: 1</pre>
+    <p><b>Answer.</b> <code>a</code> and <code>b</code> take slots 0 and 1 at generation 0. Releasing <code>a</code> bumps slot 0 to generation 1, so <code>c</code> is {0, 1}; releasing <code>c</code> bumps it to 2, so <code>d</code> is {0, 2}. Only <code>b</code> and <code>d</code> are valid, and the stale release through <code>a</code> is rejected, so <code>d</code> survives.</p>
+    <p><b>Why.</b> The generation is the number of times the slot has been released. Every handle created before a release carries a smaller number and can no longer read or release the slot. Without generations, <code>s.release(a)</code> would have freed <code>d</code>'s slot: the classic use-after-release turned into a double use.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A thread-safe pool locks in <code>acquire</code>. What does ThreadSanitizer report?</p>
+<pre data-run="ch16-race" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Job</span> { <span class="hljs-type">int</span> payload = <span class="hljs-number">0</span>; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">JobPool</span> {
+    std::mutex m_;
+    std::vector&lt;std::unique_ptr&lt;Job&gt;&gt; all_;
+    std::vector&lt;Job*&gt; idle_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">JobPool</span>() {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">64</span>; ++i) { all_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Job&gt;()); idle_.<span class="hljs-built_in">push_back</span>(all_.<span class="hljs-built_in">back</span>().<span class="hljs-built_in">get</span>()); }
+        idle_.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">64</span>);
+    }
+    <span class="hljs-function">Job* <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>;
+        <span class="hljs-keyword">if</span> (idle_.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        Job* j = idle_.<span class="hljs-built_in">back</span>();
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> j;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(Job* j)</span> </span>{        <span class="hljs-comment">// &quot;release is just a push, no lock needed&quot;</span>
+        j-&gt;payload = <span class="hljs-number">0</span>;
+        idle_.<span class="hljs-built_in">push_back</span>(j);
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    JobPool pool;
+    <span class="hljs-keyword">auto</span> work = [&amp;] {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">10000</span>; ++i)
+            <span class="hljs-keyword">if</span> (Job* j = pool.<span class="hljs-built_in">acquire</span>()) { j-&gt;payload = i; pool.<span class="hljs-built_in">release</span>(j); }
+    };
+    <span class="hljs-function">std::thread <span class="hljs-title">t1</span><span class="hljs-params">(work)</span>, <span class="hljs-title">t2</span><span class="hljs-params">(work)</span></span>;
+    t1.<span class="hljs-built_in">join</span>();
+    t2.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;done&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> TSan reports a data race on <code>idle_</code>: <code>release</code> modifies the vector without the mutex while the other thread reads and modifies it inside <code>acquire</code>. Even a push that never reallocates writes the vector's end pointer, and the pop in the other thread reads it.</p>
+    <p><b>Why.</b> A mutex protects data only if <em>every</em> access to that data takes it. Locking one side of a producer/consumer pair is the most common way to get this wrong. The fix is <code>std::lock_guard lock(m_);</code> around the push, with the reset (<code>j-&gt;payload = 0</code>) left outside the lock because the releasing thread still owns the job at that point. The program usually prints "done" in a normal build, which is why it is tagged <code>ub</code> and checked with TSan.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A pool hands out <code>std::shared_ptr</code> handles. When does the object return to the pool?</p>
+<pre data-run="ch16-shared" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Frame</span> { <span class="hljs-type">int</span> seq = <span class="hljs-number">0</span>; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">FramePool</span> {
+    std::vector&lt;std::unique_ptr&lt;Frame&gt;&gt; all_;
+    std::vector&lt;Frame*&gt; idle_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">FramePool</span>() { all_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Frame&gt;()); idle_.<span class="hljs-built_in">push_back</span>(all_.<span class="hljs-built_in">back</span>().<span class="hljs-built_in">get</span>()); }
+    <span class="hljs-function">std::shared_ptr&lt;Frame&gt; <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        Frame* f = idle_.<span class="hljs-built_in">back</span>();
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">shared_ptr</span>&lt;Frame&gt;(f, [<span class="hljs-keyword">this</span>](Frame* p) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  frame %d back in pool\n&quot;</span>, p-&gt;seq); idle_.<span class="hljs-built_in">push_back</span>(p); });
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">idle</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> idle_.<span class="hljs-built_in">size</span>(); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    FramePool pool;
+    <span class="hljs-keyword">auto</span> f = pool.<span class="hljs-built_in">acquire</span>();
+    f-&gt;seq = <span class="hljs-number">42</span>;
+    {
+        <span class="hljs-keyword">auto</span> encoder = f;
+        <span class="hljs-keyword">auto</span> network = f;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;use_count %ld, idle %zu\n&quot;</span>, f.<span class="hljs-built_in">use_count</span>(), pool.<span class="hljs-built_in">idle</span>());
+        f.<span class="hljs-built_in">reset</span>();
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;main dropped its copy&quot;</span>);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;idle %zu\n&quot;</span>, pool.<span class="hljs-built_in">idle</span>());
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch16-shared">use_count 3, idle 0
+main dropped its copy
+  frame 42 back in pool
+idle 1</pre>
+    <p><b>Answer.</b> Three owners exist inside the block, so <code>use_count</code> is 3 and nothing is idle. Dropping <code>f</code> does not return the frame; the deleter runs when the last copy (<code>network</code> or <code>encoder</code>, whichever is destroyed last) goes away at the closing brace.</p>
+    <p><b>Why.</b> A <code>shared_ptr</code> deleter runs when the strong count reaches zero, whichever copy that happens in. That is convenient for frames shared by several consumers, but remember the cost: constructing this <code>shared_ptr</code> allocated a control block, and copies do atomic count updates. The deleter captures <code>this</code>, so the same "pool must outlive handles" rule applies.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A logger keeps a raw pointer obtained from a handle. What does it log?</p>
+<pre data-run="ch16-borrow" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Quote</span> { std::string symbol; <span class="hljs-type">double</span> px = <span class="hljs-number">0</span>; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">QuotePool</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Return</span> { QuotePool* p; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Quote* q)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ q-&gt;symbol.<span class="hljs-built_in">clear</span>(); q-&gt;px = <span class="hljs-number">0</span>; p-&gt;idle_.<span class="hljs-built_in">push_back</span>(q); } };
+    <span class="hljs-keyword">using</span> Handle = std::unique_ptr&lt;Quote, Return&gt;;
+    <span class="hljs-built_in">QuotePool</span>() { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">2</span>; ++i) { all_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Quote&gt;()); idle_.<span class="hljs-built_in">push_back</span>(all_.<span class="hljs-built_in">back</span>().<span class="hljs-built_in">get</span>()); } }
+    <span class="hljs-function">Handle <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{ Quote* q = idle_.<span class="hljs-built_in">back</span>(); idle_.<span class="hljs-built_in">pop_back</span>(); <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(q, Return{<span class="hljs-keyword">this</span>}); }
+<span class="hljs-keyword">private</span>:
+    std::vector&lt;std::unique_ptr&lt;Quote&gt;&gt; all_;
+    std::vector&lt;Quote*&gt; idle_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    QuotePool pool;
+    <span class="hljs-type">const</span> Quote* last_logged = <span class="hljs-literal">nullptr</span>;
+    {
+        <span class="hljs-keyword">auto</span> q = pool.<span class="hljs-built_in">acquire</span>();
+        q-&gt;symbol = <span class="hljs-string">&quot;AAPL&quot;</span>;
+        q-&gt;px = <span class="hljs-number">227.5</span>;
+        last_logged = q.<span class="hljs-built_in">get</span>();             <span class="hljs-comment">// keep it for the end-of-day report</span>
+    }
+    <span class="hljs-keyword">auto</span> next = pool.<span class="hljs-built_in">acquire</span>();
+    next-&gt;symbol = <span class="hljs-string">&quot;MSFT&quot;</span>;
+    next-&gt;px = <span class="hljs-number">512.25</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;last logged: %s %.2f\n&quot;</span>, last_logged-&gt;symbol.<span class="hljs-built_in">c_str</span>(), last_logged-&gt;px);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch16-borrow">last logged: MSFT 512.25</pre>
+    <p><b>Answer.</b> It logs MSFT at 512.25. The AAPL quote went back to the pool at the closing brace, the next <code>acquire</code> got the same object (LIFO), and <code>last_logged</code> now looks at the new quote. ASan is clean, and this program has no undefined behaviour at all: the object was never destroyed, only reset and reused.</p>
+    <p><b>Why.</b> RAII handles fix release, not borrowing. A raw pointer from <code>get()</code> is a non-owning view and must not outlive the handle. If something needs the data later, copy the data (<code>Quote copy = *q;</code>), or keep a generation-checked handle that will report the reuse. This is the purest form of use-after-release: no tool can find it, only the pool's design.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A fail-fast pool with capacity 2. What does this print?</p>
+<pre data-run="ch16-fail" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">TicketPool</span> {
+    std::vector&lt;<span class="hljs-type">int</span>&gt; idle_{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>};
+    <span class="hljs-type">int</span> high_water_ = <span class="hljs-number">0</span>, out_ = <span class="hljs-number">0</span>, rejected_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::optional&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (idle_.<span class="hljs-built_in">empty</span>()) { ++rejected_; <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>; }
+        <span class="hljs-type">int</span> t = idle_.<span class="hljs-built_in">back</span>();
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        high_water_ = std::<span class="hljs-built_in">max</span>(high_water_, ++out_);
+        <span class="hljs-keyword">return</span> t;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(<span class="hljs-type">int</span> t)</span> </span>{ idle_.<span class="hljs-built_in">push_back</span>(t); --out_; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">stats</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;high water %d, rejected %d\n&quot;</span>, high_water_, rejected_); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    TicketPool pool;
+    <span class="hljs-keyword">auto</span> a = pool.<span class="hljs-built_in">acquire</span>();
+    <span class="hljs-keyword">auto</span> b = pool.<span class="hljs-built_in">acquire</span>();
+    <span class="hljs-keyword">auto</span> c = pool.<span class="hljs-built_in">acquire</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a=%d b=%d c=%s\n&quot;</span>, *a, *b, c ? <span class="hljs-string">&quot;got one&quot;</span> : <span class="hljs-string">&quot;none&quot;</span>);
+    pool.<span class="hljs-built_in">release</span>(*a);
+    <span class="hljs-keyword">auto</span> d = pool.<span class="hljs-built_in">acquire</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;d=%d\n&quot;</span>, d.<span class="hljs-built_in">value_or</span>(<span class="hljs-number">-1</span>));
+    pool.<span class="hljs-built_in">stats</span>();
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch16-fail">a=2 b=1 c=none
+d=2
+high water 2, rejected 1</pre>
+    <p><b>Answer.</b> The idle list is a stack with 2 on top, so <code>a</code> gets 2 and <code>b</code> gets 1. The third request is rejected. Releasing ticket 2 puts it back on top, so <code>d</code> gets 2. At most two were ever out, and one request was rejected.</p>
+    <p><b>Why.</b> The fail policy returns an empty <code>std::optional</code> and counts the event, which is what you want on a latency-critical path: the caller decides what to do (reject, retry later) and the counters tell operations how to size the pool. Note that <code>*c</code> on an empty optional would be undefined, which is why the code tests <code>c</code> first; <code>value()</code> would throw <code>std::bad_optional_access</code> instead.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch14-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>ObjectPool&lt;T&gt;</code> with RAII handles. Requirements: <code>ObjectPool(initial, max, reset)</code> pre-constructs <code>initial</code> objects; <code>acquire()</code> returns a <code>std::unique_ptr&lt;T, Return&gt;</code>, growing up to <code>max</code> and returning an empty handle beyond that; release (through the handle) resets the object, never allocates and never throws; the pool reports its high-water mark and the number of failed acquires.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> The pool owns every object in <code>all_</code> and lists the idle ones in <code>idle_</code>; both vectors reserve <code>max</code> slots at construction, so a release is a reset plus a <code>push_back</code> that cannot reallocate. The deleter holds a pool pointer and calls a private <code>release</code>. Growth constructs a new object only when the idle list is empty and the limit allows it.</p>
+<pre data-run="ch16-k-pool" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cassert&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ObjectPool</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">class</span> <span class="hljs-title class_">Return</span> {
+        ObjectPool* pool_ = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-keyword">public</span>:
+        <span class="hljs-built_in">Return</span>() = <span class="hljs-keyword">default</span>;
+        <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Return</span><span class="hljs-params">(ObjectPool* p)</span> <span class="hljs-keyword">noexcept</span> : pool_(p) {</span>}
+        <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(T* obj)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ pool_-&gt;<span class="hljs-built_in">release</span>(obj); }
+    };
+    <span class="hljs-keyword">using</span> Handle = std::unique_ptr&lt;T, Return&gt;;
+
+    <span class="hljs-built_in">ObjectPool</span>(std::<span class="hljs-type">size_t</span> initial, std::<span class="hljs-type">size_t</span> max, std::function&lt;<span class="hljs-built_in">void</span>(T&amp;)&gt; reset)
+        : <span class="hljs-built_in">max_</span>(max), <span class="hljs-built_in">reset_</span>(std::<span class="hljs-built_in">move</span>(reset)) {
+        all_.<span class="hljs-built_in">reserve</span>(max_);
+        idle_.<span class="hljs-built_in">reserve</span>(max_);
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; initial &amp;&amp; i &lt; max_; ++i) {
+            all_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;T&gt;());
+            idle_.<span class="hljs-built_in">push_back</span>(all_.<span class="hljs-built_in">back</span>().<span class="hljs-built_in">get</span>());
+        }
+    }
+    ~<span class="hljs-built_in">ObjectPool</span>() { <span class="hljs-built_in">assert</span>(idle_.<span class="hljs-built_in">size</span>() == all_.<span class="hljs-built_in">size</span>() &amp;&amp; <span class="hljs-string">&quot;objects still checked out&quot;</span>); }
+    <span class="hljs-built_in">ObjectPool</span>(<span class="hljs-type">const</span> ObjectPool&amp;) = <span class="hljs-keyword">delete</span>;
+    ObjectPool&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> ObjectPool&amp;) = <span class="hljs-keyword">delete</span>;
+
+    <span class="hljs-function">Handle <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (idle_.<span class="hljs-built_in">empty</span>()) {
+            <span class="hljs-keyword">if</span> (all_.<span class="hljs-built_in">size</span>() == max_) { ++failed_; <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(<span class="hljs-literal">nullptr</span>, <span class="hljs-built_in">Return</span>(<span class="hljs-keyword">this</span>)); }
+            all_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;T&gt;());          <span class="hljs-comment">// grow (may throw: nothing changed yet)</span>
+            idle_.<span class="hljs-built_in">push_back</span>(all_.<span class="hljs-built_in">back</span>().<span class="hljs-built_in">get</span>());
+        }
+        T* obj = idle_.<span class="hljs-built_in">back</span>();
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        high_water_ = std::<span class="hljs-built_in">max</span>(high_water_, all_.<span class="hljs-built_in">size</span>() - idle_.<span class="hljs-built_in">size</span>());
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(obj, <span class="hljs-built_in">Return</span>(<span class="hljs-keyword">this</span>));
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">high_water</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> high_water_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">failed</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> failed_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> all_.<span class="hljs-built_in">size</span>(); }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">idle</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> idle_.<span class="hljs-built_in">size</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(T* obj)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-built_in">reset_</span>(*obj);
+        idle_.<span class="hljs-built_in">push_back</span>(obj);                               <span class="hljs-comment">// capacity is max_: no reallocation</span>
+    }
+    std::<span class="hljs-type">size_t</span> max_, high_water_ = <span class="hljs-number">0</span>, failed_ = <span class="hljs-number">0</span>;
+    std::function&lt;<span class="hljs-type">void</span>(T&amp;)&gt; reset_;
+    std::vector&lt;std::unique_ptr&lt;T&gt;&gt; all_;
+    std::vector&lt;T*&gt; idle_;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Buffer</span> { std::vector&lt;<span class="hljs-type">char</span>&gt; data; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">ObjectPool&lt;Buffer&gt; <span class="hljs-title">pool</span><span class="hljs-params">(<span class="hljs-number">2</span>, <span class="hljs-number">3</span>, [](Buffer&amp; b) { b.data.clear(); })</span></span>;
+    {
+        <span class="hljs-keyword">auto</span> a = pool.<span class="hljs-built_in">acquire</span>();
+        <span class="hljs-keyword">auto</span> b = pool.<span class="hljs-built_in">acquire</span>();
+        <span class="hljs-keyword">auto</span> c = pool.<span class="hljs-built_in">acquire</span>();          <span class="hljs-comment">// grows to 3</span>
+        <span class="hljs-keyword">auto</span> d = pool.<span class="hljs-built_in">acquire</span>();          <span class="hljs-comment">// over the limit</span>
+        a-&gt;data.<span class="hljs-built_in">assign</span>(<span class="hljs-number">4096</span>, <span class="hljs-string">&#x27;a&#x27;</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;size %zu, d is %s\n&quot;</span>, pool.<span class="hljs-built_in">size</span>(), d ? <span class="hljs-string">&quot;valid&quot;</span> : <span class="hljs-string">&quot;empty&quot;</span>);
+    }
+    <span class="hljs-keyword">auto</span> e = pool.<span class="hljs-built_in">acquire</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;reused buffer: size %zu, capacity kept %s\n&quot;</span>, e-&gt;data.<span class="hljs-built_in">size</span>(), e-&gt;data.<span class="hljs-built_in">capacity</span>() &gt;= <span class="hljs-number">4096</span> ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    e.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;idle %zu, high water %zu, failed %zu\n&quot;</span>, pool.<span class="hljs-built_in">idle</span>(), pool.<span class="hljs-built_in">high_water</span>(), pool.<span class="hljs-built_in">failed</span>());
+}</code></pre>
+<pre class="out" data-out="ch16-k-pool">size 3, d is empty
+reused buffer: size 0, capacity kept yes
+idle 3, high water 3, failed 1</pre>
+    <p><b>Complexity and pitfalls.</b> Acquire and release are O(1); growth is one construction. The LIFO idle list hands the most recently released buffer (the one with 4 KiB of capacity) back first, which is why <code>e</code> gets it. Pitfalls: an empty handle still carries a deleter, but <code>unique_ptr</code> never calls the deleter on a null pointer, so that is safe; a <code>reset_</code> that throws inside the <code>noexcept</code> release calls <code>std::terminate</code>; and the pool must outlive its handles (the destructor asserts in debug builds).</p>
+    <p class="rating">Estimated rating: ~1500 · straightforward structure, but no-allocation release, growth limits and the deleter design must all be right</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a blocking pool: <code>acquire_for(timeout)</code> waits until an object is free or the timeout expires (then returns an empty handle). Test with 6 threads sharing 2 objects and check that at most 2 are ever in use at once.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A mutex protects the idle list and a condition variable signals releases. <code>acquire_for</code> uses <code>wait_for</code> with a predicate, which handles spurious wake-ups and returns <code>false</code> on timeout. <code>release</code> pushes under the lock and notifies one waiter after unlocking.</p>
+<pre data-run="ch16-k-block" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;condition_variable&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Conn</span> { <span class="hljs-type">int</span> id = <span class="hljs-number">0</span>; <span class="hljs-type">int</span> uses = <span class="hljs-number">0</span>; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">BlockingPool</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Return</span> { BlockingPool* p; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Conn* c)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ p-&gt;<span class="hljs-built_in">release</span>(c); } };
+    <span class="hljs-keyword">using</span> Handle = std::unique_ptr&lt;Conn, Return&gt;;
+
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">BlockingPool</span><span class="hljs-params">(<span class="hljs-type">int</span> n)</span> </span>{
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) all_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Conn&gt;(Conn{i}));
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; c : all_) idle_.<span class="hljs-built_in">push_back</span>(c.<span class="hljs-built_in">get</span>());
+    }
+    <span class="hljs-function">Handle <span class="hljs-title">acquire_for</span><span class="hljs-params">(std::chrono::milliseconds timeout)</span> </span>{
+        <span class="hljs-function">std::unique_lock <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>;
+        <span class="hljs-keyword">if</span> (!cv_.<span class="hljs-built_in">wait_for</span>(lock, timeout, [&amp;] { <span class="hljs-keyword">return</span> !idle_.<span class="hljs-built_in">empty</span>(); }))
+            <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(<span class="hljs-literal">nullptr</span>, Return{<span class="hljs-keyword">this</span>});
+        Conn* c = idle_.<span class="hljs-built_in">back</span>();
+        idle_.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(c, Return{<span class="hljs-keyword">this</span>});
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">idle</span><span class="hljs-params">()</span> </span>{ <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>; <span class="hljs-keyword">return</span> idle_.<span class="hljs-built_in">size</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(Conn* c)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        {
+            <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>;
+            idle_.<span class="hljs-built_in">push_back</span>(c);           <span class="hljs-comment">// capacity never exceeds all_.size(): reserved by construction</span>
+        }
+        cv_.<span class="hljs-built_in">notify_one</span>();
+    }
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::vector&lt;std::unique_ptr&lt;Conn&gt;&gt; all_;
+    std::vector&lt;Conn*&gt; idle_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">BlockingPool <span class="hljs-title">pool</span><span class="hljs-params">(<span class="hljs-number">2</span>)</span></span>;
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; in_use{<span class="hljs-number">0</span>}, max_in_use{<span class="hljs-number">0</span>}, timeouts{<span class="hljs-number">0</span>}, done{<span class="hljs-number">0</span>};
+    <span class="hljs-keyword">auto</span> client = [&amp;] {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">20</span>; ++i) {
+            <span class="hljs-keyword">auto</span> c = pool.<span class="hljs-built_in">acquire_for</span>(std::chrono::<span class="hljs-built_in">milliseconds</span>(<span class="hljs-number">500</span>));
+            <span class="hljs-keyword">if</span> (!c) { ++timeouts; <span class="hljs-keyword">continue</span>; }
+            <span class="hljs-type">int</span> now = ++in_use;
+            <span class="hljs-type">int</span> seen = max_in_use.<span class="hljs-built_in">load</span>();
+            <span class="hljs-keyword">while</span> (now &gt; seen &amp;&amp; !max_in_use.<span class="hljs-built_in">compare_exchange_weak</span>(seen, now)) {}
+            ++c-&gt;uses;                                  <span class="hljs-comment">// exclusive use: no race</span>
+            std::this_thread::<span class="hljs-built_in">sleep_for</span>(std::chrono::<span class="hljs-built_in">microseconds</span>(<span class="hljs-number">200</span>));
+            --in_use;
+            ++done;
+        }
+    };
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; <span class="hljs-number">6</span>; ++t) ts.<span class="hljs-built_in">emplace_back</span>(client);
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;completed %d, timeouts %d, max in use %d, idle %zu\n&quot;</span>, done.<span class="hljs-built_in">load</span>(), timeouts.<span class="hljs-built_in">load</span>(), max_in_use.<span class="hljs-built_in">load</span>(), pool.<span class="hljs-built_in">idle</span>());
+}</code></pre>
+<pre class="out" data-out="ch16-k-block">completed 120, timeouts 0, max in use 2, idle 2</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per operation plus waiting time. The <code>idle_</code> vector was filled to its full size at construction, so its capacity covers every release. Pitfalls: <code>wait_for</code> without a predicate (spurious wake-ups, and a missed notification if the release happened before the wait), notifying while holding the lock (correct, but the woken thread immediately blocks on the mutex), and the nested-acquire deadlock from the concept drills. The 500 ms timeout is generous so the test never times out under TSan's slowdown.</p>
+    <p class="rating">Estimated rating: ~1600 · standard condition-variable pattern, plus a concurrent test that actually checks the invariant</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a slot map: <code>Key insert(T)</code>, <code>bool erase(Key)</code>, <code>T* get(Key)</code>, <code>size()</code> and iteration over all live values in a dense, contiguous array. Stale keys must return null, and erase must be O(1).</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Three arrays: <code>slots_</code> (generation, live flag, and either the value's dense index or the next free slot), <code>values_</code> (dense values) and <code>owner_</code> (for each dense value, the slot that points to it). Erase moves the last value into the hole, updates the moved value's slot through <code>owner_</code>, bumps the erased slot's generation and pushes it on the free list.</p>
+<pre data-run="ch16-k-slotmap" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">SlotMap</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Key</span> { std::<span class="hljs-type">uint32_t</span> index, gen; };
+
+    <span class="hljs-function">Key <span class="hljs-title">insert</span><span class="hljs-params">(T value)</span> </span>{
+        std::<span class="hljs-type">uint32_t</span> s;
+        <span class="hljs-keyword">if</span> (free_head_ != kNone) { s = free_head_; free_head_ = slots_[s].link; }
+        <span class="hljs-keyword">else</span> { s = <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">uint32_t</span>&gt;(slots_.<span class="hljs-built_in">size</span>()); slots_.<span class="hljs-built_in">push_back</span>({}); }
+        slots_[s].link = <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">uint32_t</span>&gt;(values_.<span class="hljs-built_in">size</span>());
+        slots_[s].live = <span class="hljs-literal">true</span>;
+        values_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(value));
+        owner_.<span class="hljs-built_in">push_back</span>(s);
+        <span class="hljs-keyword">return</span> {s, slots_[s].gen};
+    }
+    <span class="hljs-function">T* <span class="hljs-title">get</span><span class="hljs-params">(Key k)</span> </span>{
+        <span class="hljs-keyword">if</span> (k.index &gt;= slots_.<span class="hljs-built_in">size</span>()) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        <span class="hljs-type">const</span> Slot&amp; s = slots_[k.index];
+        <span class="hljs-keyword">return</span> s.live &amp;&amp; s.gen == k.gen ? &amp;values_[s.link] : <span class="hljs-literal">nullptr</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">erase</span><span class="hljs-params">(Key k)</span> </span>{
+        <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">get</span>(k)) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        Slot&amp; s = slots_[k.index];
+        std::<span class="hljs-type">uint32_t</span> hole = s.link, last = <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">uint32_t</span>&gt;(values_.<span class="hljs-built_in">size</span>() - <span class="hljs-number">1</span>);
+        <span class="hljs-keyword">if</span> (hole != last) {
+            values_[hole] = std::<span class="hljs-built_in">move</span>(values_[last]);
+            owner_[hole] = owner_[last];
+            slots_[owner_[hole]].link = hole;
+        }
+        values_.<span class="hljs-built_in">pop_back</span>();
+        owner_.<span class="hljs-built_in">pop_back</span>();
+        s.live = <span class="hljs-literal">false</span>;
+        ++s.gen;
+        s.link = free_head_;
+        free_head_ = k.index;
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> values_.<span class="hljs-built_in">size</span>(); }
+    <span class="hljs-function"><span class="hljs-keyword">auto</span> <span class="hljs-title">begin</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> values_.<span class="hljs-built_in">begin</span>(); }
+    <span class="hljs-function"><span class="hljs-keyword">auto</span> <span class="hljs-title">end</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> values_.<span class="hljs-built_in">end</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">uint32_t</span> kNone = UINT32_MAX;
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Slot</span> { std::<span class="hljs-type">uint32_t</span> gen = <span class="hljs-number">0</span>; std::<span class="hljs-type">uint32_t</span> link = kNone; <span class="hljs-type">bool</span> live = <span class="hljs-literal">false</span>; };
+    std::vector&lt;Slot&gt; slots_;
+    std::vector&lt;T&gt; values_;
+    std::vector&lt;std::<span class="hljs-type">uint32_t</span>&gt; owner_;
+    std::<span class="hljs-type">uint32_t</span> free_head_ = kNone;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Entity</span> { std::string name; <span class="hljs-type">int</span> hp; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    SlotMap&lt;Entity&gt; world;
+    <span class="hljs-keyword">auto</span> hero = world.<span class="hljs-built_in">insert</span>({<span class="hljs-string">&quot;hero&quot;</span>, <span class="hljs-number">100</span>});
+    <span class="hljs-keyword">auto</span> orc = world.<span class="hljs-built_in">insert</span>({<span class="hljs-string">&quot;orc&quot;</span>, <span class="hljs-number">30</span>});
+    <span class="hljs-keyword">auto</span> bat = world.<span class="hljs-built_in">insert</span>({<span class="hljs-string">&quot;bat&quot;</span>, <span class="hljs-number">5</span>});
+    <span class="hljs-keyword">auto</span> elf = world.<span class="hljs-built_in">insert</span>({<span class="hljs-string">&quot;elf&quot;</span>, <span class="hljs-number">60</span>});
+
+    world.<span class="hljs-built_in">erase</span>(orc);                                  <span class="hljs-comment">// elf moves into orc&#x27;s dense position</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;orc: %s, elf: %s %d\n&quot;</span>, world.<span class="hljs-built_in">get</span>(orc) ? <span class="hljs-string">&quot;alive&quot;</span> : <span class="hljs-string">&quot;gone&quot;</span>, world.<span class="hljs-built_in">get</span>(elf)-&gt;name.<span class="hljs-built_in">c_str</span>(), world.<span class="hljs-built_in">get</span>(elf)-&gt;hp);
+
+    <span class="hljs-keyword">auto</span> troll = world.<span class="hljs-built_in">insert</span>({<span class="hljs-string">&quot;troll&quot;</span>, <span class="hljs-number">80</span>});          <span class="hljs-comment">// reuses orc&#x27;s slot with a new generation</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;troll slot %u gen %u, orc slot %u gen %u, stale orc: %s\n&quot;</span>,
+                troll.index, troll.gen, orc.index, orc.gen, world.<span class="hljs-built_in">get</span>(orc) ? <span class="hljs-string">&quot;found&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>);
+
+    <span class="hljs-type">int</span> total = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (Entity&amp; e : world) total += e.hp;             <span class="hljs-comment">// dense iteration</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu entities, total hp %d, double erase: %s\n&quot;</span>, world.<span class="hljs-built_in">size</span>(), total, world.<span class="hljs-built_in">erase</span>(orc) ? <span class="hljs-string">&quot;accepted&quot;</span> : <span class="hljs-string">&quot;refused&quot;</span>);
+    world.<span class="hljs-built_in">erase</span>(hero);
+    world.<span class="hljs-built_in">erase</span>(bat);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;left: %zu, troll is %s\n&quot;</span>, world.<span class="hljs-built_in">size</span>(), world.<span class="hljs-built_in">get</span>(troll)-&gt;name.<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+<pre class="out" data-out="ch16-k-slotmap">orc: gone, elf: elf 60
+troll slot 1 gen 1, orc slot 1 gen 0, stale orc: null
+4 entities, total hp 245, double erase: refused
+left: 2, troll is troll</pre>
+    <p><b>Complexity and pitfalls.</b> Insert, get and erase are O(1) (insert amortised); iteration is a linear walk over contiguous values. Pitfalls: forgetting to update the moved element's slot (its key then points at the wrong value or out of range), erasing the last element (the move must be skipped, or the self-move leaves a moved-from value), and keeping <code>T*</code> across inserts, because <code>values_</code> can reallocate and erase reorders it. Dense order is not insertion order. The generations can wrap after 2<sup>32</sup> reuses of a slot; production slot maps retire such slots.</p>
+    <p class="rating">Estimated rating: ~1800 · three arrays that must stay consistent through swap-and-pop, plus generation handling</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Design an object pool whose handles may safely outlive the pool. If the pool still exists, releasing a handle returns the object; if the pool has been destroyed, releasing deletes the object. It must be safe to release from any thread.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Put the pool's state (mutex, idle list, reset function) in a <code>std::shared_ptr&lt;State&gt;</code> owned by the pool, and give each handle's deleter a <code>std::weak_ptr&lt;State&gt;</code>. On release, <code>lock()</code> the weak pointer: if it succeeds, the state is kept alive for the duration of the release and the object goes back; if it fails, the pool is gone and the deleter deletes the object. Checked-out objects are owned by their handle, idle ones by the state.</p>
+<pre data-run="ch16-k-weak" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">SafePool</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">State</span> {
+        std::mutex m;
+        std::vector&lt;std::unique_ptr&lt;T&gt;&gt; idle;
+        std::function&lt;<span class="hljs-type">void</span>(T&amp;)&gt; reset;
+    };
+    std::shared_ptr&lt;State&gt; state_;
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Return</span> {
+        std::weak_ptr&lt;State&gt; state;
+        <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(T* obj)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{
+            <span class="hljs-function">std::unique_ptr&lt;T&gt; <span class="hljs-title">owned</span><span class="hljs-params">(obj)</span></span>;              <span class="hljs-comment">// deletes obj unless handed back</span>
+            <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> s = state.<span class="hljs-built_in">lock</span>()) {
+                s-&gt;<span class="hljs-built_in">reset</span>(*owned);
+                <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(s-&gt;m)</span></span>;
+                s-&gt;idle.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(owned));
+            }
+        }
+    };
+    <span class="hljs-keyword">using</span> Handle = std::unique_ptr&lt;T, Return&gt;;
+
+    <span class="hljs-built_in">SafePool</span>(std::<span class="hljs-type">size_t</span> n, std::function&lt;<span class="hljs-built_in">void</span>(T&amp;)&gt; reset) : <span class="hljs-built_in">state_</span>(std::<span class="hljs-built_in">make_shared</span>&lt;State&gt;()) {
+        state_-&gt;reset = std::<span class="hljs-built_in">move</span>(reset);
+        state_-&gt;idle.<span class="hljs-built_in">reserve</span>(n);
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) state_-&gt;idle.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;T&gt;());
+    }
+    <span class="hljs-function">Handle <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(state_-&gt;m)</span></span>;
+        <span class="hljs-keyword">if</span> (state_-&gt;idle.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(<span class="hljs-literal">nullptr</span>, Return{state_});
+        T* obj = state_-&gt;idle.<span class="hljs-built_in">back</span>().<span class="hljs-built_in">release</span>();
+        state_-&gt;idle.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(obj, Return{state_});
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">idle</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(state_-&gt;m)</span></span>; <span class="hljs-keyword">return</span> state_-&gt;idle.<span class="hljs-built_in">size</span>(); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tracked</span> {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> alive = <span class="hljs-number">0</span>;
+    <span class="hljs-type">int</span> value = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">Tracked</span>() { ++alive; }
+    ~<span class="hljs-built_in">Tracked</span>() { --alive; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    SafePool&lt;Tracked&gt;::Handle survivor;
+    {
+        <span class="hljs-function">SafePool&lt;Tracked&gt; <span class="hljs-title">pool</span><span class="hljs-params">(<span class="hljs-number">3</span>, [](Tracked&amp; t) { t.value = <span class="hljs-number">0</span>; })</span></span>;
+        {
+            <span class="hljs-keyword">auto</span> a = pool.<span class="hljs-built_in">acquire</span>();
+            a-&gt;value = <span class="hljs-number">7</span>;
+        }
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after normal release: idle %zu, alive %d\n&quot;</span>, pool.<span class="hljs-built_in">idle</span>(), Tracked::alive);
+        survivor = pool.<span class="hljs-built_in">acquire</span>();
+        survivor-&gt;value = <span class="hljs-number">9</span>;
+    }   <span class="hljs-comment">// pool destroyed while survivor is checked out</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;pool gone: alive %d, survivor value %d\n&quot;</span>, Tracked::alive, survivor-&gt;value);
+    survivor.<span class="hljs-built_in">reset</span>();   <span class="hljs-comment">// deleter finds no pool and deletes the object</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after release: alive %d\n&quot;</span>, Tracked::alive);
+}</code></pre>
+<pre class="out" data-out="ch16-k-weak">after normal release: idle 3, alive 3
+pool gone: alive 1, survivor value 9
+after release: alive 0</pre>
+    <p><b>Complexity and pitfalls.</b> Each handle stores a <code>weak_ptr</code> (16 bytes), so handles are 24 bytes, and each release does an atomic <code>lock()</code> plus the mutex. The object is wrapped in a <code>unique_ptr</code> at the top of the deleter so that every path either hands it back or deletes it. Pitfalls: <code>push_back</code> inside a <code>noexcept</code> deleter could throw <code>bad_alloc</code> if the idle vector had to grow (it cannot here, because only objects created by this pool come back and the vector reserved room for all of them); and calling <code>reset</code> outside the lock is deliberate, because the releasing thread still owns the object exclusively.</p>
+    <p class="rating">Estimated rating: ~1800 · ownership transfer between handle and pool and weak_ptr lifetime reasoning, with no leak on either destruction order</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Build a buffer pool with size buckets (4 KiB, 16 KiB, 64 KiB). <code>acquire(n)</code> returns a handle to a <code>std::vector&lt;char&gt;</code> with capacity of at least <code>n</code>, taken from the smallest bucket that fits; larger requests get an unpooled buffer. On release, buffers that grew beyond twice their bucket size are discarded instead of kept, and each bucket keeps at most 4 idle buffers.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Each bucket is a stack of idle buffers. The handle's deleter knows the bucket index (or a sentinel for unpooled buffers). Release clears the buffer and keeps it only if its capacity is within the cap and the bucket has room; otherwise the buffer is freed. Counters show reuse and discards so the policy is observable.</p>
+<pre data-run="ch16-k-buffers" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">BufferPool</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">using</span> Buffer = std::vector&lt;<span class="hljs-type">char</span>&gt;;
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::array&lt;std::<span class="hljs-type">size_t</span>, 3&gt; kSizes{<span class="hljs-number">4096</span>, <span class="hljs-number">16384</span>, <span class="hljs-number">65536</span>};
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kMaxIdle = <span class="hljs-number">4</span>, kUnpooled = kSizes.<span class="hljs-built_in">size</span>();
+
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Return</span> {
+        BufferPool* pool;
+        std::<span class="hljs-type">size_t</span> bucket;
+        <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Buffer* b)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ pool-&gt;<span class="hljs-built_in">release</span>(b, bucket); }
+    };
+    <span class="hljs-keyword">using</span> Handle = std::unique_ptr&lt;Buffer, Return&gt;;
+
+    <span class="hljs-built_in">BufferPool</span>() { <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; b : idle_) b.<span class="hljs-built_in">reserve</span>(kMaxIdle); }
+
+    <span class="hljs-function">Handle <span class="hljs-title">acquire</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        std::<span class="hljs-type">size_t</span> k = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">while</span> (k &lt; kSizes.<span class="hljs-built_in">size</span>() &amp;&amp; kSizes[k] &lt; n) ++k;
+        <span class="hljs-keyword">if</span> (k == kUnpooled) {                                   <span class="hljs-comment">// too large to pool</span>
+            <span class="hljs-keyword">auto</span>* b = <span class="hljs-keyword">new</span> Buffer;
+            b-&gt;<span class="hljs-built_in">reserve</span>(n);
+            <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(b, Return{<span class="hljs-keyword">this</span>, kUnpooled});
+        }
+        <span class="hljs-keyword">auto</span>&amp; stack = idle_[k];
+        <span class="hljs-keyword">if</span> (!stack.<span class="hljs-built_in">empty</span>()) {
+            ++reused_;
+            Buffer* b = stack.<span class="hljs-built_in">back</span>().<span class="hljs-built_in">release</span>();
+            stack.<span class="hljs-built_in">pop_back</span>();
+            <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(b, Return{<span class="hljs-keyword">this</span>, k});
+        }
+        <span class="hljs-keyword">auto</span>* b = <span class="hljs-keyword">new</span> Buffer;
+        b-&gt;<span class="hljs-built_in">reserve</span>(kSizes[k]);
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(b, Return{<span class="hljs-keyword">this</span>, k});
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">stats</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;reused %d, discarded %d, idle per bucket: %zu %zu %zu\n&quot;</span>,
+                    reused_, discarded_, idle_[<span class="hljs-number">0</span>].<span class="hljs-built_in">size</span>(), idle_[<span class="hljs-number">1</span>].<span class="hljs-built_in">size</span>(), idle_[<span class="hljs-number">2</span>].<span class="hljs-built_in">size</span>());
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(Buffer* b, std::<span class="hljs-type">size_t</span> k)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-function">std::unique_ptr&lt;Buffer&gt; <span class="hljs-title">owned</span><span class="hljs-params">(b)</span></span>;
+        <span class="hljs-keyword">if</span> (k == kUnpooled) <span class="hljs-keyword">return</span>;                             <span class="hljs-comment">// freed</span>
+        <span class="hljs-keyword">if</span> (b-&gt;<span class="hljs-built_in">capacity</span>() &gt; <span class="hljs-number">2</span> * kSizes[k] || idle_[k].<span class="hljs-built_in">size</span>() == kMaxIdle) { ++discarded_; <span class="hljs-keyword">return</span>; }
+        b-&gt;<span class="hljs-built_in">clear</span>();                                             <span class="hljs-comment">// keep the capacity</span>
+        idle_[k].<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(owned));
+    }
+    std::array&lt;std::vector&lt;std::unique_ptr&lt;Buffer&gt;&gt;, <span class="hljs-number">3</span>&gt; idle_;
+    <span class="hljs-type">int</span> reused_ = <span class="hljs-number">0</span>, discarded_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    BufferPool pool;
+    {
+        <span class="hljs-keyword">auto</span> a = pool.<span class="hljs-built_in">acquire</span>(<span class="hljs-number">1000</span>);
+        <span class="hljs-keyword">auto</span> b = pool.<span class="hljs-built_in">acquire</span>(<span class="hljs-number">10000</span>);
+        a-&gt;<span class="hljs-built_in">assign</span>(<span class="hljs-number">1000</span>, <span class="hljs-string">&#x27;a&#x27;</span>);
+        b-&gt;<span class="hljs-built_in">assign</span>(<span class="hljs-number">200000</span>, <span class="hljs-string">&#x27;b&#x27;</span>);                <span class="hljs-comment">// grows far past its 16 KiB bucket</span>
+        <span class="hljs-keyword">auto</span> big = pool.<span class="hljs-built_in">acquire</span>(<span class="hljs-number">1</span> &lt;&lt; <span class="hljs-number">20</span>);      <span class="hljs-comment">// unpooled</span>
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a cap &gt;= 4096: %s, big cap &gt;= 1 MiB: %s\n&quot;</span>,
+                    a-&gt;<span class="hljs-built_in">capacity</span>() &gt;= <span class="hljs-number">4096</span> ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>, big-&gt;<span class="hljs-built_in">capacity</span>() &gt;= (<span class="hljs-number">1u</span> &lt;&lt; <span class="hljs-number">20</span>) ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    }
+    pool.<span class="hljs-built_in">stats</span>();
+    <span class="hljs-keyword">auto</span> c = pool.<span class="hljs-built_in">acquire</span>(<span class="hljs-number">3000</span>);               <span class="hljs-comment">// reuses a&#x27;s buffer</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;c is empty: %s, cap &gt;= 4096: %s\n&quot;</span>, c-&gt;<span class="hljs-built_in">empty</span>() ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>, c-&gt;<span class="hljs-built_in">capacity</span>() &gt;= <span class="hljs-number">4096</span> ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    c.<span class="hljs-built_in">reset</span>();
+    std::vector&lt;BufferPool::Handle&gt; many;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">6</span>; ++i) many.<span class="hljs-built_in">push_back</span>(pool.<span class="hljs-built_in">acquire</span>(<span class="hljs-number">100</span>));
+    many.<span class="hljs-built_in">clear</span>();                              <span class="hljs-comment">// only 4 may stay idle</span>
+    pool.<span class="hljs-built_in">stats</span>();
+}</code></pre>
+<pre class="out" data-out="ch16-k-buffers">a cap &gt;= 4096: yes, big cap &gt;= 1 MiB: yes
+reused 0, discarded 1, idle per bucket: 1 0 0
+c is empty: yes, cap &gt;= 4096: yes
+reused 2, discarded 3, idle per bucket: 4 0 0</pre>
+    <p><b>Complexity and pitfalls.</b> O(number of buckets) to pick a bucket, O(1) otherwise. The 200,000-byte buffer is discarded on release instead of pinning 200 KB in the 16 KiB bucket forever, which is the "memory held forever" fix from the theory. Pitfalls: the deleter's bucket must be the one the buffer came from, not recomputed from its current capacity (it may have grown); <code>clear()</code> keeps capacity but <code>shrink_to_fit()</code> would throw it away; and the idle stacks reserve <code>kMaxIdle</code> so release never allocates.</p>
+    <p class="rating">Estimated rating: ~1600 · a policy-heavy pool: bucket choice, capacity caps and idle limits must agree between acquire and release</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Put a per-thread cache in front of a shared, mutex-protected pool. Each thread keeps up to 8 idle objects locally; when its cache is empty it takes a batch of 4 from the shared pool (constructing new objects if needed), and when the cache is over 8 it returns a batch of 4. A thread's cache must flush back when the thread exits. Test with 4 threads.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A global <code>SharedPool</code> holds idle objects under a mutex. A <code>thread_local</code> cache object serves acquire and release without locking and moves objects to and from the shared pool in batches of 4, so the lock is taken about once per four operations at most. The cache's destructor runs at thread exit and returns everything. Each object carries an atomic "owned" flag so the test can prove no object is ever held by two threads.</p>
+<pre data-run="ch16-k-tlcache" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Msg</span> {
+    std::atomic&lt;<span class="hljs-type">bool</span>&gt; owned{<span class="hljs-literal">false</span>};
+    <span class="hljs-type">int</span> payload = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">SharedPool</span> {
+    std::mutex m_;
+    std::vector&lt;Msg*&gt; idle_;
+    std::vector&lt;Msg*&gt; all_;
+<span class="hljs-keyword">public</span>:
+    ~<span class="hljs-built_in">SharedPool</span>() { <span class="hljs-keyword">for</span> (Msg* p : all_) <span class="hljs-keyword">delete</span> p; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">take</span><span class="hljs-params">(std::vector&lt;Msg*&gt;&amp; out, std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>;
+        <span class="hljs-keyword">while</span> (n-- &gt; <span class="hljs-number">0</span>) {
+            <span class="hljs-keyword">if</span> (idle_.<span class="hljs-built_in">empty</span>()) { all_.<span class="hljs-built_in">push_back</span>(<span class="hljs-keyword">new</span> Msg); idle_.<span class="hljs-built_in">push_back</span>(all_.<span class="hljs-built_in">back</span>()); }
+            out.<span class="hljs-built_in">push_back</span>(idle_.<span class="hljs-built_in">back</span>());
+            idle_.<span class="hljs-built_in">pop_back</span>();
+        }
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">give</span><span class="hljs-params">(std::vector&lt;Msg*&gt;&amp; from, std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>;
+        <span class="hljs-keyword">while</span> (n-- &gt; <span class="hljs-number">0</span> &amp;&amp; !from.<span class="hljs-built_in">empty</span>()) { idle_.<span class="hljs-built_in">push_back</span>(from.<span class="hljs-built_in">back</span>()); from.<span class="hljs-built_in">pop_back</span>(); }
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">total</span><span class="hljs-params">()</span> </span>{ <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>; <span class="hljs-keyword">return</span> all_.<span class="hljs-built_in">size</span>(); }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">idle</span><span class="hljs-params">()</span> </span>{ <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>; <span class="hljs-keyword">return</span> idle_.<span class="hljs-built_in">size</span>(); }
+};
+
+<span class="hljs-type">static</span> SharedPool g_pool;
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">LocalCache</span> {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kHigh = <span class="hljs-number">8</span>, kBatch = <span class="hljs-number">4</span>;
+    std::vector&lt;Msg*&gt; cache_;
+<span class="hljs-keyword">public</span>:
+    ~<span class="hljs-built_in">LocalCache</span>() { g_pool.<span class="hljs-built_in">give</span>(cache_, cache_.<span class="hljs-built_in">size</span>()); }   <span class="hljs-comment">// thread exit</span>
+    <span class="hljs-function">Msg* <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (cache_.<span class="hljs-built_in">empty</span>()) g_pool.<span class="hljs-built_in">take</span>(cache_, kBatch);
+        Msg* m = cache_.<span class="hljs-built_in">back</span>();
+        cache_.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> m;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(Msg* m)</span> </span>{
+        m-&gt;payload = <span class="hljs-number">0</span>;                                       <span class="hljs-comment">// reset</span>
+        cache_.<span class="hljs-built_in">push_back</span>(m);
+        <span class="hljs-keyword">if</span> (cache_.<span class="hljs-built_in">size</span>() &gt; kHigh) g_pool.<span class="hljs-built_in">give</span>(cache_, kBatch);
+    }
+};
+
+<span class="hljs-type">static</span> <span class="hljs-keyword">thread_local</span> LocalCache t_cache;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; clashes{<span class="hljs-number">0</span>};
+    <span class="hljs-keyword">auto</span> worker = [&amp;](<span class="hljs-type">int</span> id) {
+        std::vector&lt;Msg*&gt; held;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">20000</span>; ++i) {
+            <span class="hljs-keyword">if</span> (held.<span class="hljs-built_in">size</span>() &lt; <span class="hljs-number">12</span> &amp;&amp; (i % <span class="hljs-number">3</span> != <span class="hljs-number">2</span>)) {
+                Msg* m = t_cache.<span class="hljs-built_in">acquire</span>();
+                <span class="hljs-keyword">if</span> (m-&gt;owned.<span class="hljs-built_in">exchange</span>(<span class="hljs-literal">true</span>)) ++clashes;
+                m-&gt;payload = id;
+                held.<span class="hljs-built_in">push_back</span>(m);
+            } <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> (!held.<span class="hljs-built_in">empty</span>()) {
+                Msg* m = held.<span class="hljs-built_in">back</span>();
+                held.<span class="hljs-built_in">pop_back</span>();
+                m-&gt;owned.<span class="hljs-built_in">store</span>(<span class="hljs-literal">false</span>);
+                t_cache.<span class="hljs-built_in">release</span>(m);
+            }
+        }
+        <span class="hljs-keyword">for</span> (Msg* m : held) { m-&gt;owned.<span class="hljs-built_in">store</span>(<span class="hljs-literal">false</span>); t_cache.<span class="hljs-built_in">release</span>(m); }
+    };
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; <span class="hljs-number">4</span>; ++t) ts.<span class="hljs-built_in">emplace_back</span>(worker, t);
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;clashes: %d\n&quot;</span>, clashes.<span class="hljs-built_in">load</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;all objects back in the shared pool: %s\n&quot;</span>, g_pool.<span class="hljs-built_in">idle</span>() == g_pool.<span class="hljs-built_in">total</span>() ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;objects created: %s\n&quot;</span>, g_pool.<span class="hljs-built_in">total</span>() &lt;= <span class="hljs-number">4</span> * <span class="hljs-number">24</span> ? <span class="hljs-string">&quot;bounded&quot;</span> : <span class="hljs-string">&quot;too many&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch16-k-tlcache">clashes: 0
+all objects back in the shared pool: yes
+objects created: bounded</pre>
+    <p><b>Complexity and pitfalls.</b> Most operations touch only the thread's own vector; the mutex is taken once per batch. Each thread holds at most 12 objects plus a cache of at most 8 plus a batch of 4, so the total stays bounded. Pitfalls: a thread that exits without flushing its cache strands objects (the <code>thread_local</code> destructor prevents it); static destruction order (the global pool must outlive every thread-local cache, which holds because thread-local objects of a thread are destroyed before static objects, and worker threads are joined before <code>main</code> returns); and objects migrating between threads, which is fine here because the shared pool is the only meeting point and it is locked. The main thread's own cache is never used, so it is empty at exit.</p>
+    <p class="rating">Estimated rating: ~2000 · two-level design with batching, thread-exit flushing and destruction-order reasoning, verified under TSan</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch14-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+  <li>Object pool = reuse <b>constructed</b> objects (saves construction); memory pool = reuse <b>raw blocks</b> (saves allocation). Say which one you mean.</li>
+  <li>Reset must make the object indistinguishable from a new one while keeping the expensive parts (capacity, sockets). Reset on release by default; validate on acquire.</li>
+  <li>Hand out <code>std::unique_ptr&lt;T, Return&gt;</code>: exactly-once release on every path, move-only so no double release. Pool-pointer deleters make handles 16 bytes; the pool must outlive handles (or use <code>weak_ptr</code> state).</li>
+  <li><code>shared_ptr</code> handles allocate a control block per acquire unless you supply an allocator.</li>
+  <li>Exhaustion: grow (buffers), block with timeout (connections, beware nested acquires), fail and alarm (trading). Track a high-water mark.</li>
+  <li>Stale state, double release and use after release are silent: ASan cannot see them. Use in-pool flags, debug poisoning and generation-checked handles.</li>
+  <li>Slot map: handle = (index, generation), dense values, O(1) insert/erase/get; watch generation wrap-around and pointer invalidation.</li>
+  <li>Pools hurt when objects are cheap to build, when peak population is far above normal (memory held forever), and when reset logic drifts from the class. Measure: a pooled message was 1.6 to 2.1 times faster on an Apple M1, not 10 times.</li>
+</ul>
+</section>

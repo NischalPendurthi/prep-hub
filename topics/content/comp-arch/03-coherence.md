@@ -75,7 +75,7 @@ for core, op in [(0, "R"), (0, "W"), (1, "R"), (1, "W"), (0, "W"), (0, "R"), (1,
 
 ## False sharing {#ch03-false-sharing .th}
 
-Coherence works per line, with no idea of which bytes each thread cares about. If two threads write different variables in one line, each write needs ownership of the line, so the line bounces between the cores. That is **false sharing**. The result is correct and slow. This program gives each thread its own counter, once in one line and once in separate lines. The C++ guide's [chapter 19](../../guide/#ch19) covers padding and `hardware_destructive_interference_size`.
+Coherence works per line, with no idea of which bytes each thread cares about. If two threads write different variables in one line, each write needs ownership of the line, so the line bounces between the cores. That is **false sharing**. The result is correct and slow. This program gives each thread its own counter, once in one line and once in separate lines. The C++ guide's [chapter 19](../../guide/cpp/#ch17) covers padding and `hardware_destructive_interference_size`.
 
 ```cpp run=ca-c03-false-sharing nondet
 #include <algorithm>

@@ -1,0 +1,386 @@
+{
+ "cpp:c04-c-any": {
+  "hash": "66d3a7e41761afe4",
+  "out": "port 8080\nhost localhost\nerror: port holds i"
+ },
+ "cpp:c04-c-string": {
+  "hash": "c858bcb2228809ef",
+  "out": "hello HELLO hello"
+ },
+ "cpp:c04-d-assign": {
+  "hash": "a991a0f2637d5ffb",
+  "out": "20\ncopy\n400"
+ },
+ "cpp:c04-d-vdtor": {
+  "hash": "c47d803514ef3b84",
+  "out": "A B ~B ~A"
+ },
+ "cpp:c04-deep": {
+  "hash": "9c721652de11c3ab",
+  "out": "90 50\n90 true"
+ },
+ "cpp:c04-dyn-nonpoly": {
+  "hash": "770f6d5a79a2cf4b",
+  "out": "error: cannot ‘dynamic_cast’ ‘ap’ (of type ‘struct A*’) to type ‘struct B*’ (source type is not polymorphic)"
+ },
+ "cpp:c04-dyncast": {
+  "hash": "cf4b916896ea5096",
+  "out": "not a C: got nullptr\nC 30 40"
+ },
+ "cpp:c04-extra-param": {
+  "hash": "3c7c90867960d31b",
+  "out": "two-argument constructor\n10000 10"
+ },
+ "cpp:c04-naming": {
+  "hash": "617aab15043d93ba",
+  "out": "error: lp0 already bound\nprinting report.pdf\nbalance 500\nrate 0.04\nerror: acct has the wrong type\nerror: no object named lp9"
+ },
+ "cpp:c04-shallow": {
+  "hash": "c84d091426a29ef5",
+  "out": "50 50\n70 70\ntrue"
+ },
+ "cpp:c04-virdest": {
+  "hash": "5184ea7546200fe0",
+  "out": "destroying B\ndestroying A"
+ },
+ "cpp:c04-which": {
+  "hash": "0bc28c791989fb3b",
+  "out": "copy constructor\n100\ncopy assignment\n30\ncopy constructor\n100"
+ },
+ "cpp:c05-ambiguous": {
+  "hash": "a608ab578cd65522",
+  "out": "error: reference to ‘y’ is ambiguous"
+ },
+ "cpp:c05-c-point": {
+  "hash": "44b228e285bd7642",
+  "out": "(1, 2) 1"
+ },
+ "cpp:c05-c-swap": {
+  "hash": "220b06a717bba1ca",
+  "out": "123 custom swaps: 2\n789"
+ },
+ "cpp:c05-cout": {
+  "hash": "12d330a3ac39dd8d",
+  "out": "hello world"
+ },
+ "cpp:c05-d-alias": {
+  "hash": "1cf169a589a8447d",
+  "out": "10 10"
+ },
+ "cpp:c05-d-anon": {
+  "hash": "3d6751e00bb9a5e3",
+  "out": "30"
+ },
+ "cpp:c05-d-k1": {
+  "hash": "f5340d89cec0d2bd",
+  "out": "greetings\nnamashkar"
+ },
+ "cpp:c05-hiding": {
+  "hash": "105b607025d5c28b",
+  "out": "20\n10"
+ },
+ "cpp:c05-koenig": {
+  "hash": "d7972bbcd55c065b",
+  "out": "hello\nwelcome\nhi\ngreetings\nnamashkar"
+ },
+ "cpp:c05-koenig3": {
+  "hash": "b9aaabc4fccebd61",
+  "out": "error: no matching function for call to ‘g(A::X&, B::Y&)’"
+ },
+ "cpp:c05-linkage": {
+  "hash": "a234c054a81ee40d",
+  "out": "101 102 1001\n101 103 1002"
+ },
+ "cpp:c05-no-using": {
+  "hash": "ed491cbba55a4c9f",
+  "out": "error: ‘p’ was not declared in this scope; did you mean ‘B::p’?\nerror: ‘q’ was not declared in this scope; did you mean ‘B::q’?"
+ },
+ "cpp:c05-question": {
+  "hash": "812e8443c6fd0f9b",
+  "out": "10\n25\n20...."
+ },
+ "cpp:c05-redecl": {
+  "hash": "893c5ce5a90abfdd",
+  "out": "error: conflicting declaration ‘int& x’"
+ },
+ "cpp:c05-transitive": {
+  "hash": "bb8b1349ecdbef66",
+  "out": "10 20"
+ },
+ "cpp:c06-c-file": {
+  "hash": "b589a487069bf8c6",
+  "out": "opened main.cpp\nclosed main.cpp\nerror: cannot open /no/such/dir/x"
+ },
+ "cpp:c06-c-ticket": {
+  "hash": "ffc25a75d436b2ec",
+  "out": "acc1: booked seat 3\nacc2: booked seat 4\nacc3: declined 3 times: booking cancelled\nacc3: account blocked\nacc4: payment timeout: booking cancelled\nacc5: seat taken: refunded\nrefunds: acc4 acc5"
+ },
+ "cpp:c06-ctor-members": {
+  "hash": "fbde9cf8ae5fe384",
+  "out": "build engine\nbuild wheels\ndestroy wheels\ndestroy engine\ncaught: no chassis"
+ },
+ "cpp:c06-d-ctor": {
+  "hash": "2ec3c6a04d8ef8ff",
+  "out": "A() ~M caught"
+ },
+ "cpp:c06-d-slice": {
+  "hash": "825fa3fedc3791b8",
+  "out": "main.cpp: In function ‘int main()’:\nmain.cpp:7:22: warning: catching polymorphic type ‘class std::exception’ by value [-Wcatch-value=]\n    7 |   } catch (exception e) {\n      |                      ^\n1: std::exception\n2: index 7"
+ },
+ "cpp:c06-d-train": {
+  "hash": "7a9ef96e13f16ed8",
+  "out": "+1 +2 +3 -3 -2 -1"
+ },
+ "cpp:c06-dtor-catch": {
+  "hash": "92b503201408b221",
+  "out": "creating fast train\ncreated\nremoving engine 200\nremoving engine 100"
+ },
+ "cpp:c06-fn-try": {
+  "hash": "b1df9a119ea7d23e",
+  "out": "A handler: original\nmain: original\nB handler: original\nmain: translated\nprogram continues"
+ },
+ "cpp:c06-match": {
+  "hash": "c3611a9639a37d94",
+  "out": "default handler"
+ },
+ "cpp:c06-noexcept": {
+  "hash": "090ec16b0a8923e7",
+  "out": "main.cpp: In member function ‘void Account::deposit(int)’:\nmain.cpp:8:56: warning: ‘throw’ will always call ‘terminate’ [-Wterminate]\n    8 |   void deposit(int a) noexcept { bal += a; if (a < 10) throw 0; }   // breaks the promise\n      |                                                        ^~~~~~~\nterminate called after throwing an instance of 'int'"
+ },
+ "cpp:c06-order": {
+  "hash": "e97036de027b5fac",
+  "out": "caught A\ncaught B\ncaught D"
+ },
+ "cpp:c06-transfer": {
+  "hash": "a01aaf363323ce8d",
+  "out": "clean transfer\n  SUCCESS  (A=700, B=300)\nauth times out once\n  attempt 1 failed: auth server timeout\n  SUCCESS  (A=700, B=300)\ncredit times out three times, undo works\n  attempt 1 failed: bank server timeout\n  attempt 2 failed: bank server timeout\n  attempt 3 failed: bank server timeout\n  FAILED: credit failed; debit rolled back  (A=1000, B=0)\ncredit and undo both fail\n  attempt 1 failed: bank server timeout\n  attempt 2 failed: bank server timeout\n  attempt 3 failed: bank server timeout\n  attempt 1 failed: bank server timeout\n  attempt 2 failed: bank server timeout\n  attempt 3 failed: bank server timeout\n  ALERT: debit of 300 could not be undone: manual recovery required  (A=700, B=0)\nunexpected fault during debit\n  UNEXPECTED: hardware fault  (A=1000, B=0)"
+ },
+ "cpp:c23-adaptors": {
+  "hash": "b17a44c6dc377de6",
+  "out": "stack: 30 20 10\nqueue: 10 20 30\nset: 10 20 30\ninserting 10 again: false, size 3"
+ },
+ "cpp:c23-assoc": {
+  "hash": "dea63dd8cf3a3ae9",
+  "out": "table a proper noun"
+ },
+ "cpp:c23-c-set": {
+  "hash": "953b24f71551baa3",
+  "out": "{1, 2, 3, 4, 9} {2, 3, 4}\n{1, 2, 3, 4, 5} {1, 2} {3, 4}\n{1, 4, 9, 16}\n{2, 4}\n10\n{1}"
+ },
+ "cpp:c23-c-stack": {
+  "hash": "4ccf465f6f3ed816",
+  "out": "stack full\n21\nstack empty"
+ },
+ "cpp:c23-d-fact": {
+  "hash": "3230d1b420a812ef",
+  "out": "1024 1"
+ },
+ "cpp:c23-d-set": {
+  "hash": "702cdad2b96caffb",
+  "out": "apple fig pear 3"
+ },
+ "cpp:c23-d-str": {
+  "hash": "7cdbb1575b54ebaa",
+  "out": "0011"
+ },
+ "cpp:c23-fact": {
+  "hash": "19b1fdb50ed48706",
+  "out": "120 1 2\n3628800 6"
+ },
+ "cpp:c23-max": {
+  "hash": "0614a232250f7dce",
+  "out": "7\npear\n3.5"
+ },
+ "cpp:c23-rangefor": {
+  "hash": "57ba66f70e25a191",
+  "out": "copy 1\ncopy 2\ncopy 3\n100\n200\n300\n--- vector\ncopy 1\ncopy 2\ncopy 100\ncopy 3\ncopy 10000\ncopy 200\n1000000\n20000\n300"
+ },
+ "cpp:c23-tarray": {
+  "hash": "be09f4f077ac735c",
+  "out": "0 10 20 30 40\nerror: index 5"
+ },
+ "cpp:c23-tq": {
+  "hash": "08a2b5ac245dd3e9",
+  "out": "0 0 1 1 2 4 3 9\nto be"
+ },
+ "cpp:c24-c-bus": {
+  "hash": "9520028a8f39ac8e",
+  "out": "log: #17\nmail ops: #17\nmail ops: #17\norders seen: 1"
+ },
+ "cpp:c24-c-mfr": {
+  "hash": "304aabfd711ccb76",
+  "out": "4 16 36 -> 56\n6\nmap+filter+reduce"
+ },
+ "cpp:c24-captures": {
+  "hash": "9ccce6aa9f8af1de",
+  "out": "1 50\n3 0"
+ },
+ "cpp:c24-concept": {
+  "hash": "282c74fb272b5245",
+  "out": "6 abc\nint-like 7\nreal 7.5"
+ },
+ "cpp:c24-d-capture": {
+  "hash": "6bca289c9c9a8d6c",
+  "out": "10 70"
+ },
+ "cpp:c24-d-traits": {
+  "hash": "ee17963d6b271ea2",
+  "out": "11100"
+ },
+ "cpp:c24-generic": {
+  "hash": "d7e26f44557965a3",
+  "out": "50\n600\n3.5"
+ },
+ "cpp:c24-ifconstexpr": {
+  "hash": "930e8d9776e8d421",
+  "out": "integer 42\nreal 2.500000\nother: text"
+ },
+ "cpp:c24-lambda-basics": {
+  "hash": "d66557b4c103cafe",
+  "out": "30\n8\n1 4 9 16"
+ },
+ "cpp:c24-mytrait": {
+  "hash": "9a23b81ef4fd4b09",
+  "out": "011\n2.5"
+ },
+ "cpp:c24-passing": {
+  "hash": "79f92301ddcd1827",
+  "out": "template: 50\ntemplate: 105\nstd::function: 105\nstd::function: 15\npointer: 15\npointer: 50\n5 6 99\nempty std::function"
+ },
+ "cpp:c24-requires": {
+  "hash": "5f885cbdca8ecb97",
+  "out": "main.cpp:10:15: error: no matching function for call to ‘print_number(const char [3])’\nmain.cpp:5:17: note: the expression ‘is_integral_v<T> [with T = const char*]’ evaluated to ‘false’"
+ },
+ "cpp:c24-traits": {
+  "hash": "21feeb3412723dce",
+  "out": "1000\n0010\n0101\n111"
+ },
+ "cpp:c25-c-count": {
+  "hash": "b31f831bf5766e62",
+  "out": "1\n9 plum"
+ },
+ "cpp:c25-c-join": {
+  "hash": "cb8477dadd33834f",
+  "out": "1, two, 3.5\nx\n[]"
+ },
+ "cpp:c25-cvarargs": {
+  "hash": "85e0937a46e2e014",
+  "out": "10 20 30\n7 8"
+ },
+ "cpp:c25-d-print": {
+  "hash": "b85e144ffa2c92d0",
+  "out": "a[2] 2[1] three[0] end"
+ },
+ "cpp:c25-fold": {
+  "hash": "80d30691aa21ff88",
+  "out": "60 60\nhello world\n5 9\n1 two 3\ntrue false true"
+ },
+ "cpp:c25-print": {
+  "hash": "9e4c8591c9bb7fd9",
+  "out": "1 2 3 5 3 last\n1 2 last\n1 2 3 5 hello 10.123 last\n10 hello 3.14 A ok last"
+ },
+ "cpp:c25-prolog": {
+  "hash": "5f060e0450d1d789",
+  "out": "likes(john, mary)\nlikes(mary, bob)\nlikes(bob, mary, chess)\nloves(ron, chess, mary)\n-- after the rule\nlikes(john, mary)\nlikes(mary, bob)\nlikes(bob, mary, chess)\nloves(ron, chess, mary)\nlikes(john, bob)\nX = [john, mary, john]\nY = [mary, bob, bob]\nW = [mary, bob]\n1 match(es)\nA = [ron]"
+ },
+ "cpp:c26-c-account": {
+  "hash": "22ff022e9cbaefe1",
+  "out": "9000 11000 total 20000"
+ },
+ "cpp:c26-c-turns": {
+  "hash": "9637a1b7be310f9a",
+  "out": "worker 0\nworker 1\nworker 2\nworker 3"
+ },
+ "cpp:c26-counter": {
+  "hash": "986c31fa61dd5b23",
+  "out": "200000"
+ },
+ "cpp:c26-d-nojoin": {
+  "hash": "ac8f9209b03d01bc",
+  "out": "terminate called without an active exception"
+ },
+ "cpp:c26-interleave": {
+  "hash": "9f96380163607dd8",
+  "out": "hello 1\nhi 21\nhi 22\nhello 2\nhi 23\nhello 3"
+ },
+ "cpp:c26-launch": {
+  "hash": "fed3a8bbc29190e3",
+  "out": "1 4 9 16\n0 1 2\n100 101\n7 8 9"
+ },
+ "cpp:c26-philosophers": {
+  "hash": "e08f4d42e0daf6ff",
+  "out": "P1 ate 1000, P2 ate 1000"
+ },
+ "cpp:c26-recursive-fixed": {
+  "hash": "7bc0428dc9150570",
+  "out": "55 36"
+ },
+ "cpp:c26-sleep": {
+  "hash": "26a1e4814b42e5e4",
+  "out": "waited at least 50 ms: true\nsame id as main: true"
+ },
+ "cpp:c26-unique": {
+  "hash": "1f5f910ce4cc776c",
+  "out": "4 entries\nrelock: Resource deadlock avoided"
+ },
+ "cpp:c27-barrier": {
+  "hash": "449bb12d2ee50e66",
+  "out": "000111222"
+ },
+ "cpp:c27-bounded": {
+  "hash": "d7ff79696732b9cd",
+  "out": "consumed total 200010000, expected 200010000\nbuffer never exceeded capacity: true"
+ },
+ "cpp:c27-c-123": {
+  "hash": "7a61a9ac3d8d2fea",
+  "out": "1 2 3 1 2 3 1 2 3"
+ },
+ "cpp:c27-c-sem": {
+  "hash": "be88971a06d4e893",
+  "out": "500500"
+ },
+ "cpp:c27-pingpong": {
+  "hash": "17e6aa69b4275f87",
+  "out": "A 0\nA 1\nB 0\nB 1\nA 0\nA 1\nB 0\nB 1\nA 0\nA 1\nB 0\nB 1"
+ },
+ "cpp:c27-semaphore": {
+  "hash": "3d040ba9121d4161",
+  "out": "never more than 3 inside: true"
+ },
+ "cpp:c27-server": {
+  "hash": "7c48939d15bea2c5",
+  "out": "consumers received a total of 20100 (expected 20100)"
+ },
+ "cpp:c28-c-amo": {
+  "hash": "676f959f229c5d9f",
+  "out": "ok, balance 900\nok, balance 850 (duplicate, not re-executed)\nok, balance 825"
+ },
+ "cpp:c28-c-proxies": {
+  "hash": "0ff1ccfbc84abd01",
+  "out": "proxy created\n  (loading spec.txt from disk)\nv1\npermission denied for role viewer\nv2"
+ },
+ "cpp:c28-proxy": {
+  "hash": "06f25733c7326df1",
+  "out": "100 100 250\nreal object called 2 times"
+ },
+ "cpp:c28-rpc": {
+  "hash": "484844f4bb51c77e",
+  "out": "tax on 1000 = 100\ntax on 2500 = 250\ntax on 99999 = 9999"
+ },
+ "cpp:c28-state": {
+  "hash": "b2d38f796f964794",
+  "out": "  error: fetch from an empty LIFO\nfetch -> EMPTY\nadd 1 -> PARTIAL\nadd 2 -> PARTIAL\n  got 2\nfetch -> PARTIAL\nadd 3 -> PARTIAL\nadd 4 -> PARTIAL\nadd 5 -> FULL\n  error: add to a full LIFO\nadd 6 -> FULL"
+ },
+ "cpp:c28-visitor": {
+  "hash": "7334f112e5f84dfe",
+  "out": "visitor 1 10\nvisitor 2 20"
+ },
+ "cpp:c28-visitor-text": {
+  "hash": "820315f0ec91de55",
+  "out": "35 words, 3 numbers, 4 punctuation marks\nlongest word: beginning, numbers add up to 16"
+ },
+ "cpp:home-hero": {
+  "hash": "e284781d8c41f999",
+  "out": "ctor\nmove"
+ }
+}

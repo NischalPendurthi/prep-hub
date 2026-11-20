@@ -1,0 +1,1336 @@
+---
+title: Cache-friendly allocation
+part: Part C · Memory management
+lede: A cache miss to DRAM costs as much as hundreds of simple instructions, so where your objects live in memory often matters more than how many instructions touch them. This chapter covers the memory hierarchy, cache lines, locality, data layout (AoS vs SoA, padding, hot/cold splitting), false sharing, prefetching and the allocation patterns that keep related data together, with benchmarks measured on an Apple M1. Low-latency and systems interviews ask about it because it is where "big-O equal" designs differ by 10x or more.
+desc: Cache lines, AoS vs SoA, alignment, false sharing, contiguous layouts
+hours: 5
+prereqs: [Ch 8](#ch08), [Ch 13](#ch13), [Ch 15](#ch15), [Ch 16](#ch16)
+---
+<section id="ch17-hierarchy" data-roles="th"><div class="sec-head"><h2>The memory hierarchy and latency numbers</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> The CPU can only work on data in registers. Everything else is a ladder of caches, each larger and slower than the one above: L1 (per core, tens of KB), L2 (per core or per cluster, hundreds of KB to a few MB), often a shared L3 or system-level cache (several MB to tens of MB), then DRAM (GB). A load that hits L1 completes in a few cycles. A load that has to go to DRAM stalls for hundreds of cycles, and if the next load depends on it (pointer chasing), nothing hides that stall.</p>
+<h3 id="ch17-latency-table">Key facts</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Level</th><th>Typical latency</th><th>Typical size</th><th>Measured here (M1, pointer chase)</th></tr></thead>
+<tbody>
+<tr><td>Register</td><td>0 cycles</td><td>16 to 32 general registers</td><td></td></tr>
+<tr><td>L1 data cache</td><td>3 to 5 cycles, about 1 ns</td><td>32 to 48 KB (x86), 128 KB (M1 performance core)</td><td>about 2 ns at 16 to 64 KB (includes loop overhead)</td></tr>
+<tr><td>L2</td><td>12 to 18 cycles, about 3 to 5 ns</td><td>256 KB to 2 MB per core (x86), 12 MB per performance cluster (M1)</td><td>6 to 11 ns at 256 KB to 4 MB</td></tr>
+<tr><td>L3 / system cache</td><td>30 to 70 cycles, about 10 to 20 ns</td><td>8 to 100+ MB, shared</td><td>M1 has an 8 MB system level cache instead of an L3</td></tr>
+<tr><td>DRAM</td><td>about 60 to 120 ns</td><td>GB</td><td>about 115 ns at 64 MB (includes TLB misses)</td></tr>
+<tr><td>TLB miss (page walk)</td><td>tens of cycles if the page tables are cached, a DRAM access each if not</td><td>about 64 L1 and 1 to 3 K L2 TLB entries</td><td></td></tr>
+<tr><td>NVMe SSD read</td><td>about 10 to 100 µs</td><td>TB</td><td></td></tr>
+</tbody></table></div>
+<p>These numbers vary by a factor of two or more between CPU generations, clock speeds and load, so quote ranges in interviews and say so. What does not vary is the shape: each step down costs roughly 3 to 10 times more, and DRAM is roughly 100 times slower than L1.</p>
+<p>The program below measures load latency the standard way: it builds a random cyclic permutation inside an array of a given size and follows it, so every load depends on the previous one and the hardware cannot overlap or prefetch them. The output is a timing, so it is not checked.</p>
+<pre data-run="ch19-latency" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;numeric&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;random&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-comment">// Pointer chasing: each load depends on the previous one, so prefetchers cannot help</span>
+<span class="hljs-comment">// and the time per step approximates the load latency of the level the array fits in.</span>
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">double</span> <span class="hljs-title">ns_per_load</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> bytes)</span> </span>{
+    std::<span class="hljs-type">size_t</span> n = bytes / <span class="hljs-built_in">sizeof</span>(std::<span class="hljs-type">size_t</span>);
+    <span class="hljs-function">std::vector&lt;std::<span class="hljs-type">size_t</span>&gt; <span class="hljs-title">order</span><span class="hljs-params">(n)</span>, <span class="hljs-title">next</span><span class="hljs-params">(n)</span></span>;
+    std::<span class="hljs-built_in">iota</span>(order.<span class="hljs-built_in">begin</span>(), order.<span class="hljs-built_in">end</span>(), <span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">shuffle</span>(order.<span class="hljs-built_in">begin</span>() + <span class="hljs-number">1</span>, order.<span class="hljs-built_in">end</span>(), std::mt19937_64{<span class="hljs-number">42</span>});
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) next[order[i]] = order[(i + <span class="hljs-number">1</span>) % n];   <span class="hljs-comment">// one random cycle</span>
+    <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> steps = <span class="hljs-number">5&#x27;000&#x27;000</span>;
+    std::<span class="hljs-type">size_t</span> p = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">auto</span> t0 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; steps; ++i) p = next[p];
+    <span class="hljs-keyword">auto</span> t1 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+    <span class="hljs-keyword">if</span> (p == n) std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;&quot;</span>);   <span class="hljs-comment">// keep p alive</span>
+    <span class="hljs-keyword">return</span> std::chrono::<span class="hljs-built_in">duration</span>&lt;<span class="hljs-type">double</span>, std::nano&gt;(t1 - t0).<span class="hljs-built_in">count</span>() / steps;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> kb : {<span class="hljs-number">16</span>, <span class="hljs-number">64</span>, <span class="hljs-number">256</span>, <span class="hljs-number">1024</span>, <span class="hljs-number">4096</span>, <span class="hljs-number">16384</span>, <span class="hljs-number">65536</span>})
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%7zu KB: %6.1f ns per dependent load\n&quot;</span>, kb, <span class="hljs-built_in">ns_per_load</span>(kb * <span class="hljs-number">1024</span>));
+}</code></pre>
+<p>On the Apple M1 used for this guide (GCC 16 and Clang 22, <code>-O1</code>) it printed about 2 ns up to 64 KB, 6 to 11 ns from 256 KB to 4 MB (L2), between 28 and 66 ns at 16 MB depending on the run (the system cache catches part of it), and about 115 ns at 64 MB. The jump points are where the working set stops fitting in a cache level.</p>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>L1 about 1 ns, L2 about 4 ns, L3 about 15 ns, DRAM about 100 ns. A cache miss to DRAM costs as much as a few hundred simple instructions. Independent misses can overlap (a core can keep 10 to 20 or more misses in flight), dependent misses cannot. That is why arrays beat linked structures even when both touch "the same amount" of memory.</p></div>
+</section>
+
+<section id="ch17-lines" data-roles="th"><div class="sec-head"><h2>Cache lines and locality</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Caches do not move bytes, they move <b>cache lines</b>: aligned blocks of 64 bytes on every current x86 core and on most Arm cores. Apple silicon reports 128 bytes (<code>sysctl hw.cachelinesize</code> prints 128 on this M1), and 128 is the value to pad for there. Reading one byte brings the whole line in; writing one byte requires the core to own the whole line.</p>
+<p>The address splits into three fields: the low 6 bits (for 64-byte lines) are the offset inside the line, the next bits pick the <b>set</b>, and the rest is the tag that identifies which line occupies a slot of that set. A cache with 8 or 12 ways can hold only that many lines with the same set index. Addresses that differ by a large power of two (4 KB, 8 KB, 16 KB) land in the same set, so walking a matrix whose row length is a power of two can thrash a cache that is mostly empty (the transpose measurements below show this).</p>
+<h3 id="ch17-locality">Spatial and temporal locality</h3>
+<ul>
+<li><b>Spatial locality:</b> if you touch an address, you will soon touch its neighbours. Contiguous arrays and sequential scans exploit it: one miss brings 16 <code>int</code>s.</li>
+<li><b>Temporal locality:</b> if you touch something, you will soon touch it again. Tiling (blocking) a loop so that it reuses a small working set before moving on exploits it.</li>
+</ul>
+<p>Cache-friendly design means maximising the fraction of each fetched line that you use, and the number of times you use it before it is evicted.</p>
+<h3 id="ch17-interference-size">std::hardware_destructive_interference_size</h3>
+<p>C++17 added two constants in <code>&lt;new&gt;</code>: <code>hardware_destructive_interference_size</code> (the minimum distance between two objects to avoid false sharing) and <code>hardware_constructive_interference_size</code> (the maximum size of data that is guaranteed to share a line). Measured with both compilers in this guide's harness:</p>
+<pre data-run="ch19-interference"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;destructive %zu, constructive %zu\n&quot;</span>,
+                std::hardware_destructive_interference_size,
+                std::hardware_constructive_interference_size);
+}</code></pre>
+<pre class="out" data-out="ch19-interference">destructive 256, constructive 64</pre>
+<p>That is the output for the arm64 target used here, with both GCC 16 and Clang 22. On x86-64 both compilers print 64 and 64. The arm64 value of 256 is deliberately conservative, chosen to cover Arm designs with large lines or pair-wise prefetching. Two warnings come with these constants. They are compile-time values for a target, not a property of the machine the program runs on. And they become part of any struct layout that uses them, so a header that uses them can produce an ABI mismatch between translation units compiled with different flags; GCC has <code>-Winterference-size</code> for exactly that: it is on by default and fires when the constant is used in a header (a use in the main source file, like the program above, is not flagged), and it goes quiet once you pin the value with <code>--param destructive-interference-size=N</code>. Many projects simply hard-code 64 (x86) or 128 (to also cover Apple silicon and Intel's adjacent-line prefetcher).</p>
+</section>
+
+<section id="ch17-contiguous" data-roles="th"><div class="sec-head"><h2>Contiguous containers vs node-based containers</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A <code>std::vector&lt;int&gt;</code> of a million elements is 4 MB in one block: a scan touches 62,500 lines in order, and the hardware prefetcher sees the stream and fetches ahead. A <code>std::list&lt;int&gt;</code> of the same elements is a million separate nodes of 24 bytes plus allocator overhead, each found by loading the previous node's <code>next</code> pointer. Every step is a dependent load, and if the nodes are scattered, every step is a cache miss.</p>
+<pre data-run="ch19-vector-list" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;list&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;numeric&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;random&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">double</span> <span class="hljs-title">best_ms</span><span class="hljs-params">(F f)</span> </span>{
+    <span class="hljs-type">double</span> best = <span class="hljs-number">1e30</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> r = <span class="hljs-number">0</span>; r &lt; <span class="hljs-number">3</span>; ++r) {
+        <span class="hljs-keyword">auto</span> t0 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        <span class="hljs-built_in">f</span>();
+        <span class="hljs-keyword">auto</span> t1 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        best = std::<span class="hljs-built_in">min</span>(best, std::chrono::<span class="hljs-built_in">duration</span>&lt;<span class="hljs-type">double</span>, std::milli&gt;(t1 - t0).<span class="hljs-built_in">count</span>());
+    }
+    <span class="hljs-keyword">return</span> best;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> n = <span class="hljs-number">2&#x27;000&#x27;000</span>;
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">v</span><span class="hljs-params">(n)</span></span>;
+    std::<span class="hljs-built_in">iota</span>(v.<span class="hljs-built_in">begin</span>(), v.<span class="hljs-built_in">end</span>(), <span class="hljs-number">0</span>);
+    <span class="hljs-function">std::list&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">fresh</span><span class="hljs-params">(v.begin(), v.end())</span></span>;          <span class="hljs-comment">// nodes allocated back to back</span>
+
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">keys</span><span class="hljs-params">(n)</span></span>;
+    std::<span class="hljs-built_in">iota</span>(keys.<span class="hljs-built_in">begin</span>(), keys.<span class="hljs-built_in">end</span>(), <span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">shuffle</span>(keys.<span class="hljs-built_in">begin</span>(), keys.<span class="hljs-built_in">end</span>(), std::mt19937{<span class="hljs-number">1</span>});
+    std::list&lt;std::pair&lt;<span class="hljs-type">int</span>, <span class="hljs-type">int</span>&gt;&gt; scattered;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) scattered.<span class="hljs-built_in">push_back</span>({keys[i], i});
+    scattered.<span class="hljs-built_in">sort</span>();   <span class="hljs-comment">// relinks the nodes: list order no longer matches memory order</span>
+    <span class="hljs-type">long</span> <span class="hljs-type">long</span> s1 = <span class="hljs-number">0</span>, s2 = <span class="hljs-number">0</span>, s3 = <span class="hljs-number">0</span>;
+    <span class="hljs-type">double</span> tv = <span class="hljs-built_in">best_ms</span>([&amp;] { s1 = std::<span class="hljs-built_in">accumulate</span>(v.<span class="hljs-built_in">begin</span>(), v.<span class="hljs-built_in">end</span>(), <span class="hljs-number">0LL</span>); });
+    <span class="hljs-type">double</span> tf = <span class="hljs-built_in">best_ms</span>([&amp;] { s2 = std::<span class="hljs-built_in">accumulate</span>(fresh.<span class="hljs-built_in">begin</span>(), fresh.<span class="hljs-built_in">end</span>(), <span class="hljs-number">0LL</span>); });
+    <span class="hljs-type">double</span> ts = <span class="hljs-built_in">best_ms</span>([&amp;] { <span class="hljs-type">long</span> <span class="hljs-type">long</span> s = <span class="hljs-number">0</span>; <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; p : scattered) s += p.second; s3 = s; });
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;vector %.2f ms, list (allocation order) %.2f ms, list (scattered) %.2f ms\n&quot;</span>, tv, tf, ts);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ratios: %.1fx and %.1fx  [%lld %lld %lld]\n&quot;</span>, tf / tv, ts / tv, s1, s2, s3);
+}</code></pre>
+<p>Measured on the M1: the list in allocation order is about 3 times slower than the vector (the allocator happened to place nodes nearly back to back, so this is the list's best case). After sorting by a random key, which relinks the nodes so that list order no longer matches memory order, the list is about 170 to 200 times slower than the vector for the same 2 million elements. Long-running programs look like the second case: nodes are allocated and freed over time, and neighbours in the list end up far apart in memory.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"Linked lists have O(1) insertion, so they are better for frequent inserts in the middle." Only if you already hold an iterator to the position. Finding the position is an O(n) walk of cache misses, while a vector finds it with a fast scan or binary search and shifts the tail with <code>memmove</code>, which runs at memory bandwidth. Bjarne Stroustrup's well-known benchmark showed vector beating list for "insert at a random sorted position" at every size he tried. Big-O hides the constant, and the constant is the memory system.</p></div>
+<h3 id="ch17-row-major">Row-major traversal</h3>
+<p>C and C++ arrays are row-major: <code>m[r][c]</code> and <code>m[r][c + 1]</code> are adjacent. Walking along a row uses every byte of every line. Walking down a column jumps a whole row each step, uses 4 bytes of each 64- or 128-byte line, and, for large matrices, evicts the line before the next column would have used the rest of it.</p>
+<pre data-run="ch19-rowcol" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> n = <span class="hljs-number">4096</span>;                        <span class="hljs-comment">// 4096 × 4096 ints = 64 MB, far beyond every cache</span>
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">m</span><span class="hljs-params">(<span class="hljs-keyword">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(n) * n, <span class="hljs-number">1</span>)</span></span>;
+    <span class="hljs-keyword">auto</span> time = [&amp;](<span class="hljs-type">bool</span> by_rows) {
+        <span class="hljs-keyword">auto</span> t0 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        <span class="hljs-type">long</span> <span class="hljs-type">long</span> s = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> a = <span class="hljs-number">0</span>; a &lt; n; ++a)
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> b = <span class="hljs-number">0</span>; b &lt; n; ++b)
+                s += by_rows ? m[<span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(a) * n + b] : m[<span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(b) * n + a];
+        <span class="hljs-keyword">auto</span> t1 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s: %.1f ms (sum %lld)\n&quot;</span>, by_rows ? <span class="hljs-string">&quot;row order   &quot;</span> : <span class="hljs-string">&quot;column order&quot;</span>,
+                    std::chrono::<span class="hljs-built_in">duration</span>&lt;<span class="hljs-type">double</span>, std::milli&gt;(t1 - t0).<span class="hljs-built_in">count</span>(), s);
+        <span class="hljs-keyword">return</span> std::chrono::<span class="hljs-built_in">duration</span>&lt;<span class="hljs-type">double</span>&gt;(t1 - t0).<span class="hljs-built_in">count</span>();
+    };
+    <span class="hljs-type">double</span> r = <span class="hljs-built_in">time</span>(<span class="hljs-literal">true</span>), c = <span class="hljs-built_in">time</span>(<span class="hljs-literal">false</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;column / row = %.1fx\n&quot;</span>, c / r);
+}</code></pre>
+<p>On the M1 the column-order walk of a 64 MB matrix was 5 times (GCC) to 9 times (Clang) slower than the row-order walk. On many x86 machines the gap is larger. Loop interchange (swapping the loops) is the cheapest optimisation in this chapter.</p>
+</section>
+
+<section id="ch17-aos-soa" data-roles="th"><div class="sec-head"><h2>AoS vs SoA, and hot/cold splitting</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Array of structures (AoS)</b> stores whole objects one after another: <code>std::vector&lt;Particle&gt;</code>. <b>Structure of arrays (SoA)</b> stores one array per field: <code>std::vector&lt;float&gt; x, y, z, vx, ...</code>. The data is the same; what changes is which bytes share a cache line.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 330" role="img" aria-label="With AoS, a loop that reads x and vx uses 8 of every 64 bytes fetched; with SoA, every byte of the x and vx lines is used">
+<text x="20" y="24" class="t-bold">AoS: one 64-byte Particle per line, loop reads p.x and p.vx</text>
+<g>
+<rect x="20" y="36" width="40" height="34" class="d-key"/><text x="40" y="58" text-anchor="middle" class="t-small t-mono">x</text>
+<rect x="60" y="36" width="40" height="34" class="d-soft"/><text x="80" y="58" text-anchor="middle" class="t-small t-mono t-muted">y</text>
+<rect x="100" y="36" width="40" height="34" class="d-soft"/><text x="120" y="58" text-anchor="middle" class="t-small t-mono t-muted">z</text>
+<rect x="140" y="36" width="40" height="34" class="d-key"/><text x="160" y="58" text-anchor="middle" class="t-small t-mono">vx</text>
+<rect x="180" y="36" width="40" height="34" class="d-soft"/><text x="200" y="58" text-anchor="middle" class="t-small t-mono t-muted">vy</text>
+<rect x="220" y="36" width="40" height="34" class="d-soft"/><text x="240" y="58" text-anchor="middle" class="t-small t-mono t-muted">vz</text>
+<rect x="260" y="36" width="40" height="34" class="d-soft"/><text x="280" y="58" text-anchor="middle" class="t-small t-mono t-muted">m</text>
+<rect x="300" y="36" width="40" height="34" class="d-soft"/><text x="320" y="58" text-anchor="middle" class="t-small t-mono t-muted">q</text>
+<rect x="340" y="36" width="40" height="34" class="d-soft"/><text x="360" y="58" text-anchor="middle" class="t-small t-mono t-muted">id</text>
+<rect x="380" y="36" width="40" height="34" class="d-soft"/><text x="400" y="58" text-anchor="middle" class="t-small t-mono t-muted">fl</text>
+<rect x="420" y="36" width="80" height="34" class="d-soft"/><text x="460" y="58" text-anchor="middle" class="t-small t-mono t-muted">created</text>
+<rect x="500" y="36" width="80" height="34" class="d-soft"/><text x="540" y="58" text-anchor="middle" class="t-small t-mono t-muted">updated</text>
+<rect x="580" y="36" width="80" height="34" class="d-soft d-dash"/><text x="620" y="58" text-anchor="middle" class="t-small t-mono t-muted">pad</text>
+</g>
+<text x="670" y="50" class="t-small t-trap">8 / 64 B</text>
+<text x="670" y="66" class="t-small t-trap">used</text>
+<text x="20" y="92" class="t-small t-muted">the next particle is on the next line: same pattern, 87.5% of every fetched line is wasted bandwidth</text>
+<text x="20" y="140" class="t-bold">SoA: separate arrays, the same loop reads x[i] and vx[i]</text>
+<text x="20" y="172" class="t-small t-mono">x line</text>
+<g>
+<rect x="80" y="152" width="36" height="32" class="d-key"/><rect x="116" y="152" width="36" height="32" class="d-key"/><rect x="152" y="152" width="36" height="32" class="d-key"/><rect x="188" y="152" width="36" height="32" class="d-key"/>
+<rect x="224" y="152" width="36" height="32" class="d-key"/><rect x="260" y="152" width="36" height="32" class="d-key"/><rect x="296" y="152" width="36" height="32" class="d-key"/><rect x="332" y="152" width="36" height="32" class="d-key"/>
+<rect x="368" y="152" width="36" height="32" class="d-key"/><rect x="404" y="152" width="36" height="32" class="d-key"/><rect x="440" y="152" width="36" height="32" class="d-key"/><rect x="476" y="152" width="36" height="32" class="d-key"/>
+<rect x="512" y="152" width="36" height="32" class="d-key"/><rect x="548" y="152" width="36" height="32" class="d-key"/><rect x="584" y="152" width="36" height="32" class="d-key"/><rect x="620" y="152" width="36" height="32" class="d-key"/>
+<text x="98" y="173" text-anchor="middle" class="t-small t-mono">x0</text><text x="134" y="173" text-anchor="middle" class="t-small t-mono">x1</text><text x="170" y="173" text-anchor="middle" class="t-small t-mono">x2</text><text x="638" y="173" text-anchor="middle" class="t-small t-mono">x15</text>
+</g>
+<text x="20" y="222" class="t-small t-mono">vx line</text>
+<g>
+<rect x="80" y="202" width="36" height="32" class="d-acc"/><rect x="116" y="202" width="36" height="32" class="d-acc"/><rect x="152" y="202" width="36" height="32" class="d-acc"/><rect x="188" y="202" width="36" height="32" class="d-acc"/>
+<rect x="224" y="202" width="36" height="32" class="d-acc"/><rect x="260" y="202" width="36" height="32" class="d-acc"/><rect x="296" y="202" width="36" height="32" class="d-acc"/><rect x="332" y="202" width="36" height="32" class="d-acc"/>
+<rect x="368" y="202" width="36" height="32" class="d-acc"/><rect x="404" y="202" width="36" height="32" class="d-acc"/><rect x="440" y="202" width="36" height="32" class="d-acc"/><rect x="476" y="202" width="36" height="32" class="d-acc"/>
+<rect x="512" y="202" width="36" height="32" class="d-acc"/><rect x="548" y="202" width="36" height="32" class="d-acc"/><rect x="584" y="202" width="36" height="32" class="d-acc"/><rect x="620" y="202" width="36" height="32" class="d-acc"/>
+<text x="98" y="223" text-anchor="middle" class="t-small t-mono">vx0</text><text x="638" y="223" text-anchor="middle" class="t-small t-mono">vx15</text>
+</g>
+<text x="670" y="196" class="t-small t-key">64 / 64 B</text>
+<text x="670" y="212" class="t-small t-key">used</text>
+<text x="20" y="270" class="t-small">two lines serve 16 particles instead of 16 lines, and the loop is a clean candidate for SIMD:</text>
+<text x="20" y="290" class="t-small t-mono">x[i..i+3] += vx[i..i+3] in one vector instruction</text>
+<text x="20" y="316" class="t-small t-muted">(unused fields of other particles never enter the cache at all)</text>
+</svg></div><figcaption><b>Layout decides how much of each line is useful.</b> A loop over one or two fields of a fat object drags the whole object through the cache. SoA keeps each field dense, so the same loop reads only what it uses and vectorises naturally.</figcaption></figure>
+<pre data-run="ch19-aos-soa" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">ParticleAoS</span> {            <span class="hljs-comment">// 64 bytes: one particle per cache line on x86</span>
+    <span class="hljs-type">float</span> x, y, z;
+    <span class="hljs-type">float</span> vx, vy, vz;
+    <span class="hljs-type">float</span> mass, charge;
+    <span class="hljs-type">int</span> id, flags;
+    <span class="hljs-type">double</span> created, updated;
+    <span class="hljs-type">float</span> pad[<span class="hljs-number">2</span>];
+};
+<span class="hljs-built_in">static_assert</span>(<span class="hljs-built_in">sizeof</span>(ParticleAoS) == <span class="hljs-number">64</span>);
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">ParticlesSoA</span> {
+    std::vector&lt;<span class="hljs-type">float</span>&gt; x, y, z, vx, vy, vz, mass, charge;
+    std::vector&lt;<span class="hljs-type">int</span>&gt; id, flags;
+    std::vector&lt;<span class="hljs-type">double</span>&gt; created, updated;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> n = <span class="hljs-number">4&#x27;000&#x27;000</span>;
+    <span class="hljs-function">std::vector&lt;ParticleAoS&gt; <span class="hljs-title">aos</span><span class="hljs-params">(n, ParticleAoS{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">0.5f</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">1</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, {}})</span></span>;
+    ParticlesSoA soa;
+    soa.x.<span class="hljs-built_in">assign</span>(n, <span class="hljs-number">1</span>); soa.vx.<span class="hljs-built_in">assign</span>(n, <span class="hljs-number">0.5f</span>);
+    soa.y.<span class="hljs-built_in">assign</span>(n, <span class="hljs-number">2</span>); soa.z.<span class="hljs-built_in">assign</span>(n, <span class="hljs-number">3</span>); soa.vy.<span class="hljs-built_in">assign</span>(n, <span class="hljs-number">0</span>); soa.vz.<span class="hljs-built_in">assign</span>(n, <span class="hljs-number">0</span>);
+    <span class="hljs-keyword">auto</span> ms = [](<span class="hljs-keyword">auto</span> t0, <span class="hljs-keyword">auto</span> t1) { <span class="hljs-keyword">return</span> std::chrono::<span class="hljs-built_in">duration</span>&lt;<span class="hljs-type">double</span>, std::milli&gt;(t1 - t0).<span class="hljs-built_in">count</span>(); };
+    <span class="hljs-type">double</span> ta = <span class="hljs-number">1e30</span>, ts = <span class="hljs-number">1e30</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> r = <span class="hljs-number">0</span>; r &lt; <span class="hljs-number">5</span>; ++r) {
+        <span class="hljs-keyword">auto</span> t0 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; p : aos) p.x += p.vx;                       <span class="hljs-comment">// touches 8 of every 64 bytes</span>
+        <span class="hljs-keyword">auto</span> t1 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) soa.x[i] += soa.vx[i];   <span class="hljs-comment">// touches only what it uses</span>
+        <span class="hljs-keyword">auto</span> t2 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        ta = std::<span class="hljs-built_in">min</span>(ta, <span class="hljs-built_in">ms</span>(t0, t1));
+        ts = std::<span class="hljs-built_in">min</span>(ts, <span class="hljs-built_in">ms</span>(t1, t2));
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;AoS %.2f ms, SoA %.2f ms, AoS / SoA = %.1fx (x[7] %.1f %.1f)\n&quot;</span>, ta, ts, ta / ts, aos[<span class="hljs-number">7</span>].x, soa.x[<span class="hljs-number">7</span>]);
+}</code></pre>
+<p>Measured on the M1 with 4 million particles: SoA was 3.1 times faster with GCC and 2.4 times faster with Clang for <code>x += vx</code>. The theoretical ratio is 8 (8 bytes used out of 64 in AoS, all of them in SoA); the M1's very high memory bandwidth and the loop's arithmetic eat into it.</p>
+<p><b>SoA is not always better.</b> If the code usually works on one whole entity at a time (look up a particle by id and read all its fields), AoS fetches one or two lines while SoA fetches one line per field. Many engines use a hybrid, <b>AoSoA</b>: blocks of, say, 8 entities stored SoA-style inside each block, which keeps SIMD-friendly runs and entity locality. Entity-component systems in games are SoA at heart.</p>
+<h3 id="ch17-hot-cold">Hot/cold splitting</h3>
+<p>A gentler version of the same idea: keep the fields that the hot loop touches in a compact struct, and move rarely used fields (names, debug info, audit timestamps, large buffers) into a separate "cold" struct reached by index or pointer.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">OrderHot</span> {             <span class="hljs-comment">// 32 bytes: two per 64-byte line, scanned by the matching engine</span>
+    std::<span class="hljs-type">int64_t</span> price;
+    std::<span class="hljs-type">int64_t</span> qty;
+    std::<span class="hljs-type">uint32_t</span> id;
+    std::<span class="hljs-type">uint32_t</span> cold_index;  <span class="hljs-comment">// where the rest lives</span>
+    std::<span class="hljs-type">uint8_t</span> side, flags;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">OrderCold</span> {            <span class="hljs-comment">// touched on fills, cancels and reports only</span>
+    std::string client_ref;
+    std::chrono::system_clock::time_point created;
+    std::array&lt;<span class="hljs-type">char</span>, 64&gt; notes;
+};
+std::vector&lt;OrderHot&gt; hot;    <span class="hljs-comment">// the loop streams through this</span>
+std::vector&lt;OrderCold&gt; cold;  <span class="hljs-comment">// indexed by cold_index</span></code></pre>
+<p>Profile first: the split only pays off when the hot loop is memory bound and the cold fields are a large share of the object.</p>
+</section>
+
+<section id="ch17-layout" data-roles="th"><div class="sec-head"><h2>Alignment, padding and member order</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Every type has an alignment (a power of two) and objects must start at a multiple of it. The compiler lays out members at increasing addresses in declaration order (required by the standard; before C++23 only among members with the same access control), inserts padding before any member that would be misaligned, and pads the end so that <code>sizeof</code> is a multiple of the struct's alignment, which keeps every element of an array aligned.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="struct A with char, int, char takes 12 bytes because of 6 padding bytes; reordered as int, char, char it takes 8 bytes">
+<text x="20" y="24" class="t-bold t-mono">struct A { char a; int b; char c; };   sizeof 12, alignof 4</text>
+<g>
+<rect x="20" y="38" width="48" height="36" class="d-key"/><text x="44" y="61" text-anchor="middle" class="t-small t-mono">a</text>
+<rect x="68" y="38" width="48" height="36" class="d-trap d-dash"/><rect x="116" y="38" width="48" height="36" class="d-trap d-dash"/><rect x="164" y="38" width="48" height="36" class="d-trap d-dash"/>
+<rect x="212" y="38" width="192" height="36" class="d-acc"/><text x="308" y="61" text-anchor="middle" class="t-small t-mono">b (4 bytes, offset 4)</text>
+<rect x="404" y="38" width="48" height="36" class="d-key"/><text x="428" y="61" text-anchor="middle" class="t-small t-mono">c</text>
+<rect x="452" y="38" width="48" height="36" class="d-trap d-dash"/><rect x="500" y="38" width="48" height="36" class="d-trap d-dash"/><rect x="548" y="38" width="48" height="36" class="d-trap d-dash"/>
+</g>
+<text x="140" y="94" text-anchor="middle" class="t-small t-trap">3 bytes padding</text>
+<text x="500" y="94" text-anchor="middle" class="t-small t-trap">3 bytes tail padding</text>
+<text x="20" y="138" class="t-bold t-mono">struct B { int b; char a; char c; };   sizeof 8, alignof 4</text>
+<g>
+<rect x="20" y="152" width="192" height="36" class="d-acc"/><text x="116" y="175" text-anchor="middle" class="t-small t-mono">b (offset 0)</text>
+<rect x="212" y="152" width="48" height="36" class="d-key"/><text x="236" y="175" text-anchor="middle" class="t-small t-mono">a</text>
+<rect x="260" y="152" width="48" height="36" class="d-key"/><text x="284" y="175" text-anchor="middle" class="t-small t-mono">c</text>
+<rect x="308" y="152" width="48" height="36" class="d-trap d-dash"/><rect x="356" y="152" width="48" height="36" class="d-trap d-dash"/>
+</g>
+<text x="332" y="208" text-anchor="middle" class="t-small t-trap">2 bytes tail padding</text>
+<text x="440" y="175" class="t-small">same data, one third smaller:</text>
+<text x="440" y="192" class="t-small">8 objects per 64-byte line instead of 5</text>
+</svg></div><figcaption><b>Padding comes from order.</b> Each square is one byte. The <code>int</code> must start at a multiple of 4, so a <code>char</code> in front of it costs 3 bytes, and the tail is padded to keep arrays aligned. Sorting members by decreasing alignment removes most padding.</figcaption></figure>
+<p>The practical rule: <b>declare members in decreasing order of alignment</b> (8-byte types, then 4, 2, 1). It is optimal for the common case where all sizes are multiples of their alignment, and it is what the coding drill below automates. Group fields that are used together, too: reordering for size should not split the hot fields across two lines.</p>
+<h3 id="ch17-alignas">alignas, over-aligned types and packing</h3>
+<ul>
+<li><code>alignas(N)</code> on a type raises its alignment and therefore rounds its size up to a multiple of <code>N</code>. <code>struct alignas(64) Slot { long v; };</code> is 64 bytes, so an array of <code>Slot</code> puts each element on its own line.</li>
+<li><code>alignas(N)</code> on a variable aligns that variable only. <code>alignas(64) long counters[4];</code> aligns the start of the array; the four elements are still 8 bytes apart (a reading drill below).</li>
+<li>Since C++17, <code>new</code> honours over-alignment (it calls <code>operator new(size_t, std::align_val_t)</code>), and so does <code>std::allocator</code>, so <code>std::vector&lt;Slot&gt;</code> works. Before C++17, over-aligned heap objects were silently under-aligned.</li>
+<li><code>[[no_unique_address]]</code> (C++20) lets an empty member, such as a stateless allocator, comparator or deleter, take no space. GCC and Clang honour it; MSVC needs <code>[[msvc::no_unique_address]]</code>.</li>
+<li><code>#pragma pack(1)</code> or <code>__attribute__((packed))</code> removes padding to match a wire or file format. The members are then misaligned: accessing them by name is fine (the compiler emits safe loads), but taking their address and using the pointer is undefined behaviour, can be slow, and on some architectures traps. Atomics on packed members do not work. Prefer copying wire bytes with <code>std::memcpy</code> into a normal struct.</li>
+</ul>
+</section>
+
+<section id="ch17-false-sharing" data-roles="th"><div class="sec-head"><h2>False sharing</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Coherence is tracked per cache line, not per variable. To write to a line, a core must hold it exclusively (the M state in MESI-style protocols), which invalidates every other core's copy. If two threads write to two <i>different</i> variables that happen to share a line, each write steals the line from the other core. Nothing is logically shared, but the hardware behaves as if everything were.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 330" role="img" aria-label="Two cores write different counters on the same cache line, so the line bounces between their caches; padding puts each counter on its own line">
+<defs><marker id="ch17-c19a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="24" class="t-bold">Shared line: counters A and B are 8 bytes apart</text>
+<rect x="20" y="40" width="200" height="110" class="d-box"/>
+<text x="120" y="60" text-anchor="middle" class="t-small t-bold">core 0: ++A</text>
+<rect x="40" y="76" width="160" height="30" class="d-trap"/>
+<text x="80" y="96" text-anchor="middle" class="t-small t-mono">A</text><text x="120" y="96" text-anchor="middle" class="t-small t-mono t-muted">B</text><text x="170" y="96" text-anchor="middle" class="t-small t-mono t-muted">...</text>
+<text x="120" y="132" text-anchor="middle" class="t-small t-trap">line: M, then I</text>
+<rect x="420" y="40" width="200" height="110" class="d-box"/>
+<text x="520" y="60" text-anchor="middle" class="t-small t-bold">core 1: ++B</text>
+<rect x="440" y="76" width="160" height="30" class="d-trap"/>
+<text x="480" y="96" text-anchor="middle" class="t-small t-mono t-muted">A</text><text x="520" y="96" text-anchor="middle" class="t-small t-mono">B</text><text x="570" y="96" text-anchor="middle" class="t-small t-mono t-muted">...</text>
+<text x="520" y="132" text-anchor="middle" class="t-small t-trap">line: I, then M</text>
+<path d="M224,78 C300,52 340,52 416,78" class="d-line-trap" fill="none" marker-end="url(#ch19-c19a)"/>
+<path d="M416,112 C340,138 300,138 224,112" class="d-line-trap" fill="none" marker-end="url(#ch19-c19a)"/>
+<text x="320" y="44" text-anchor="middle" class="t-small t-trap">invalidate, transfer</text>
+<text x="320" y="160" text-anchor="middle" class="t-small t-trap">every write: tens of ns</text>
+<text x="640" y="90" class="t-small">ping-pong</text>
+<text x="640" y="106" class="t-small">on every</text>
+<text x="640" y="122" class="t-small">increment</text>
+<text x="20" y="204" class="t-bold">Padded: alignas(128) puts each counter on its own line</text>
+<rect x="20" y="220" width="200" height="90" class="d-box"/>
+<text x="120" y="240" text-anchor="middle" class="t-small t-bold">core 0: ++A</text>
+<rect x="40" y="254" width="160" height="30" class="d-key"/><text x="80" y="274" text-anchor="middle" class="t-small t-mono">A</text><text x="150" y="274" text-anchor="middle" class="t-small t-mono t-muted">padding</text>
+<text x="120" y="302" text-anchor="middle" class="t-small t-key">stays M: L1 hits</text>
+<rect x="420" y="220" width="200" height="90" class="d-box"/>
+<text x="520" y="240" text-anchor="middle" class="t-small t-bold">core 1: ++B</text>
+<rect x="440" y="254" width="160" height="30" class="d-key"/><text x="480" y="274" text-anchor="middle" class="t-small t-mono">B</text><text x="550" y="274" text-anchor="middle" class="t-small t-mono t-muted">padding</text>
+<text x="520" y="302" text-anchor="middle" class="t-small t-key">stays M: L1 hits</text>
+<text x="320" y="270" text-anchor="middle" class="t-small t-muted">no traffic</text>
+</svg></div><figcaption><b>Coherence works on lines.</b> Two threads writing neighbouring variables force the line to move between cores on every write. Padding each hot, per-thread variable to its own line removes the traffic; reads alone never cause it, because many cores can hold a line in the shared state.</figcaption></figure>
+<pre data-run="ch19-false-sharing" data-mode="ub" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Packed</span> {
+    std::atomic&lt;<span class="hljs-type">long</span>&gt; value{<span class="hljs-number">0</span>};                 <span class="hljs-comment">// 8 bytes: four counters share one line</span>
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">alignas</span>(<span class="hljs-number">128</span>) Padded {                    <span class="hljs-comment">// 128: the line size macOS reports on Apple silicon</span>
+    std::atomic&lt;<span class="hljs-type">long</span>&gt; value{<span class="hljs-number">0</span>};
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">Counter</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">double</span> <span class="hljs-title">run_ms</span><span class="hljs-params">(<span class="hljs-type">int</span> threads, <span class="hljs-type">long</span> iters)</span> </span>{
+    <span class="hljs-function">std::vector&lt;Counter&gt; <span class="hljs-title">counters</span><span class="hljs-params">(threads)</span></span>;
+    <span class="hljs-keyword">auto</span> t0 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+    std::vector&lt;std::thread&gt; pool;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; threads; ++t)
+        pool.<span class="hljs-built_in">emplace_back</span>([&amp;counters, t, iters] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">long</span> i = <span class="hljs-number">0</span>; i &lt; iters; ++i) counters[t].value.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; th : pool) th.<span class="hljs-built_in">join</span>();
+    <span class="hljs-keyword">auto</span> t1 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+    <span class="hljs-type">long</span> total = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; c : counters) total += c.value.<span class="hljs-built_in">load</span>();
+    <span class="hljs-keyword">if</span> (total != threads * iters) std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;lost updates?&quot;</span>);
+    <span class="hljs-keyword">return</span> std::chrono::<span class="hljs-built_in">duration</span>&lt;<span class="hljs-type">double</span>, std::milli&gt;(t1 - t0).<span class="hljs-built_in">count</span>();
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> threads = <span class="hljs-number">4</span>;
+    <span class="hljs-type">const</span> <span class="hljs-type">long</span> iters = <span class="hljs-number">2&#x27;000&#x27;000</span>;
+    <span class="hljs-type">double</span> best_packed = <span class="hljs-number">1e30</span>, best_padded = <span class="hljs-number">1e30</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> r = <span class="hljs-number">0</span>; r &lt; <span class="hljs-number">3</span>; ++r) {
+        best_packed = std::<span class="hljs-built_in">min</span>(best_packed, <span class="hljs-built_in">run_ms</span>&lt;Packed&gt;(threads, iters));
+        best_padded = std::<span class="hljs-built_in">min</span>(best_padded, <span class="hljs-built_in">run_ms</span>&lt;Padded&gt;(threads, iters));
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sizeof Packed %zu, Padded %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Packed), <span class="hljs-built_in">sizeof</span>(Padded));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;adjacent counters %.1f ms, padded counters %.1f ms, ratio %.1fx\n&quot;</span>,
+                best_packed, best_padded, best_packed / best_padded);
+}</code></pre>
+<p>Measured on the M1 with 4 threads: adjacent counters took about 155 ms, padded counters about 7 ms, a ratio of about 22 with both compilers. The program is race free (each thread owns one atomic), so it also runs clean under ThreadSanitizer; only the timings are unchecked.</p>
+<p>Where false sharing hides: arrays of per-thread counters or statistics, a lock and the data it protects in the same line (waiters spinning on the lock slow down the owner), the head and tail indices of a single-producer single-consumer queue, and small heap objects allocated back to back for different threads. The fixes are padding and alignment, per-thread accumulation in locals with one write at the end, and per-thread arenas.</p>
+<div class="callout tip"><p class="callout-title">Tip</p><p>On Linux, <code>perf c2c record</code> followed by <code>perf c2c report</code> finds false sharing directly: it lists cache lines with many HITM events (loads that hit a line modified in another core's cache) and the offsets inside the line that each thread touches.</p></div>
+</section>
+
+<section id="ch17-prefetch" data-roles="th"><div class="sec-head"><h2>Prefetching and blocking</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Hardware prefetchers watch the stream of misses and fetch ahead. Every modern core has a next-line prefetcher and a stride prefetcher that recognises constant strides (forwards or backwards, per instruction), and Intel cores also fetch the adjacent line of each 128-byte pair. They are why sequential and strided scans run near memory bandwidth. They cannot predict pointer chasing or random indices.</p>
+<p><code>__builtin_prefetch(addr, rw, locality)</code> (GCC and Clang) emits a prefetch instruction: a hint to start loading a line that you will need soon. It helps only when you know a future address well in advance, the access is not predictable by hardware, and the core is not already overlapping those misses. The benchmark below gathers from random indices, with and without a prefetch 16 iterations ahead.</p>
+<pre data-run="ch19-prefetch" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;numeric&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;random&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> n = <span class="hljs-number">1u</span> &lt;&lt; <span class="hljs-number">24</span>;                  <span class="hljs-comment">// 16M ints (64 MB) of data</span>
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">data</span><span class="hljs-params">(n, <span class="hljs-number">1</span>)</span></span>;
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">unsigned</span>&gt; <span class="hljs-title">seq</span><span class="hljs-params">(n)</span>, <span class="hljs-title">rnd</span><span class="hljs-params">(n)</span></span>;
+    std::<span class="hljs-built_in">iota</span>(seq.<span class="hljs-built_in">begin</span>(), seq.<span class="hljs-built_in">end</span>(), <span class="hljs-number">0u</span>);
+    rnd = seq;
+    std::<span class="hljs-built_in">shuffle</span>(rnd.<span class="hljs-built_in">begin</span>(), rnd.<span class="hljs-built_in">end</span>(), std::mt19937{<span class="hljs-number">7</span>});
+
+    <span class="hljs-keyword">auto</span> gather = [&amp;](<span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">unsigned</span>&gt;&amp; idx, <span class="hljs-type">int</span> distance) {
+        <span class="hljs-type">long</span> <span class="hljs-type">long</span> s = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">auto</span> t0 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) {
+            <span class="hljs-keyword">if</span> (distance &amp;&amp; i + distance &lt; n) __builtin_prefetch(&amp;data[idx[i + distance]]);
+            s += data[idx[i]];
+        }
+        <span class="hljs-keyword">auto</span> t1 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+        <span class="hljs-keyword">return</span> std::pair{std::chrono::<span class="hljs-built_in">duration</span>&lt;<span class="hljs-type">double</span>, std::milli&gt;(t1 - t0).<span class="hljs-built_in">count</span>(), s};
+    };
+    <span class="hljs-keyword">auto</span> [ts, s1] = <span class="hljs-built_in">gather</span>(seq, <span class="hljs-number">0</span>);
+    <span class="hljs-keyword">auto</span> [tr, s2] = <span class="hljs-built_in">gather</span>(rnd, <span class="hljs-number">0</span>);
+    <span class="hljs-keyword">auto</span> [tp, s3] = <span class="hljs-built_in">gather</span>(rnd, <span class="hljs-number">16</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sequential %.0f ms, random %.0f ms, random + prefetch %.0f ms\n&quot;</span>, ts, tr, tp);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;random / sequential %.1fx, prefetch speedup %.1fx [%lld %lld %lld]\n&quot;</span>, tr / ts, tr / tp, s1, s2, s3);
+}</code></pre>
+<p>Measured on the M1: the random gather was 4.6 to 6.7 times slower than the sequential one, and the software prefetch gave <b>no gain</b> (0.9 to 1.0 times, so slightly worse). The loads in this loop are independent, so the out-of-order core already has many misses in flight, and the prefetch only adds instructions. Software prefetching pays off in loops with long dependency chains per element, such as hash-table probes or tree descents processed in batches. Measure every prefetch you add; a prefetch distance that is wrong for one machine is often wrong for the next.</p>
+<h3 id="ch17-blocking">Blocking (tiling)</h3>
+<p>When a loop nest touches one array along rows and another along columns, as in a matrix transpose or a naive matrix multiply, one of them is always strided. Blocking processes the matrix in tiles small enough that every line of the tile stays in L1 until it is fully used. The coding drill implements a blocked transpose. Timings on the M1 (milliseconds, best of 3, GCC <code>-O1</code>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>n × n floats</th><th>naive</th><th>blocked, tile 16</th><th>blocked, tile 64</th><th>observation</th></tr></thead>
+<tbody>
+<tr><td>2000</td><td>3.2</td><td>3.7</td><td>3.7</td><td>no gain: the stride prefetcher handles the column writes</td></tr>
+<tr><td>2048</td><td>32</td><td>4.7</td><td>22</td><td>power-of-two rows collide in the same cache sets; small tiles avoid it</td></tr>
+<tr><td>4000</td><td>102</td><td>20</td><td>16.5</td><td>about 6 times faster with blocking</td></tr>
+<tr><td>4096</td><td>167 to 200</td><td>124</td><td>121</td><td>set conflicts and TLB misses dominate</td></tr>
+</tbody></table></div>
+<p>The lesson is the interview answer: blocking is a large win when the working set exceeds the cache, but power-of-two strides can cause conflict misses that tiling alone does not cure. Padding each row by one line (allocate <code>n + 16</code> floats per row) is the classic fix. And always measure on the target machine: the 2000 × 2000 case shows that a strong prefetcher can make the naive version good enough.</p>
+</section>
+
+<section id="ch17-alloc-patterns" data-roles="th"><div class="sec-head"><h2>Allocation patterns that keep data together</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Layout inside an object is half the story. The other half is where the allocator puts objects relative to each other. A general-purpose <code>malloc</code> serves requests of the same size class from the same pages in roughly allocation order, but after a while of mixed allocations and frees, related objects end up scattered (<a href="#ch08">Ch 8</a>).</p>
+<ul>
+<li><b>Contiguous containers first.</b> <code>std::vector</code>, <code>std::array</code>, <code>std::deque</code> (contiguous blocks), and sorted vectors in place of <code>std::set</code>/<code>std::map</code> when reads dominate (<code>std::flat_map</code> and <code>std::flat_set</code> in C++23, <code>boost::container::flat_map</code> before that).</li>
+<li><b><code>reserve</code></b> when the size is known or bounded. Besides avoiding reallocation copies, it keeps the final buffer in one place instead of leaving freed buffers of 1, 2, 4 ... elements scattered in the heap.</li>
+<li><b>Open-addressing hash tables.</b> <code>std::unordered_map</code> must keep references stable and expose buckets, so every mainstream implementation uses a bucket array of pointers to separately allocated nodes: a lookup is at least two dependent misses. <code>absl::flat_hash_map</code>, <code>boost::unordered_flat_map</code> and similar tables store entries in one array and probe neighbouring slots, so a lookup usually touches one or two lines. The cost: references are invalidated on rehash.</li>
+<li><b>Pools and arenas</b> (<a href="#ch13">Ch 13</a>, <a href="#ch15">Ch 15</a>). Allocate the nodes of one tree, graph or message from one arena and they sit next to each other in allocation order, which is usually traversal order. Freeing is one operation, and there is no per-node header.</li>
+<li><b>Indices instead of pointers.</b> Store nodes in a <code>std::vector</code> and link them with 32-bit indices. Nodes are contiguous, links are half the size of pointers, the structure can be copied or serialised with <code>memcpy</code>, and reallocation does not invalidate links.</li>
+<li><b>Per-thread allocation.</b> Objects used by one thread should come from that thread's arena or cache, which also prevents false sharing between neighbouring small objects owned by different threads.</li>
+</ul>
+<h3 id="ch17-tlb">TLB and huge pages</h3>
+<p>Every access also needs a virtual-to-physical translation. The TLB caches translations: typically about 64 entries in the first level and 1 to 3 thousand in the second. With 4 KB pages, 1,536 entries cover only 6 MB, so a random walk over a 1 GB working set misses the TLB on nearly every access and pays a page walk on top of the cache miss. Huge pages (2 MB or 1 GB on x86-64) make each entry cover 512 or 262,144 times more memory.</p>
+<ul>
+<li>Linux: transparent huge pages (<code>/sys/kernel/mm/transparent_hugepage/enabled</code> set to <code>always</code> or <code>madvise</code>; opt in per region with <code>madvise(addr, len, MADV_HUGEPAGE)</code>), or explicit huge pages with <code>mmap(MAP_HUGETLB)</code> or hugetlbfs, reserved in advance. Low-latency systems often pre-fault and lock huge pages at startup to avoid page faults later.</li>
+<li>Costs: THP can increase memory use (a 2 MB page for a few KB of data) and background compaction can cause latency spikes, which is why some databases recommend <code>madvise</code> mode rather than <code>always</code>.</li>
+<li>Apple silicon uses 16 KB base pages (<code>hw.pagesize</code> is 16384 on this M1), which quadruples TLB reach compared with 4 KB pages. Linux on arm64 can be built with 4, 16 or 64 KB pages.</li>
+</ul>
+</section>
+
+<section id="ch17-measure" data-roles="th"><div class="sec-head"><h2>How to measure cache behaviour</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Never optimise layout on intuition alone. Measure the miss rates, change one thing, and measure again.</p>
+<pre><code class="language-bash hljs"><span class="hljs-comment"># Linux: hardware counters for the whole run</span>
+perf <span class="hljs-built_in">stat</span> -e cycles,instructions,cache-references,cache-misses,L1-dcache-load-misses,LLC-load-misses,dTLB-load-misses ./app
+
+<span class="hljs-comment"># where the misses happen, per function and per source line</span>
+perf record -e cache-misses -g ./app
+perf report
+
+<span class="hljs-comment"># false sharing: lines with HITM events and the offsets each thread touches</span>
+perf c2c record ./app
+perf c2c report
+
+<span class="hljs-comment"># simulated caches, deterministic and exact per line (slow: 20 to 100 times)</span>
+valgrind --tool=cachegrind --cache-sim=<span class="hljs-built_in">yes</span> ./app
+cg_annotate cachegrind.out.&lt;pid&gt;
+
+<span class="hljs-comment"># cache geometry</span>
+lscpu --caches
+getconf LEVEL1_DCACHE_LINESIZE
+<span class="hljs-built_in">cat</span> /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size
+
+<span class="hljs-comment"># macOS</span>
+sysctl hw.cachelinesize hw.l1dcachesize hw.l2cachesize hw.pagesize</code></pre>
+<p>Read <code>perf stat</code> with care. Instructions per cycle (IPC) below about 1 on a modern core usually means the program is stalled on memory. The generic <code>cache-misses</code> event usually means last-level cache misses, which is what costs DRAM time. Cachegrind simulates a simple cache model rather than your real CPU, and since Valgrind 3.21 (2023) its cache simulation is off unless you pass <code>--cache-sim=yes</code>; it is still the best tool for exact, repeatable per-line counts.</p>
+<p>On macOS there is no <code>perf</code>, and Valgrind does not support Apple silicon. Use Instruments: the <b>CPU Counters</b> template records hardware events such as L1D and L2 misses per function, and the Time Profiler finds hot loops. The stock template records little until you choose the events, so configure them in Instruments, save the result as your own template, and record from the command line with <code>xcrun xctrace record --template 'My Counters' --launch -- ./app</code>. Combine counters with micro-benchmarks like the ones in this chapter, run several times and on a quiet machine, and always report the machine and compiler next to the numbers.</p>
+</section>
+
+<section id="ch17-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Give rough latencies for an L1 hit, an L2 hit, an L3 hit and a DRAM access, and explain why the ratio matters more than the exact values.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> L1 about 1 ns (3 to 5 cycles), L2 about 3 to 5 ns, L3 about 10 to 20 ns, DRAM about 60 to 120 ns. On the M1 used here, a pointer chase measured about 2 ns, 6 to 11 ns, and about 115 ns for the L1, L2 and DRAM ranges.</p>
+    <p><b>Why.</b> Each level is roughly 3 to 10 times slower than the one above, and DRAM is roughly 100 times slower than L1, on every machine of the last two decades. A DRAM miss costs as much as a few hundred simple instructions, so an algorithm that does twice the arithmetic but misses half as often usually wins. Quoting a single exact number is a weak answer, because latencies differ by generation, clock and load; quoting the ladder and the ratios is the strong one.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is a cache line, how big is it, and what happens when you read a single byte from memory that is not cached?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A cache line is the aligned block that caches move and track as a unit: 64 bytes on x86 and most Arm cores, 128 bytes on Apple silicon (<code>sysctl hw.cachelinesize</code> prints 128 on the M1). Reading one byte fetches the whole line containing it into L1 (and usually the levels below), so the next 63 bytes are free to read.</p>
+    <p><b>Why.</b> DRAM delivers data in bursts, and tags cost silicon, so tracking larger blocks is cheaper per byte. The consequences: a value that straddles two lines costs two fetches, an access pattern that uses 4 bytes per line wastes 94 percent of the bandwidth, and coherence (and therefore false sharing) operates on whole lines. The common wrong answer is that the cache loads "the variable".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>You need to keep a sequence sorted while inserting 100,000 random values. A colleague picks <code>std::list</code> because "insertion is O(1)". Is that a good choice?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. <code>std::vector</code> with <code>lower_bound</code> and <code>insert</code> is much faster in practice, even though the insert shifts O(n) elements.</p>
+    <p><b>Why.</b> The list's O(1) insertion assumes you already have the position. Finding it is an O(n) walk of dependent loads, each likely a cache miss once the nodes are scattered (the scattered list in this chapter was about 200 times slower to traverse than a vector on the M1). The vector finds the position by binary search in O(log n) and shifts the tail with a <code>memmove</code> at memory bandwidth, which the prefetcher handles perfectly. This is Stroustrup's well-known "vector vs list" demonstration. Lists still win when you hold iterators and splice, or need iterator stability, but rarely for search-then-insert.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A colleague says: "Linked lists are only slow because the nodes are scattered. Allocate them from an arena and a list traversal is as fast as a vector." Is that right?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Only partly. An arena (or a freshly built list) puts nodes in allocation order, which removes the random misses, but the traversal is still a chain of dependent loads over fat nodes. In this chapter's benchmark the list in allocation order was still about 3 times slower than the vector, and the gap returns as soon as inserts, splices or a sort make list order differ from memory order (about 200 times after a sort).</p>
+    <p><b>Why.</b> Three costs remain. Each step must load <code>next</code> before it knows the next address, so the core cannot run ahead and the loop cannot be vectorised. A <code>std::list&lt;int&gt;</code> node is 24 bytes for 4 bytes of payload, so the scan moves six times the data. And the arena only fixes the layout at creation: a list that is edited over time drifts back to random order. The common wrong answer is that locality is the whole story; the dependency chain and the per-node overhead are the rest. If the data is iterated far more often than it is spliced, a vector (or indices into one) is still the better structure.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>To avoid false sharing, a per-thread counter type is declared <code>struct alignas(64) Counter { std::atomic&lt;long&gt; v; };</code>. Is that enough on every machine?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Not everywhere. It is enough on most x86 and Arm cores with 64-byte lines, but Apple silicon uses 128-byte lines, so two 64-byte counters can still share one line there. Intel's L2 spatial prefetcher also pulls 64-byte lines in 128-byte pairs, which causes milder interference between neighbours. 128 is the safer portable choice.</p>
+    <p><b>Why.</b> Correctness also needs two other things that this declaration does get right: the alignment is on the <i>type</i>, so <code>sizeof(Counter)</code> becomes 64 and array elements are 64 bytes apart (with <code>alignas</code> on an array variable they would not be), and since C++17 <code>new</code> and <code>std::vector</code> honour the over-alignment. <code>std::hardware_destructive_interference_size</code> is 256 on arm64 builds and 64 on x86-64 builds with GCC and Clang, which shows that the "right" value depends on the target.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Eight threads read the same configuration struct in a tight loop, and nobody writes it. Is there false sharing, or any coherence traffic?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. Every core can hold a copy of the line in the Shared state at the same time, and reads hit in each core's own cache after the first miss.</p>
+    <p><b>Why.</b> False sharing needs at least one writer: a write requires exclusive ownership, which invalidates the other copies. The trap is a read-mostly struct that sits on the same line as a frequently written field (a hit counter, a lock, a sequence number); then every write invalidates all the readers' copies. Keep read-mostly data and written data on separate lines. Read sharing is how lock-free readers in RCU and seqlocks stay fast.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why do some engineers avoid <code>std::hardware_destructive_interference_size</code> in public headers, even though it is standard C++17?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Because it is a compile-time constant chosen by the compiler for a target, and anything that uses it in a layout bakes that value into the ABI. Two translation units, or a library and its user, compiled with different flags or compiler versions can disagree on <code>sizeof</code> of the same struct.</p>
+    <p><b>Why.</b> GCC warns about this with <code>-Winterference-size</code> and lets you fix the value with <code>--param destructive-interference-size=N</code>. The value also need not match the machine at run time: one arm64 binary runs on cores with 64-byte and 128-byte lines, and GCC and Clang both choose a conservative 256 for arm64. Many codebases define their own constant (64 or 128) for that reason. The constant is still fine inside a single program built in one go.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is structure of arrays always faster than array of structures?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. SoA wins for loops that touch a few fields of many objects (it was 2.4 to 3.1 times faster for <code>x += vx</code> in this chapter); AoS wins when code accesses whole objects one at a time, especially at random.</p>
+    <p><b>Why.</b> Fetching all fields of entity <code>i</code> from an SoA layout costs one line per field (eight lines for eight fields), against one or two lines for an AoS object. SoA also makes insertion and deletion touch many arrays, and it complicates passing "an object" around. The usual compromises are hot/cold splitting and AoSoA (small SoA blocks inside an array), which many game engines and SIMD libraries use. The right layout follows the dominant access pattern, which you find by profiling.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A teammate adds <code>#pragma pack(1)</code> to all structs "to make them smaller and more cache friendly". What can go wrong?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Members become misaligned. Taking a member's address and using the pointer is undefined behaviour (UBSan reports "misaligned address"), atomics on packed members are not atomic or not allowed, some architectures trap or split the access, and the ABI of every struct changes, so it breaks interoperation with code compiled without the pragma.</p>
+    <p><b>Why.</b> Accessing a packed member by name is safe, because the compiler knows it is packed and emits byte-wise or unaligned loads. Once you pass <code>&amp;s.field</code> as an ordinary <code>T*</code>, that knowledge is lost. Reordering members by decreasing alignment gets almost all of the size benefit with none of the risk. Packing belongs only on structs that mirror an external byte format, and even there <code>std::memcpy</code> into a normal struct is cleaner.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why is <code>std::unordered_map</code> often several times slower than <code>absl::flat_hash_map</code> or <code>boost::unordered_flat_map</code>, when both are O(1) on average?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The standard's interface forces a node-based design: references to elements must stay valid across rehashing, and the bucket API (<code>bucket</code>, <code>begin(n)</code>, <code>local_iterator</code>) must be supported. So every mainstream implementation allocates each element in its own node and chains nodes from a bucket array, and a lookup costs at least two dependent cache misses.</p>
+    <p><b>Why.</b> Open-addressing tables store elements (or small metadata bytes plus elements) in one contiguous array and probe neighbouring slots, so a lookup usually touches one or two lines, and SIMD can check 16 metadata bytes at once (Swiss tables). The price is that a rehash moves elements, invalidating references and pointers. The common wrong answer is "a better hash function"; the hash is rarely the bottleneck.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Explain spatial and temporal locality with one example of code that has each, and one that has neither.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Spatial: a sequential scan of a <code>std::vector</code> uses every byte of each fetched line. Temporal: a blocked matrix multiply reuses each tile many times while it is in L1. Neither: following random pointers through a large linked structure, where each node is used once and its neighbours are unrelated.</p>
+    <p><b>Why.</b> Caches bet on both kinds of locality: they fetch whole lines (spatial) and keep recently used lines (temporal). Code that defeats both pays the full memory latency on almost every access. Improving locality is usually about layout (what is next to what) and loop order (when data is reused), not about doing less work.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is hot/cold splitting, and when is it worth doing?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Moving the fields that hot loops use into a compact struct and the rarely used fields into a separate struct (reached by index or pointer), so each cache line carries more useful data in the hot path.</p>
+    <p><b>Why.</b> If an order object is 200 bytes but the matching loop reads 24 of them, the loop streams 200 bytes per order through the cache. Splitting makes the hot struct small enough for several per line. It pays when the loop is memory bound (profile: low IPC, high cache-miss rate) and the cold part is large; it costs an extra indirection when cold data is needed, and more complex code. Compilers can do a version of this for code (hot/cold function splitting with profile-guided optimisation), but not for your data.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What do hardware prefetchers detect, and when does <code>__builtin_prefetch</code> actually help?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Hardware prefetchers detect sequential streams and constant strides (per load instruction, forwards and backwards), plus adjacent lines on some Intel cores. Software prefetch helps only when the future address is known early, is not predictable by the hardware, and the core is not already overlapping the misses, for example batched hash-table lookups or tree descents.</p>
+    <p><b>Why.</b> In this chapter's random gather benchmark on the M1, a prefetch 16 iterations ahead gave no speedup (0.9 to 1.0 times), because the loads were independent and the out-of-order core already had many in flight. Too short a distance arrives late, too long evicts useful data, and the right distance changes with the machine. Treat software prefetch as a measured, last-step optimisation.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the TLB, why can a program with a large random-access working set be slow even when cache misses look normal, and what do huge pages change?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The TLB caches virtual-to-physical translations. With 4 KB pages and about 1,500 second-level entries, it covers about 6 MB. Random access over gigabytes misses the TLB on most accesses, and each miss needs a page-table walk (up to four or five dependent loads) before the data access can even start. Huge pages (2 MB or 1 GB on x86-64) cover 512 or 262,144 times more per entry.</p>
+    <p><b>Why.</b> <code>perf stat -e dTLB-load-misses</code> shows the problem. On Linux, enable transparent huge pages for the region with <code>madvise(MADV_HUGEPAGE)</code> or use <code>MAP_HUGETLB</code>; low-latency systems often pre-fault huge pages at startup. Apple silicon's 16 KB base pages give four times the reach of 4 KB pages, one reason TLB effects show up later there.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How do you measure cache behaviour on Linux and on macOS?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Linux: <code>perf stat -e cycles,instructions,cache-misses,L1-dcache-load-misses,LLC-load-misses,dTLB-load-misses</code> for totals, <code>perf record</code>/<code>perf report</code> to attribute misses to code, <code>perf c2c</code> for false sharing, and <code>valgrind --tool=cachegrind --cache-sim=yes</code> for exact simulated per-line counts. macOS: Instruments with the CPU Counters template (or <code>xctrace</code>), since <code>perf</code> does not exist there and Valgrind does not run on Apple silicon.</p>
+    <p><b>Why.</b> Counters tell you whether a program is memory bound (low IPC, high LLC misses) before you change any layout. Micro-benchmarks need repeated runs, a quiet machine, a result that is used (so the optimiser cannot delete the loop), and the machine and compiler named next to every number, as in this chapter.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How do pools, arenas and <code>reserve</code> improve locality, beyond saving allocation time?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> They control <i>where</i> objects land. An arena places the nodes of one structure consecutively, in allocation order, which is usually the order they are traversed, with no headers in between. A per-type pool packs objects of one kind densely. <code>reserve</code> gives a vector its final buffer at once instead of leaving abandoned 1, 2, 4 ... element buffers scattered in the heap.</p>
+    <p><b>Why.</b> A general-purpose allocator interleaves objects from unrelated code paths and, after churn, hands out blocks wherever there is space, so logically adjacent nodes end up on different lines and pages. Grouping related data improves both cache and TLB hit rates. Index-based links (32-bit indices into a vector) push this further by halving link size. See <a href="#ch13">Ch 13</a> and <a href="#ch15">Ch 15</a> for the allocators themselves.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch17-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Same three members, two orders. What are the sizes?</p>
+<pre data-run="ch19-pad-order"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">A</span> { <span class="hljs-type">char</span> a; <span class="hljs-type">int</span> b; <span class="hljs-type">char</span> c; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">B</span> { <span class="hljs-type">int</span> b; <span class="hljs-type">char</span> a; <span class="hljs-type">char</span> c; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(A), <span class="hljs-built_in">sizeof</span>(B));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-built_in">alignof</span>(A), <span class="hljs-built_in">sizeof</span>(A[<span class="hljs-number">4</span>]));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-pad-order">12 8
+4 48</pre>
+    <p><b>Why.</b> In <code>A</code>, <code>b</code> must start at a multiple of 4, so 3 padding bytes follow <code>a</code>; <code>c</code> sits at offset 8, and 3 tail bytes round the size up to 12, a multiple of the struct's alignment (4). In <code>B</code>, <code>a</code> and <code>c</code> pack after <code>b</code> and only 2 tail bytes are needed: 8. An array of four <code>A</code> is exactly <code>4 × 12 = 48</code>: arrays never add padding between elements, which is why the tail padding exists. The common wrong answer is 6 for <code>A</code> (summing the members).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Does putting the <code>double</code> last save space?</p>
+<pre data-run="ch19-pad-double"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">C</span> { <span class="hljs-type">char</span> c; <span class="hljs-type">double</span> d; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">D</span> { <span class="hljs-type">double</span> d; <span class="hljs-type">char</span> c; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(C), <span class="hljs-built_in">sizeof</span>(D));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-built_in">offsetof</span>(C, d), <span class="hljs-built_in">offsetof</span>(D, c));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-pad-double">16 16
+8 8</pre>
+    <p><b>Why.</b> Both are 16. In <code>C</code> the padding is 7 bytes between <code>c</code> and <code>d</code> (so <code>offsetof(C, d)</code> is 8); in <code>D</code> the same 7 bytes move to the tail, after <code>c</code> at offset 8, because an array of <code>D</code> must keep every <code>d</code> 8-byte aligned. Reordering only helps when several small members can share the space that one of them would waste. People often expect <code>D</code> to be 9.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>How big are an empty struct, a member of it, a <code>[[no_unique_address]]</code> member of it, and an empty base?</p>
+<pre data-run="ch19-empty"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Empty</span> {};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">F</span> { <span class="hljs-type">int</span> x; Empty e; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">G</span> { <span class="hljs-type">int</span> x; [[no_unique_address]] Empty e; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">H</span> : Empty { <span class="hljs-type">int</span> x; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu %zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Empty), <span class="hljs-built_in">sizeof</span>(F), <span class="hljs-built_in">sizeof</span>(G), <span class="hljs-built_in">sizeof</span>(H));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-empty">1 8 4 4</pre>
+    <p><b>Why.</b> Every complete object has a size of at least 1 so that distinct objects have distinct addresses, so <code>sizeof(Empty)</code> is 1. As an ordinary member it occupies a byte, and alignment rounds <code>F</code> to 8. <code>[[no_unique_address]]</code> (C++20) lets the member overlap other members, so <code>G</code> is 4, and the empty base optimisation does the same for a base class in <code>H</code>. This is how <code>std::unique_ptr&lt;T&gt;</code> with the default deleter stays the size of a raw pointer (<a href="#ch10">Ch 10</a>). MSVC ignores the standard attribute and needs <code>[[msvc::no_unique_address]]</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What do <code>alignas</code> on a type and <code>alignas</code> on a member do to size and offsets?</p>
+<pre data-run="ch19-alignas"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">alignas</span>(<span class="hljs-number">16</span>) Vec3 { <span class="hljs-type">float</span> x, y, z; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Mixed</span> {
+    <span class="hljs-type">char</span> tag;
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">64</span>) <span class="hljs-type">int</span> counter;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Vec3), <span class="hljs-built_in">alignof</span>(Vec3), <span class="hljs-built_in">sizeof</span>(Vec3[<span class="hljs-number">3</span>]));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Mixed), <span class="hljs-built_in">offsetof</span>(Mixed, counter));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-alignas">16 16 48
+128 64</pre>
+    <p><b>Why.</b> <code>Vec3</code> holds 12 bytes of data, but <code>alignas(16)</code> makes its alignment 16 and rounds its size to 16 (useful for SIMD loads), so three of them take 48 bytes. In <code>Mixed</code>, the member <code>counter</code> must start at a multiple of 64, which puts it at offset 64 after 63 bytes of padding, and the struct's alignment becomes 64, so its size rounds up from 68 to 128. Aligning a member is an easy way to waste a line by accident.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Bit-fields: what are the sizes with GCC and Clang on a 64-bit target?</p>
+<pre data-run="ch19-bitfields"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Flags</span> { <span class="hljs-type">unsigned</span> a : <span class="hljs-number">3</span>; <span class="hljs-type">unsigned</span> b : <span class="hljs-number">5</span>; <span class="hljs-type">unsigned</span> c : <span class="hljs-number">24</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Wide</span>  { <span class="hljs-type">unsigned</span> a : <span class="hljs-number">3</span>; <span class="hljs-type">unsigned</span> <span class="hljs-type">long</span> <span class="hljs-type">long</span> b : <span class="hljs-number">40</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Split</span> { <span class="hljs-type">char</span> a; <span class="hljs-type">unsigned</span> b : <span class="hljs-number">4</span>; <span class="hljs-type">char</span> c; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Flags), <span class="hljs-built_in">sizeof</span>(Wide), <span class="hljs-built_in">sizeof</span>(Split));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-bitfields">4 8 4</pre>
+    <p><b>Why.</b> <code>Flags</code> packs 3 + 5 + 24 = 32 bits into one <code>unsigned</code>. <code>Wide</code> packs 43 bits into one 8-byte unit. In <code>Split</code>, the Itanium ABI used by GCC and Clang places the 4-bit field in the byte after <code>a</code>, because it still fits within an aligned <code>unsigned</code> unit, then <code>c</code>, and rounds the size to the 4-byte alignment of <code>unsigned</code>. Bit-field layout is implementation-defined: MSVC allocates a whole <code>unsigned</code> for <code>b</code> and gives <code>Split</code> a size of 12. Never use bit-fields to match an external format across compilers.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A market data quote, as written and after reordering. How many fit in a 64-byte line?</p>
+<pre data-run="ch19-quote"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Quote</span> {
+    <span class="hljs-type">bool</span> valid;
+    std::<span class="hljs-type">int64_t</span> price;
+    <span class="hljs-type">bool</span> is_bid;
+    std::<span class="hljs-type">int32_t</span> size;
+    <span class="hljs-type">bool</span> stale;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">QuoteSorted</span> {
+    std::<span class="hljs-type">int64_t</span> price;
+    std::<span class="hljs-type">int32_t</span> size;
+    <span class="hljs-type">bool</span> valid, is_bid, stale;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Quote), <span class="hljs-built_in">sizeof</span>(QuoteSorted));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;quotes per 64-byte line: %zu vs %zu\n&quot;</span>, <span class="hljs-number">64</span> / <span class="hljs-built_in">sizeof</span>(Quote), <span class="hljs-number">64</span> / <span class="hljs-built_in">sizeof</span>(QuoteSorted));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-quote">32 16
+quotes per 64-byte line: 2 vs 4</pre>
+    <p><b>Why.</b> In <code>Quote</code>, each <code>bool</code> in front of a wider member wastes up to 7 bytes: <code>valid</code> (1 + 7 padding), <code>price</code> (8), <code>is_bid</code> (1 + 3), <code>size</code> (4), <code>stale</code> (1 + 7 tail) = 32. Sorted by decreasing alignment the data is 8 + 4 + 3 = 15 bytes, rounded to 16. Halving the struct doubles the quotes per line and halves the memory traffic of a scan over a book, with no code change.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>This guide's harness targets arm64 (Apple M1). What does it print?</p>
+<pre data-run="ch19-poly-slot"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Poly</span> { <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Poly</span>() = <span class="hljs-keyword">default</span>; <span class="hljs-type">char</span> tag; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">alignas</span>(std::hardware_destructive_interference_size) Slot { <span class="hljs-type">long</span> value; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Poly));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, std::hardware_destructive_interference_size, std::hardware_constructive_interference_size);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Slot));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-poly-slot">16
+256 64
+256</pre>
+    <p><b>Why.</b> <code>Poly</code> has a vptr (8 bytes) because of the virtual destructor, then <code>tag</code>, rounded to 16 by the pointer's alignment (<a href="#ch02">Ch 2</a>). GCC 16 and Clang 22 both report 256 and 64 for the interference sizes on arm64, so <code>Slot</code> becomes 256 bytes for one <code>long</code>. Compiled for x86-64, the same program prints 64 and 64, and <code>Slot</code> is 64. That difference is the reason the constants are risky in headers: the layout depends on the target the header was compiled for.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This parser works on x86 and on the M1. Which tool objects, and why?</p>
+<pre data-run="ch19-packed" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-meta">#<span class="hljs-keyword">pragma</span> pack(push, 1)</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">WireHeader</span> {          <span class="hljs-comment">// matches a network message byte for byte</span>
+    std::<span class="hljs-type">uint8_t</span> type;
+    std::<span class="hljs-type">uint32_t</span> length;
+    std::<span class="hljs-type">uint16_t</span> flags;
+};
+<span class="hljs-meta">#<span class="hljs-keyword">pragma</span> pack(pop)</span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::<span class="hljs-type">uint32_t</span> <span class="hljs-title">read_u32</span><span class="hljs-params">(<span class="hljs-type">const</span> std::<span class="hljs-type">uint32_t</span>* p)</span> </span>{ <span class="hljs-keyword">return</span> *p; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    WireHeader h[<span class="hljs-number">2</span>] = {{<span class="hljs-number">1</span>, <span class="hljs-number">100</span>, <span class="hljs-number">0</span>}, {<span class="hljs-number">2</span>, <span class="hljs-number">200</span>, <span class="hljs-number">0</span>}};
+    std::<span class="hljs-type">uint32_t</span> total = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> WireHeader&amp; w : h) total += <span class="hljs-built_in">read_u32</span>(&amp;w.length);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sizeof %zu, total %u\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(WireHeader), total);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-packed">sizeof 7, total 300</pre>
+    <p><b>Answer.</b> <code>&amp;w.length</code> is a <code>uint32_t*</code> to an address that is not a multiple of 4 (byte offset 1 inside the first element). Dereferencing it in <code>read_u32</code> is undefined behaviour, and UBSan reports "load of misaligned address ... which requires 4 byte alignment".</p>
+    <p><b>Why.</b> Inside the packed struct the compiler knows the member is misaligned and uses safe loads. Through a plain <code>uint32_t*</code> it assumes 4-byte alignment and may use instructions that fault on misaligned addresses (some Arm and older architectures, or SIMD loads on x86). It "works" here only because both test CPUs tolerate misaligned scalar loads. Fix: read the field by value (<code>std::uint32_t len = w.length;</code>) or <code>std::memcpy</code> the bytes into a normal, aligned struct. GCC's <code>-Waddress-of-packed-member</code> catches some of these at compile time, but not this one.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The result is correct and there is no data race. Why does this scale badly when the loop body is real work?</p>
+<pre data-run="ch19-hits" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> threads = <span class="hljs-number">4</span>;
+    <span class="hljs-type">long</span> hits[threads] = {};                 <span class="hljs-comment">// one slot per thread: no data race</span>
+    std::vector&lt;std::thread&gt; pool;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; threads; ++t)
+        pool.<span class="hljs-built_in">emplace_back</span>([&amp;hits, t] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1&#x27;000&#x27;000</span>; ++i)
+                <span class="hljs-keyword">if</span> (i % <span class="hljs-number">3</span> == <span class="hljs-number">0</span>) ++hits[t];
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; th : pool) th.<span class="hljs-built_in">join</span>();
+    <span class="hljs-type">long</span> total = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">long</span> h : hits) total += h;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;total %ld\n&quot;</span>, total);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-hits">total 1333336</pre>
+    <p><b>Answer.</b> False sharing. The four <code>long</code>s occupy 32 contiguous bytes, one cache line, so every increment by one thread invalidates the line in the other three cores. With real work in the loop (function calls, memory accesses the compiler cannot see through), each <code>++hits[t]</code> is a store to that shared line.</p>
+    <p><b>Why.</b> At <code>-O1</code> and above the compiler may keep <code>hits[t]</code> in a register for this simple loop and store it once at the end, which hides the problem in a micro-test. Do that explicitly: accumulate into a local <code>long local = 0;</code> and write <code>hits[t] = local;</code> once, or give each slot its own line with <code>struct alignas(128) Slot { long v; };</code>. This chapter's benchmark measured about 22 times between packed and padded atomic counters on the M1.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The comment claims the counters are on separate cache lines. Are they?</p>
+<pre data-run="ch19-alignas-array" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-built_in">alignas</span>(<span class="hljs-number">64</span>) std::atomic&lt;<span class="hljs-type">long</span>&gt; counters[<span class="hljs-number">4</span>];   <span class="hljs-comment">// &quot;aligned to a cache line, so no false sharing&quot;</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::thread&gt; pool;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; <span class="hljs-number">4</span>; ++t)
+        pool.<span class="hljs-built_in">emplace_back</span>([t] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100&#x27;000</span>; ++i) counters[t].<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed); });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; th : pool) th.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sum %ld, distance between counters %td bytes\n&quot;</span>,
+                counters[<span class="hljs-number">0</span>] + counters[<span class="hljs-number">1</span>] + counters[<span class="hljs-number">2</span>] + counters[<span class="hljs-number">3</span>],
+                <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(&amp;counters[<span class="hljs-number">1</span>]) - <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(&amp;counters[<span class="hljs-number">0</span>]));
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-alignas-array">sum 400000, distance between counters 8 bytes</pre>
+    <p><b>Answer.</b> No. <code>alignas(64)</code> on an array variable aligns the array's first byte. The elements keep their natural size, 8 bytes, so all four counters share one line, exactly the false sharing the comment claims to prevent.</p>
+    <p><b>Fix.</b> Put the alignment on the element type, which also rounds its size: <code>struct alignas(128) Counter { std::atomic&lt;long&gt; v{0}; }; Counter counters[4];</code>. Then <code>&amp;counters[1] - &amp;counters[0]</code> is 128 bytes. Add a <code>static_assert(sizeof(Counter) == 128)</code> so the intent is checked. This is one of the most common false-sharing "fixes" that does nothing.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The answer is right. What makes it several times slower than it needs to be, and what is a second, smaller problem with the data structure?</p>
+<pre data-run="ch19-grid" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">long</span> <span class="hljs-type">long</span> <span class="hljs-title">sum_grid</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;std::vector&lt;<span class="hljs-type">int</span>&gt;&gt;&amp; g)</span> </span>{
+    <span class="hljs-type">long</span> <span class="hljs-type">long</span> s = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> col = <span class="hljs-number">0</span>; col &lt; g[<span class="hljs-number">0</span>].<span class="hljs-built_in">size</span>(); ++col)
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> row = <span class="hljs-number">0</span>; row &lt; g.<span class="hljs-built_in">size</span>(); ++row)
+            s += g[row][col];
+    <span class="hljs-keyword">return</span> s;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::vector&lt;<span class="hljs-type">int</span>&gt;&gt; <span class="hljs-built_in">grid</span>(<span class="hljs-number">2000</span>, std::<span class="hljs-built_in">vector</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">2000</span>, <span class="hljs-number">1</span>));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%lld\n&quot;</span>, <span class="hljs-built_in">sum_grid</span>(grid));
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch19-grid">4000000</pre>
+    <p><b>Answer.</b> The loops are in column-major order over row-major data: the inner loop jumps to a different row (a different heap block) on every iteration, using 4 bytes of each fetched line. Swap the loops so the inner loop walks along <code>g[row]</code>. The second problem is <code>vector&lt;vector&lt;int&gt;&gt;</code> itself: 2,000 separate allocations, an extra indirection per row, and no guarantee that rows are adjacent.</p>
+    <p><b>Why.</b> This chapter's row/column benchmark measured 5 to 9 times on the M1 for a 64 MB matrix. A single <code>std::vector&lt;int&gt;</code> of <code>rows * cols</code> elements indexed as <code>v[r * cols + c]</code> (or <code>std::mdspan</code> in C++23) is contiguous, has one allocation, and lets the compiler vectorise the row loop.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch17-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Convert an array-of-structures particle system to structure-of-arrays. Given <code>std::vector&lt;Particle&gt;</code> with position, velocity, mass and id, write a <code>ParticleSystem</code> class with one vector per field, a constructor from the AoS vector, an <code>integrate(dt)</code> that updates positions, <code>total_mass()</code>, and <code>get(i)</code> that reassembles one particle. Show that both layouts give identical results.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> One <code>std::vector</code> per field, all with the same length, filled in one pass with <code>reserve</code> first. Write the update as separate tight loops over two arrays each, so every loop streams through exactly the bytes it needs and the compiler can vectorise it. <code>total_mass</code> reads one array. <code>get(i)</code> shows the cost of SoA: one load per field from a different array.</p>
+<pre data-run="ch19-k-soa" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cmath&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Particle</span> {            <span class="hljs-comment">// AoS: what the code base had</span>
+    <span class="hljs-type">float</span> x, y, z;
+    <span class="hljs-type">float</span> vx, vy, vz;
+    <span class="hljs-type">float</span> mass;
+    <span class="hljs-type">int</span> id;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ParticleSystem</span> {       <span class="hljs-comment">// SoA: one array per field</span>
+<span class="hljs-keyword">public</span>:
+    std::vector&lt;<span class="hljs-type">float</span>&gt; x, y, z, vx, vy, vz, mass;
+    std::vector&lt;<span class="hljs-type">int</span>&gt; id;
+
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ParticleSystem</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;Particle&gt;&amp; in)</span> </span>{
+        <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> n = in.<span class="hljs-built_in">size</span>();
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>* v : {&amp;x, &amp;y, &amp;z, &amp;vx, &amp;vy, &amp;vz, &amp;mass}) v-&gt;<span class="hljs-built_in">reserve</span>(n);
+        id.<span class="hljs-built_in">reserve</span>(n);
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Particle&amp; p : in) {
+            x.<span class="hljs-built_in">push_back</span>(p.x); y.<span class="hljs-built_in">push_back</span>(p.y); z.<span class="hljs-built_in">push_back</span>(p.z);
+            vx.<span class="hljs-built_in">push_back</span>(p.vx); vy.<span class="hljs-built_in">push_back</span>(p.vy); vz.<span class="hljs-built_in">push_back</span>(p.vz);
+            mass.<span class="hljs-built_in">push_back</span>(p.mass); id.<span class="hljs-built_in">push_back</span>(p.id);
+        }
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> x.<span class="hljs-built_in">size</span>(); }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">integrate</span><span class="hljs-params">(<span class="hljs-type">float</span> dt)</span> </span>{                       <span class="hljs-comment">// reads 6 streams, writes 3: all sequential</span>
+        <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> n = <span class="hljs-built_in">size</span>();
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) x[i] += vx[i] * dt;
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) y[i] += vy[i] * dt;
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) z[i] += vz[i] * dt;
+    }
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">total_mass</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{                      <span class="hljs-comment">// touches only one array</span>
+        <span class="hljs-type">double</span> s = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">float</span> m : mass) s += m;
+        <span class="hljs-keyword">return</span> s;
+    }
+    <span class="hljs-function">Particle <span class="hljs-title">get</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> i)</span> <span class="hljs-type">const</span> </span>{              <span class="hljs-comment">// gathering one entity costs 8 loads</span>
+        <span class="hljs-keyword">return</span> {x[i], y[i], z[i], vx[i], vy[i], vz[i], mass[i], id[i]};
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">integrate_aos</span><span class="hljs-params">(std::vector&lt;Particle&gt;&amp; ps, <span class="hljs-type">float</span> dt)</span> </span>{
+    <span class="hljs-keyword">for</span> (Particle&amp; p : ps) { p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Particle&gt; aos;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i)
+        aos.<span class="hljs-built_in">push_back</span>({<span class="hljs-built_in">float</span>(i), <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">1.0f</span>, <span class="hljs-number">0.5f</span>, <span class="hljs-number">-0.25f</span>, <span class="hljs-number">1.0f</span> + <span class="hljs-built_in">float</span>(i % <span class="hljs-number">3</span>), i});
+    <span class="hljs-function">ParticleSystem <span class="hljs-title">soa</span><span class="hljs-params">(aos)</span></span>;
+
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> step = <span class="hljs-number">0</span>; step &lt; <span class="hljs-number">10</span>; ++step) { <span class="hljs-built_in">integrate_aos</span>(aos, <span class="hljs-number">0.1f</span>); soa.<span class="hljs-built_in">integrate</span>(<span class="hljs-number">0.1f</span>); }
+
+    <span class="hljs-type">bool</span> same = <span class="hljs-literal">true</span>;
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; aos.<span class="hljs-built_in">size</span>(); ++i) {
+        Particle s = soa.<span class="hljs-built_in">get</span>(i);
+        same = same &amp;&amp; s.x == aos[i].x &amp;&amp; s.y == aos[i].y &amp;&amp; s.z == aos[i].z &amp;&amp; s.id == aos[i].id;
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;same results: %s\n&quot;</span>, same ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;particle 3: (%.2f, %.2f, %.2f)\n&quot;</span>, soa.<span class="hljs-built_in">get</span>(<span class="hljs-number">3</span>).x, soa.<span class="hljs-built_in">get</span>(<span class="hljs-number">3</span>).y, soa.<span class="hljs-built_in">get</span>(<span class="hljs-number">3</span>).z);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;total mass %.0f\n&quot;</span>, soa.<span class="hljs-built_in">total_mass</span>());
+}</code></pre>
+<pre class="out" data-out="ch19-k-soa">same results: yes
+particle 3: (4.00, 0.50, -0.25)
+total mass 1999</pre>
+    <p><b>Complexity and pitfalls.</b> O(n) per step either way; the gain is bandwidth (only used bytes cross the memory bus) and SIMD. Pitfalls: letting the field vectors get out of sync in length (wrap them in one class and never expose <code>push_back</code> on a single field), erasing from the middle (every array must shift; use swap-with-last if order does not matter), and expecting SoA to help code that reads whole particles at random. Floating-point results match here because both versions perform the same operations in the same order.</p>
+    <p class="rating">Estimated rating: ~1200 · straightforward refactor whose value is in explaining the trade-off</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a layout calculator: given a list of fields with size and alignment, compute each field's offset, the padding and the struct's <code>sizeof</code> under the usual C/Itanium rules, then compute the order that minimises the size. Check your numbers against the compiler's <code>sizeof</code> for the real structs.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Walk the fields keeping a running offset: round the offset up to the field's alignment, place the field, add its size. The struct's alignment is the maximum field alignment, and the final size is the offset rounded up to it. For fundamental types (size a multiple of alignment), sorting by decreasing alignment gives the minimum size, and a stable sort keeps related fields together within each alignment class.</p>
+<pre data-run="ch19-k-layout"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Field</span> { <span class="hljs-type">const</span> <span class="hljs-type">char</span>* name; std::<span class="hljs-type">size_t</span> size, align; };
+
+<span class="hljs-comment">// The C/Itanium layout rule: each member goes at the next offset that is a multiple of</span>
+<span class="hljs-comment">// its alignment; the struct&#x27;s alignment is the largest member alignment, and its size</span>
+<span class="hljs-comment">// is rounded up to that so that arrays keep every element aligned.</span>
+<span class="hljs-function"><span class="hljs-type">static</span> std::<span class="hljs-type">size_t</span> <span class="hljs-title">layout_size</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;Field&gt;&amp; fs, <span class="hljs-type">bool</span> print)</span> </span>{
+    std::<span class="hljs-type">size_t</span> off = <span class="hljs-number">0</span>, max_align = <span class="hljs-number">1</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Field&amp; f : fs) {
+        std::<span class="hljs-type">size_t</span> at = (off + f.align - <span class="hljs-number">1</span>) / f.align * f.align;
+        <span class="hljs-keyword">if</span> (print &amp;&amp; at != off) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  [%zu bytes padding]\n&quot;</span>, at - off);
+        <span class="hljs-keyword">if</span> (print) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  %-8s offset %2zu size %zu\n&quot;</span>, f.name, at, f.size);
+        off = at + f.size;
+        max_align = std::<span class="hljs-built_in">max</span>(max_align, f.align);
+    }
+    std::<span class="hljs-type">size_t</span> total = (off + max_align - <span class="hljs-number">1</span>) / max_align * max_align;
+    <span class="hljs-keyword">if</span> (print &amp;&amp; total != off) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  [%zu bytes tail padding]\n&quot;</span>, total - off);
+    <span class="hljs-keyword">return</span> total;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::vector&lt;Field&gt; <span class="hljs-title">best_order</span><span class="hljs-params">(std::vector&lt;Field&gt; fs)</span> </span>{
+    std::<span class="hljs-built_in">stable_sort</span>(fs.<span class="hljs-built_in">begin</span>(), fs.<span class="hljs-built_in">end</span>(), [](<span class="hljs-type">const</span> Field&amp; a, <span class="hljs-type">const</span> Field&amp; b) { <span class="hljs-keyword">return</span> a.align &gt; b.align; });
+    <span class="hljs-keyword">return</span> fs;
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Order</span> {                         <span class="hljs-comment">// as written by the original author</span>
+    <span class="hljs-type">bool</span> active;
+    <span class="hljs-type">double</span> price;
+    std::<span class="hljs-type">int16_t</span> venue;
+    std::<span class="hljs-type">int64_t</span> qty;
+    <span class="hljs-type">char</span> side;
+    std::<span class="hljs-type">int32_t</span> trader;
+    <span class="hljs-type">bool</span> hidden;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">OrderSorted</span> {                   <span class="hljs-comment">// largest alignment first</span>
+    <span class="hljs-type">double</span> price;
+    std::<span class="hljs-type">int64_t</span> qty;
+    std::<span class="hljs-type">int32_t</span> trader;
+    std::<span class="hljs-type">int16_t</span> venue;
+    <span class="hljs-type">bool</span> active;
+    <span class="hljs-type">char</span> side;
+    <span class="hljs-type">bool</span> hidden;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Field&gt; fs = {{<span class="hljs-string">&quot;active&quot;</span>, <span class="hljs-number">1</span>, <span class="hljs-number">1</span>}, {<span class="hljs-string">&quot;price&quot;</span>, <span class="hljs-number">8</span>, <span class="hljs-number">8</span>}, {<span class="hljs-string">&quot;venue&quot;</span>, <span class="hljs-number">2</span>, <span class="hljs-number">2</span>}, {<span class="hljs-string">&quot;qty&quot;</span>, <span class="hljs-number">8</span>, <span class="hljs-number">8</span>},
+                             {<span class="hljs-string">&quot;side&quot;</span>, <span class="hljs-number">1</span>, <span class="hljs-number">1</span>}, {<span class="hljs-string">&quot;trader&quot;</span>, <span class="hljs-number">4</span>, <span class="hljs-number">4</span>}, {<span class="hljs-string">&quot;hidden&quot;</span>, <span class="hljs-number">1</span>, <span class="hljs-number">1</span>}};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;declared order:\n&quot;</span>);
+    std::<span class="hljs-type">size_t</span> a = <span class="hljs-built_in">layout_size</span>(fs, <span class="hljs-literal">true</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;computed %zu, compiler says %zu\n&quot;</span>, a, <span class="hljs-built_in">sizeof</span>(Order));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sorted by alignment:\n&quot;</span>);
+    std::<span class="hljs-type">size_t</span> b = <span class="hljs-built_in">layout_size</span>(<span class="hljs-built_in">best_order</span>(fs), <span class="hljs-literal">true</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;computed %zu, compiler says %zu\n&quot;</span>, b, <span class="hljs-built_in">sizeof</span>(OrderSorted));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;saved per million orders: %zu KB\n&quot;</span>, (a - b) * <span class="hljs-number">1&#x27;000&#x27;000</span> / <span class="hljs-number">1000</span>);
+}</code></pre>
+<pre class="out" data-out="ch19-k-layout">declared order:
+  active   offset  0 size 1
+  [7 bytes padding]
+  price    offset  8 size 8
+  venue    offset 16 size 2
+  [6 bytes padding]
+  qty      offset 24 size 8
+  side     offset 32 size 1
+  [3 bytes padding]
+  trader   offset 36 size 4
+  hidden   offset 40 size 1
+  [7 bytes tail padding]
+computed 48, compiler says 48
+sorted by alignment:
+  price    offset  0 size 8
+  qty      offset  8 size 8
+  trader   offset 16 size 4
+  venue    offset 20 size 2
+  active   offset 22 size 1
+  side     offset 23 size 1
+  hidden   offset 24 size 1
+  [7 bytes tail padding]
+computed 32, compiler says 32
+saved per million orders: 16000 KB</pre>
+    <p><b>Complexity and pitfalls.</b> O(n log n) for the sort. Pitfalls: forgetting tail padding (the most common error in interviews), rounding with <code>%</code> on non-power-of-two values incorrectly, and assuming the rule holds for bit-fields, empty members with <code>[[no_unique_address]]</code>, virtual bases or <code>#pragma pack</code>, which all change it. The 25 bytes of data cannot fit in less than 32 with 8-byte alignment, so the sorted order is optimal. In real code, also check that the hot fields still share a line after reordering.</p>
+    <p class="rating">Estimated rating: ~1300 · simple simulation, but you must know the alignment and tail-padding rules exactly</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a sharded counter for many threads: <code>add(shard, v)</code> must not suffer false sharing, <code>total()</code> may be called concurrently with writers, and the slots must be on separate cache lines on both x86 and Apple silicon, including when allocated on the heap. Verify the slot spacing and alignment at run time.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Put the alignment on the slot <i>type</i>, <code>struct alignas(128) Slot</code>, so its size rounds up to 128 and array elements are 128 bytes apart. Allocate the array with <code>new Slot[n]</code>, which since C++17 calls the aligned <code>operator new</code>. Each thread updates only its own slot with a relaxed atomic add (no ordering is needed for a statistic), and <code>total()</code> sums relaxed loads, which gives a value that was true at some point during the summation for each slot.</p>
+<pre data-run="ch19-k-counters" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-comment">// 128 covers Apple silicon&#x27;s 128-byte lines and Intel&#x27;s adjacent-line prefetcher, which</span>
+<span class="hljs-comment">// pulls 64-byte lines in pairs. std::hardware_destructive_interference_size is an</span>
+<span class="hljs-comment">// alternative, but it is a compile-time guess that can differ from the machine.</span>
+<span class="hljs-keyword">inline</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kLine = <span class="hljs-number">128</span>;
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ShardedCounter</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">alignas</span>(kLine) Slot {
+        std::atomic&lt;<span class="hljs-type">long</span>&gt; value{<span class="hljs-number">0</span>};
+    };
+    <span class="hljs-built_in">static_assert</span>(<span class="hljs-built_in">sizeof</span>(Slot) == kLine &amp;&amp; <span class="hljs-built_in">alignof</span>(Slot) == kLine);
+    std::unique_ptr&lt;Slot[]&gt; slots_;   <span class="hljs-comment">// C++17 aligned new honours alignas(128)</span>
+    std::<span class="hljs-type">size_t</span> n_;
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ShardedCounter</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> shards)</span> : slots_(new Slot[shards]), n_(shards) {</span>}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">add</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> shard, <span class="hljs-type">long</span> v)</span> </span>{ slots_[shard % n_].value.<span class="hljs-built_in">fetch_add</span>(v, std::memory_order_relaxed); }
+    <span class="hljs-function"><span class="hljs-type">long</span> <span class="hljs-title">total</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{                     <span class="hljs-comment">// a racy-but-safe snapshot while writers run</span>
+        <span class="hljs-type">long</span> s = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n_; ++i) s += slots_[i].value.<span class="hljs-built_in">load</span>(std::memory_order_relaxed);
+        <span class="hljs-keyword">return</span> s;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">distance_bytes</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(<span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">char</span>*&gt;(&amp;slots_[<span class="hljs-number">1</span>]) - <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">char</span>*&gt;(&amp;slots_[<span class="hljs-number">0</span>]));
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">aligned</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(slots_.<span class="hljs-built_in">get</span>()) % kLine == <span class="hljs-number">0</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> threads = <span class="hljs-number">4</span>;
+    <span class="hljs-type">const</span> <span class="hljs-type">long</span> per_thread = <span class="hljs-number">200&#x27;000</span>;
+    <span class="hljs-function">ShardedCounter <span class="hljs-title">c</span><span class="hljs-params">(threads)</span></span>;
+    std::vector&lt;std::thread&gt; pool;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; threads; ++t)
+        pool.<span class="hljs-built_in">emplace_back</span>([&amp;c, t] { <span class="hljs-keyword">for</span> (<span class="hljs-type">long</span> i = <span class="hljs-number">0</span>; i &lt; per_thread; ++i) c.<span class="hljs-built_in">add</span>(t, <span class="hljs-number">1</span>); });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; th : pool) th.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;total %ld\n&quot;</span>, c.<span class="hljs-built_in">total</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;slot distance %zu bytes, base aligned: %s\n&quot;</span>, c.<span class="hljs-built_in">distance_bytes</span>(), c.<span class="hljs-built_in">aligned</span>() ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch19-k-counters">total 800000
+slot distance 128 bytes, base aligned: yes</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) <code>add</code>, O(shards) <code>total</code>; memory 128 bytes per shard. Pitfalls: <code>alignas</code> on an array variable (aligns only the start), 64-byte padding on Apple silicon, using a plain <code>long</code> instead of an atomic when <code>total()</code> runs concurrently (a data race that TSan reports), and choosing the shard by thread id hash with too few shards, which reintroduces contention on the atomic itself. Production versions (for example in Folly or the Linux kernel's per-CPU counters) shard by CPU rather than thread.</p>
+    <p class="rating">Estimated rating: ~1300 · small code, but it tests alignment rules, C++17 aligned new and memory orders</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a cache-friendly (blocked) transpose of a row-major <code>rows × cols</code> float matrix into a <code>cols × rows</code> matrix. It must handle sizes that are not multiples of the tile size and non-square matrices, and you must test it against a naive version.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> The naive transpose reads along rows but writes down columns, so one side is always strided. Process the matrix in <code>B × B</code> tiles: within a tile, the <code>B</code> source lines and <code>B</code> destination lines all fit in L1 (32 × 32 floats is 4 KB each side), so each fetched line is used fully before eviction. Clamp each tile's end with <code>std::min</code> for the edges.</p>
+<pre data-run="ch19-k-transpose" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-comment">// out = transpose(in), where in is rows × cols, row-major, and out is cols × rows.</span>
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">transpose_naive</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">float</span>* in, <span class="hljs-type">float</span>* out, std::<span class="hljs-type">size_t</span> rows, std::<span class="hljs-type">size_t</span> cols)</span> </span>{
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> r = <span class="hljs-number">0</span>; r &lt; rows; ++r)
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> c = <span class="hljs-number">0</span>; c &lt; cols; ++c)
+            out[c * rows + r] = in[r * cols + c];          <span class="hljs-comment">// writes stride through memory</span>
+}
+
+<span class="hljs-keyword">template</span> &lt;std::<span class="hljs-type">size_t</span> B = <span class="hljs-number">32</span>&gt;
+<span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-built_in">transpose_blocked</span>(<span class="hljs-type">const</span> <span class="hljs-type">float</span>* in, <span class="hljs-type">float</span>* out, std::<span class="hljs-type">size_t</span> rows, std::<span class="hljs-type">size_t</span> cols) {
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> r0 = <span class="hljs-number">0</span>; r0 &lt; rows; r0 += B)
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> c0 = <span class="hljs-number">0</span>; c0 &lt; cols; c0 += B) {
+            <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> r1 = std::<span class="hljs-built_in">min</span>(r0 + B, rows), c1 = std::<span class="hljs-built_in">min</span>(c0 + B, cols);
+            <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> r = r0; r &lt; r1; ++r)           <span class="hljs-comment">// one B × B tile: B lines read,</span>
+                <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> c = c0; c &lt; c1; ++c)       <span class="hljs-comment">// B lines written, all stay in L1</span>
+                    out[c * rows + r] = in[r * cols + c];
+        }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">bool</span> all_ok = <span class="hljs-literal">true</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> [rows, cols] : {std::pair&lt;std::<span class="hljs-type">size_t</span>, std::<span class="hljs-type">size_t</span>&gt;{<span class="hljs-number">1000</span>, <span class="hljs-number">1000</span>}, {<span class="hljs-number">37</span>, <span class="hljs-number">1029</span>}, {<span class="hljs-number">1</span>, <span class="hljs-number">5</span>}, {<span class="hljs-number">64</span>, <span class="hljs-number">64</span>}}) {
+        <span class="hljs-function">std::vector&lt;<span class="hljs-type">float</span>&gt; <span class="hljs-title">in</span><span class="hljs-params">(rows * cols)</span>, <span class="hljs-title">a</span><span class="hljs-params">(rows * cols)</span>, <span class="hljs-title">b</span><span class="hljs-params">(rows * cols)</span></span>;
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; in.<span class="hljs-built_in">size</span>(); ++i) in[i] = <span class="hljs-built_in">float</span>(i);
+        <span class="hljs-built_in">transpose_naive</span>(in.<span class="hljs-built_in">data</span>(), a.<span class="hljs-built_in">data</span>(), rows, cols);
+        <span class="hljs-built_in">transpose_blocked</span>(in.<span class="hljs-built_in">data</span>(), b.<span class="hljs-built_in">data</span>(), rows, cols);
+        <span class="hljs-type">bool</span> ok = a == b &amp;&amp; (rows &lt; <span class="hljs-number">2</span> || b[<span class="hljs-number">1</span>] == in[cols]);  <span class="hljs-comment">// out[0][1] == in[1][0]</span>
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu x %zu: %s\n&quot;</span>, rows, cols, ok ? <span class="hljs-string">&quot;match&quot;</span> : <span class="hljs-string">&quot;MISMATCH&quot;</span>);
+        all_ok = all_ok &amp;&amp; ok;
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, all_ok ? <span class="hljs-string">&quot;all tests passed&quot;</span> : <span class="hljs-string">&quot;failure&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch19-k-transpose">1000 x 1000: match
+37 x 1029: match
+1 x 5: match
+64 x 64: match
+all tests passed</pre>
+    <p><b>Complexity and pitfalls.</b> O(rows × cols) for both versions; the blocked one reduces cache misses from about one per element to about two per line. Measured on the M1 (see the prefetching section): about 6 times faster at 4000 × 4000, no gain at 2000 × 2000, and only modest gains at 4096 × 4096, where power-of-two rows map to the same cache sets. Pitfalls: integer overflow in <code>r * cols</code> with <code>int</code> indices on large matrices (use <code>std::size_t</code>), wrong edge handling, and tuning <code>B</code> on one machine only. Further steps are padding rows away from powers of two, transposing 4 × 4 or 8 × 8 micro-tiles in SIMD registers, and recursive (cache-oblivious) splitting.</p>
+    <p class="rating">Estimated rating: ~1400 · classic loop tiling; the edge cases and the explanation matter more than the code</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement an open-addressing hash map from <code>uint64_t</code> keys to values with linear probing, power-of-two capacity, a maximum load factor of 7/8, <code>insert_or_assign</code>, <code>find</code> and <code>erase</code> without tombstones. Test it against <code>std::unordered_map</code> with random operations.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Store entries in one contiguous array and keep occupancy in a dense byte array. Hash with a strong mixer (splitmix64) and mask with <code>capacity - 1</code>. Probe forwards until the key or an empty slot. For erase, use backward-shift deletion: after emptying slot <code>i</code>, scan forward through the cluster and move back any entry whose home position means its probe sequence passes through <code>i</code>; stop at the first empty slot. That keeps the invariant "no empty slot between an entry and its home", so lookups can stop at the first empty slot and no tombstones are needed.</p>
+<pre data-run="ch19-k-flat-hash" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;random&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unordered_map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-comment">// Open addressing with linear probing: one contiguous array, so a lookup usually</span>
+<span class="hljs-comment">// touches one or two cache lines instead of chasing a bucket&#x27;s linked list.</span>
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">V</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">FlatHashMap</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Slot</span> { std::<span class="hljs-type">uint64_t</span> key; V value; };
+    std::vector&lt;Slot&gt; slots_;
+    std::vector&lt;std::<span class="hljs-type">uint8_t</span>&gt; full_;   <span class="hljs-comment">// 1 = occupied: dense metadata, like a Swiss table&#x27;s control bytes</span>
+    std::<span class="hljs-type">size_t</span> size_ = <span class="hljs-number">0</span>;
+    std::<span class="hljs-type">size_t</span> mask_ = <span class="hljs-number">0</span>;
+
+    <span class="hljs-function"><span class="hljs-type">static</span> std::<span class="hljs-type">uint64_t</span> <span class="hljs-title">mix</span><span class="hljs-params">(std::<span class="hljs-type">uint64_t</span> k)</span> </span>{   <span class="hljs-comment">// splitmix64 finaliser: spreads nearby keys</span>
+        k ^= k &gt;&gt; <span class="hljs-number">30</span>; k *= <span class="hljs-number">0xbf58476d1ce4e5b9</span>ULL;
+        k ^= k &gt;&gt; <span class="hljs-number">27</span>; k *= <span class="hljs-number">0x94d049bb133111eb</span>ULL;
+        <span class="hljs-keyword">return</span> k ^ (k &gt;&gt; <span class="hljs-number">31</span>);
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">home</span><span class="hljs-params">(std::<span class="hljs-type">uint64_t</span> k)</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(<span class="hljs-built_in">mix</span>(k)) &amp; mask_; }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">rehash</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> cap)</span> </span>{
+        std::vector&lt;Slot&gt; old_slots = std::<span class="hljs-built_in">move</span>(slots_);
+        std::vector&lt;std::<span class="hljs-type">uint8_t</span>&gt; old_full = std::<span class="hljs-built_in">move</span>(full_);
+        slots_.<span class="hljs-built_in">assign</span>(cap, Slot{});
+        full_.<span class="hljs-built_in">assign</span>(cap, <span class="hljs-number">0</span>);
+        mask_ = cap - <span class="hljs-number">1</span>;
+        size_ = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; old_slots.<span class="hljs-built_in">size</span>(); ++i)
+            <span class="hljs-keyword">if</span> (old_full[i]) <span class="hljs-built_in">insert_or_assign</span>(old_slots[i].key, std::<span class="hljs-built_in">move</span>(old_slots[i].value));
+    }
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">FlatHashMap</span>() { <span class="hljs-built_in">rehash</span>(<span class="hljs-number">16</span>); }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">insert_or_assign</span><span class="hljs-params">(std::<span class="hljs-type">uint64_t</span> key, V value)</span> </span>{
+        <span class="hljs-keyword">if</span> ((size_ + <span class="hljs-number">1</span>) * <span class="hljs-number">8</span> &gt; slots_.<span class="hljs-built_in">size</span>() * <span class="hljs-number">7</span>) <span class="hljs-built_in">rehash</span>(slots_.<span class="hljs-built_in">size</span>() * <span class="hljs-number">2</span>);   <span class="hljs-comment">// max load 7/8</span>
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-built_in">home</span>(key);; i = (i + <span class="hljs-number">1</span>) &amp; mask_) {
+            <span class="hljs-keyword">if</span> (!full_[i]) { slots_[i] = Slot{key, std::<span class="hljs-built_in">move</span>(value)}; full_[i] = <span class="hljs-number">1</span>; ++size_; <span class="hljs-keyword">return</span>; }
+            <span class="hljs-keyword">if</span> (slots_[i].key == key) { slots_[i].value = std::<span class="hljs-built_in">move</span>(value); <span class="hljs-keyword">return</span>; }
+        }
+    }
+    <span class="hljs-function">V* <span class="hljs-title">find</span><span class="hljs-params">(std::<span class="hljs-type">uint64_t</span> key)</span> </span>{
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-built_in">home</span>(key); full_[i]; i = (i + <span class="hljs-number">1</span>) &amp; mask_)
+            <span class="hljs-keyword">if</span> (slots_[i].key == key) <span class="hljs-keyword">return</span> &amp;slots_[i].value;
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">erase</span><span class="hljs-params">(std::<span class="hljs-type">uint64_t</span> key)</span> </span>{
+        std::<span class="hljs-type">size_t</span> i = <span class="hljs-built_in">home</span>(key);
+        <span class="hljs-keyword">while</span> (full_[i] &amp;&amp; slots_[i].key != key) i = (i + <span class="hljs-number">1</span>) &amp; mask_;
+        <span class="hljs-keyword">if</span> (!full_[i]) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        <span class="hljs-comment">// Backward-shift deletion: pull later members of the cluster into the hole, so no</span>
+        <span class="hljs-comment">// tombstones are needed and lookups can stop at the first empty slot.</span>
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> j = (i + <span class="hljs-number">1</span>) &amp; mask_; full_[j]; j = (j + <span class="hljs-number">1</span>) &amp; mask_) {
+            std::<span class="hljs-type">size_t</span> h = <span class="hljs-built_in">home</span>(slots_[j].key);
+            <span class="hljs-keyword">if</span> (((j - h) &amp; mask_) &gt;= ((j - i) &amp; mask_)) {   <span class="hljs-comment">// slot j may legally move back to i</span>
+                slots_[i] = std::<span class="hljs-built_in">move</span>(slots_[j]);
+                i = j;
+            }
+        }
+        full_[i] = <span class="hljs-number">0</span>;
+        slots_[i] = Slot{};
+        --size_;
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    FlatHashMap&lt;<span class="hljs-type">int</span>&gt; m;
+    std::unordered_map&lt;std::<span class="hljs-type">uint64_t</span>, <span class="hljs-type">int</span>&gt; ref;
+    <span class="hljs-function">std::mt19937_64 <span class="hljs-title">rng</span><span class="hljs-params">(<span class="hljs-number">2026</span>)</span></span>;
+    <span class="hljs-type">int</span> mismatches = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> step = <span class="hljs-number">0</span>; step &lt; <span class="hljs-number">200&#x27;000</span>; ++step) {
+        std::<span class="hljs-type">uint64_t</span> k = <span class="hljs-built_in">rng</span>() % <span class="hljs-number">5000</span>;                 <span class="hljs-comment">// small key space forces collisions and erasures</span>
+        <span class="hljs-keyword">switch</span> (<span class="hljs-built_in">rng</span>() % <span class="hljs-number">3</span>) {
+        <span class="hljs-keyword">case</span> <span class="hljs-number">0</span>: m.<span class="hljs-built_in">insert_or_assign</span>(k, step); ref[k] = step; <span class="hljs-keyword">break</span>;
+        <span class="hljs-keyword">case</span> <span class="hljs-number">1</span>: mismatches += m.<span class="hljs-built_in">erase</span>(k) != (ref.<span class="hljs-built_in">erase</span>(k) == <span class="hljs-number">1</span>); <span class="hljs-keyword">break</span>;
+        <span class="hljs-keyword">default</span>: {
+            <span class="hljs-type">int</span>* v = m.<span class="hljs-built_in">find</span>(k);
+            <span class="hljs-keyword">auto</span> it = ref.<span class="hljs-built_in">find</span>(k);
+            mismatches += (v == <span class="hljs-literal">nullptr</span>) != (it == ref.<span class="hljs-built_in">end</span>()) || (v &amp;&amp; *v != it-&gt;second);
+        }
+        }
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;size %zu vs %zu, mismatches %d\n&quot;</span>, m.<span class="hljs-built_in">size</span>(), ref.<span class="hljs-built_in">size</span>(), mismatches);
+}</code></pre>
+<pre class="out" data-out="ch19-k-flat-hash">size 2485 vs 2485, mismatches 0</pre>
+    <p><b>Complexity and pitfalls.</b> Expected O(1) for all operations at a bounded load factor; a lookup usually touches one or two cache lines, against at least two dependent misses in a node-based table. Pitfalls: a weak hash with power-of-two masking (sequential keys collide into long clusters; identity hashing is the classic mistake), the wrap-around arithmetic in the backward-shift condition (do it modulo the capacity), forgetting that rehash invalidates pointers returned by <code>find</code>, and letting the load factor approach 1, where linear probing degrades sharply. This version requires <code>V</code> to be default constructible; production tables (Swiss tables) keep control bytes separately, use SIMD to test 16 slots at once, and construct values in raw storage.</p>
+    <p class="rating">Estimated rating: ~1800 · backward-shift deletion and the probe-distance condition are easy to get subtly wrong</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>FlatMap&lt;K, V&gt;</code>, an ordered map stored as a sorted <code>std::vector&lt;std::pair&lt;K, V&gt;&gt;</code>, with <code>insert_or_assign</code>, <code>find</code>, <code>erase</code>, ordered iteration, and a bulk <code>assign_unsorted</code> that sorts once and keeps the last value for duplicate keys. Test it against <code>std::map</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Every operation starts with <code>std::lower_bound</code> on the key, a binary search over contiguous memory. Insert and erase use <code>vector::insert</code> and <code>vector::erase</code>, which shift the tail. For bulk loading, appending everything and sorting once is O(n log n), against O(n²) for repeated sorted inserts; a stable sort followed by an in-place deduplication pass gives "last write wins".</p>
+<pre data-run="ch19-k-flat-map" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;random&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-comment">// A sorted vector of pairs: lookups are a binary search over contiguous memory,</span>
+<span class="hljs-comment">// iteration is a linear scan. Insertion is O(n) (a memmove), so it suits</span>
+<span class="hljs-comment">// &quot;build once, read many&quot; data such as configuration, symbol tables or order-book levels.</span>
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">K</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">V</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">FlatMap</span> {
+    std::vector&lt;std::pair&lt;K, V&gt;&gt; data_;
+    <span class="hljs-function"><span class="hljs-keyword">auto</span> <span class="hljs-title">lower</span><span class="hljs-params">(<span class="hljs-type">const</span> K&amp; k)</span> </span>{
+        <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">lower_bound</span>(data_.<span class="hljs-built_in">begin</span>(), data_.<span class="hljs-built_in">end</span>(), k, [](<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; p, <span class="hljs-type">const</span> K&amp; key) { <span class="hljs-keyword">return</span> p.first &lt; key; });
+    }
+    <span class="hljs-function"><span class="hljs-keyword">auto</span> <span class="hljs-title">lower</span><span class="hljs-params">(<span class="hljs-type">const</span> K&amp; k)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">lower_bound</span>(data_.<span class="hljs-built_in">begin</span>(), data_.<span class="hljs-built_in">end</span>(), k, [](<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; p, <span class="hljs-type">const</span> K&amp; key) { <span class="hljs-keyword">return</span> p.first &lt; key; });
+    }
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reserve</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{ data_.<span class="hljs-built_in">reserve</span>(n); }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> data_.<span class="hljs-built_in">size</span>(); }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">insert_or_assign</span><span class="hljs-params">(<span class="hljs-type">const</span> K&amp; k, V v)</span> </span>{           <span class="hljs-comment">// true if a new key was inserted</span>
+        <span class="hljs-keyword">auto</span> it = <span class="hljs-built_in">lower</span>(k);
+        <span class="hljs-keyword">if</span> (it != data_.<span class="hljs-built_in">end</span>() &amp;&amp; it-&gt;first == k) { it-&gt;second = std::<span class="hljs-built_in">move</span>(v); <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>; }
+        data_.<span class="hljs-built_in">insert</span>(it, {k, std::<span class="hljs-built_in">move</span>(v)});
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">const</span> V* <span class="hljs-title">find</span><span class="hljs-params">(<span class="hljs-type">const</span> K&amp; k)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">auto</span> it = <span class="hljs-built_in">lower</span>(k);
+        <span class="hljs-keyword">return</span> it != data_.<span class="hljs-built_in">end</span>() &amp;&amp; it-&gt;first == k ? &amp;it-&gt;second : <span class="hljs-literal">nullptr</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">erase</span><span class="hljs-params">(<span class="hljs-type">const</span> K&amp; k)</span> </span>{
+        <span class="hljs-keyword">auto</span> it = <span class="hljs-built_in">lower</span>(k);
+        <span class="hljs-keyword">if</span> (it == data_.<span class="hljs-built_in">end</span>() || it-&gt;first != k) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        data_.<span class="hljs-built_in">erase</span>(it);
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-comment">// Bulk build: append unsorted, then sort and deduplicate once (last write wins).</span>
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">It</span>&gt;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">assign_unsorted</span><span class="hljs-params">(It first, It last)</span> </span>{
+        data_.<span class="hljs-built_in">assign</span>(first, last);
+        std::<span class="hljs-built_in">stable_sort</span>(data_.<span class="hljs-built_in">begin</span>(), data_.<span class="hljs-built_in">end</span>(), [](<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; a, <span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; b) { <span class="hljs-keyword">return</span> a.first &lt; b.first; });
+        <span class="hljs-keyword">auto</span> out = data_.<span class="hljs-built_in">begin</span>();
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> it = data_.<span class="hljs-built_in">begin</span>(); it != data_.<span class="hljs-built_in">end</span>(); ++it) {
+            <span class="hljs-keyword">if</span> (out != data_.<span class="hljs-built_in">begin</span>() &amp;&amp; std::<span class="hljs-built_in">prev</span>(out)-&gt;first == it-&gt;first) *std::<span class="hljs-built_in">prev</span>(out) = std::<span class="hljs-built_in">move</span>(*it);
+            <span class="hljs-keyword">else</span> {
+                <span class="hljs-keyword">if</span> (out != it) *out = std::<span class="hljs-built_in">move</span>(*it);   <span class="hljs-comment">// never self-move-assign</span>
+                ++out;
+            }
+        }
+        data_.<span class="hljs-built_in">erase</span>(out, data_.<span class="hljs-built_in">end</span>());
+    }
+    <span class="hljs-function"><span class="hljs-keyword">auto</span> <span class="hljs-title">begin</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> data_.<span class="hljs-built_in">begin</span>(); }
+    <span class="hljs-function"><span class="hljs-keyword">auto</span> <span class="hljs-title">end</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> data_.<span class="hljs-built_in">end</span>(); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    FlatMap&lt;<span class="hljs-type">int</span>, std::string&gt; fm;
+    std::map&lt;<span class="hljs-type">int</span>, std::string&gt; ref;
+    <span class="hljs-function">std::mt19937 <span class="hljs-title">rng</span><span class="hljs-params">(<span class="hljs-number">19</span>)</span></span>;
+    <span class="hljs-type">int</span> mismatches = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">20&#x27;000</span>; ++i) {
+        <span class="hljs-type">int</span> k = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-built_in">rng</span>() % <span class="hljs-number">500</span>);
+        std::string v = <span class="hljs-string">&quot;v&quot;</span> + std::<span class="hljs-built_in">to_string</span>(i);
+        <span class="hljs-keyword">if</span> (<span class="hljs-built_in">rng</span>() % <span class="hljs-number">4</span> == <span class="hljs-number">0</span>) mismatches += fm.<span class="hljs-built_in">erase</span>(k) != (ref.<span class="hljs-built_in">erase</span>(k) == <span class="hljs-number">1</span>);
+        <span class="hljs-keyword">else</span> { fm.<span class="hljs-built_in">insert_or_assign</span>(k, v); ref[k] = v; }
+    }
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; [k, v] : ref) {
+        <span class="hljs-type">const</span> std::string* got = fm.<span class="hljs-built_in">find</span>(k);
+        mismatches += !got || *got != v;
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;size %zu vs %zu, mismatches %d, ordered: %s\n&quot;</span>, fm.<span class="hljs-built_in">size</span>(), ref.<span class="hljs-built_in">size</span>(), mismatches,
+                std::<span class="hljs-built_in">is_sorted</span>(fm.<span class="hljs-built_in">begin</span>(), fm.<span class="hljs-built_in">end</span>()) ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+
+    std::vector&lt;std::pair&lt;<span class="hljs-type">int</span>, std::string&gt;&gt; raw = {{<span class="hljs-number">3</span>, <span class="hljs-string">&quot;c&quot;</span>}, {<span class="hljs-number">1</span>, <span class="hljs-string">&quot;a&quot;</span>}, {<span class="hljs-number">3</span>, <span class="hljs-string">&quot;C&quot;</span>}, {<span class="hljs-number">2</span>, <span class="hljs-string">&quot;b&quot;</span>}};
+    FlatMap&lt;<span class="hljs-type">int</span>, std::string&gt; bulk;
+    bulk.<span class="hljs-built_in">assign_unsorted</span>(raw.<span class="hljs-built_in">begin</span>(), raw.<span class="hljs-built_in">end</span>());
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; [k, v] : bulk) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d=%s &quot;</span>, k, v.<span class="hljs-built_in">c_str</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch19-k-flat-map">size 374 vs 374, mismatches 0, ordered: yes
+1=a 2=b 3=C </pre>
+    <p><b>Complexity and pitfalls.</b> Lookup O(log n) with excellent constants (the last few probes of the binary search share lines), iteration at memory bandwidth, insert and erase O(n). It beats <code>std::map</code> for read-heavy maps up to large sizes, and C++23 standardises the idea as <code>std::flat_map</code> (with keys and values in separate containers, which is even more cache friendly for key searches). Pitfalls: insert and erase invalidate all iterators and references, unlike <code>std::map</code>, and a self-move-assignment in the deduplication loop (<code>*out = std::move(*it)</code> when <code>out == it</code>) can leave a <code>std::string</code> value empty (a self-moved object is only "valid but unspecified"), which is why the code checks <code>out != it</code>. The bulk-load test with a duplicate key is what catches it.</p>
+    <p class="rating">Estimated rating: ~1400 · simple container, with an in-place dedupe that hides a self-move bug</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch17-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>Latency ladder:</b> L1 about 1 ns, L2 about 4 ns, L3 about 15 ns, DRAM about 100 ns; numbers vary by machine, ratios do not. Dependent misses serialise, independent ones overlap.</li>
+<li><b>Lines:</b> 64 bytes on x86 and most Arm cores, 128 on Apple silicon. <code>hardware_destructive_interference_size</code> is 64 on x86-64 and 256 on arm64 with GCC and Clang, and it is a compile-time guess.</li>
+<li><b>Contiguous beats node-based:</b> vector over list (3 times faster in allocation order, about 200 times when scattered, on the M1), flat or open-addressing maps over <code>std::map</code>/<code>unordered_map</code> for read-heavy work.</li>
+<li><b>Layout:</b> order members by decreasing alignment, split hot from cold fields, choose SoA for field-wise loops and AoS for entity-wise access.</li>
+<li><b>False sharing:</b> threads writing different variables on one line; fix with <code>alignas(128)</code> types (not <code>alignas</code> on an array) or thread-local accumulation. About 22 times on the M1 with 4 threads.</li>
+<li><b>Prefetch:</b> hardware handles sequential and strided access; software prefetch only for unpredictable addresses known early, and it gave nothing here. Block (tile) loops whose working set exceeds the cache, and avoid power-of-two strides.</li>
+<li><b>TLB:</b> 4 KB pages cover a few MB of TLB reach; huge pages (2 MB, THP or <code>MAP_HUGETLB</code>) fix random access over large heaps.</li>
+<li><b>Measure:</b> <code>perf stat</code>, <code>perf c2c</code>, cachegrind on Linux; Instruments CPU Counters on macOS. Name the machine with every number.</li>
+</ul>
+</section>

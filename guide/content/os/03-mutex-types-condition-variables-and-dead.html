@@ -1,0 +1,1297 @@
+---
+title: Mutex types, condition variables and deadlock
+part: Part A · Threads and synchronisation
+lede: This chapter covers the synchronisation toolbox you use every day in C++: the mutex family, the RAII lock wrappers, condition variables, semaphores, latches and barriers. It then covers what goes wrong with them (deadlock, livelock, starvation, priority inversion) and the classic problems interviewers use to test all of it: producer-consumer, readers-writers and the dining philosophers.
+desc: lock_guard, unique_lock, CVs, semaphores, deadlock, classic problems
+hours: 5
+prereqs: [Ch 1](#ch01) threads, [Ch 2](#ch02) races and mutex internals
+---
+<section id="ch03-mutex-family" data-roles="th"><div class="sec-head"><h2>The mutex family</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A mutex is a token that only one thread can hold at a time. A thread that wants the token and finds it taken goes to sleep until the holder gives it back. <a href="#ch02">Ch 2</a> explains how that sleep works (a futex fast path in user space, a system call only on contention). This chapter is about the C++ types built on top of it and how to combine them.</p>
+<p>The standard library gives you six mutex types in <code>&lt;mutex&gt;</code> and <code>&lt;shared_mutex&gt;</code>. They differ along three axes: can the owner lock it again (recursive), can you give up after a timeout (timed), and can many readers hold it at once (shared).</p>
+
+<h3 id="ch03-mutex-basic">std::mutex</h3>
+<p><code>std::mutex</code> has three operations: <code>lock()</code>, <code>try_lock()</code> and <code>unlock()</code>. It is not copyable and not movable, because other threads hold its address. Its rules are preconditions, so breaking them is undefined behaviour, not an error you can catch:</p>
+<ul>
+  <li>Locking a <code>std::mutex</code> that the calling thread already owns is undefined. On Linux it usually deadlocks the thread against itself; an implementation may also throw <code>std::system_error</code> with <code>resource_deadlock_would_occur</code>.</li>
+  <li>Unlocking a mutex the calling thread does not own is undefined. A mutex has an <b>owner</b>; this is the key difference from a semaphore.</li>
+  <li>Destroying a mutex that is still locked is undefined.</li>
+  <li><code>try_lock()</code> is allowed to fail spuriously, that is, return <code>false</code> even when no thread holds the mutex. Never use it to ask "is it locked?".</li>
+</ul>
+<p>On the plus side, <code>std::mutex</code> has a <code>constexpr</code> default constructor, so a global or <code>static</code> mutex is constant-initialised and cannot suffer from the static initialisation order problem.</p>
+
+<h3 id="ch03-mutex-recursive">recursive_mutex</h3>
+<p><code>std::recursive_mutex</code> keeps an owner thread id and a count. The owner may lock it again, and it becomes free only after as many <code>unlock()</code> calls as <code>lock()</code> calls. The maximum depth is unspecified; past it, <code>lock()</code> throws and <code>try_lock()</code> returns <code>false</code>.</p>
+<p>It exists for code where a public locked function calls another public locked function on the same object. Most reviewers treat it as a design smell: the inner call runs while the invariant may be half updated by the outer call, and you lose the ability to reason about "inside the lock, the invariant holds on entry". The usual fix is a private <code>do_x_locked()</code> helper that assumes the lock is held, called by thin public wrappers that take the lock.</p>
+
+<h3 id="ch03-mutex-timed">timed_mutex and shared_mutex</h3>
+<p><code>std::timed_mutex</code> and <code>std::recursive_timed_mutex</code> add <code>try_lock_for(duration)</code> and <code>try_lock_until(time_point)</code>. Use them when a caller must give up, for example to report a likely deadlock or to keep a latency budget. Prefer <code>steady_clock</code> for deadlines, because <code>system_clock</code> can jump.</p>
+<p><code>std::shared_mutex</code> (C++17) is a readers-writer lock: <code>lock()</code> takes it exclusively, <code>lock_shared()</code> takes a shared (read) hold, and any number of shared holders may coexist while no exclusive holder exists. <code>std::shared_timed_mutex</code> (C++14, older) adds timed variants. The standard does not say whether readers or writers get priority. In practice it differs: libstdc++ builds <code>std::shared_mutex</code> on <code>pthread_rwlock_t</code>, and glibc's default rwlock prefers readers, so on Linux with GCC a steady stream of overlapping readers can starve a writer; libc++ implements its own lock that blocks new readers once a writer is waiting. The section on <a href="#ch03-classic">classic problems</a> shows how to build a writer-preferring lock yourself.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"Use <code>shared_mutex</code> for read-heavy data" is not automatically a win. Every <code>lock_shared()</code> still writes to the mutex (it bumps a reader count), so with many cores the cache line holding the mutex bounces between them just as it would for a plain mutex. When critical sections are a few nanoseconds long, a plain <code>std::mutex</code> is often faster. Shared locking pays off when readers hold the lock for a long time.</p></div>
+
+<h3 id="ch03-mutex-facts">Key facts</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Type</th><th>Header, standard</th><th>Re-lock by owner</th><th>Timeout</th><th>Shared mode</th><th>Typical use</th></tr></thead>
+<tbody>
+<tr><td><code>mutex</code></td><td><code>&lt;mutex&gt;</code>, C++11</td><td>UB</td><td>no</td><td>no</td><td>default choice</td></tr>
+<tr><td><code>recursive_mutex</code></td><td><code>&lt;mutex&gt;</code>, C++11</td><td>yes, counted</td><td>no</td><td>no</td><td>legacy re-entrant APIs</td></tr>
+<tr><td><code>timed_mutex</code></td><td><code>&lt;mutex&gt;</code>, C++11</td><td>UB</td><td>yes</td><td>no</td><td>give up after a deadline</td></tr>
+<tr><td><code>recursive_timed_mutex</code></td><td><code>&lt;mutex&gt;</code>, C++11</td><td>yes</td><td>yes</td><td>no</td><td>rare</td></tr>
+<tr><td><code>shared_timed_mutex</code></td><td><code>&lt;shared_mutex&gt;</code>, C++14</td><td>UB</td><td>yes</td><td>yes</td><td>readers-writer with timeouts</td></tr>
+<tr><td><code>shared_mutex</code></td><td><code>&lt;shared_mutex&gt;</code>, C++17</td><td>UB</td><td>no</td><td>yes</td><td>readers-writer</td></tr>
+<tr><td><code>counting_semaphore</code></td><td><code>&lt;semaphore&gt;</code>, C++20</td><td>no owner</td><td>yes</td><td>n/a</td><td>limit concurrency, signalling</td></tr>
+<tr><td><code>condition_variable</code></td><td><code>&lt;condition_variable&gt;</code>, C++11</td><td>n/a</td><td>yes</td><td>n/a</td><td>wait for a state change</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="ch03-raii-locks" data-roles="th"><div class="sec-head"><h2>RAII lock wrappers and locking several mutexes</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Never call <code>lock()</code> and <code>unlock()</code> by hand. A wrapper object locks in its constructor and unlocks in its destructor, so an exception or an early <code>return</code> cannot leave the mutex locked forever.</p>
+
+<h3 id="ch03-lock-guard">lock_guard, unique_lock, scoped_lock, shared_lock</h3>
+<ul>
+  <li><b><code>std::lock_guard&lt;M&gt;</code></b> (C++11): the simplest. Locks one mutex for the whole scope. Not movable, no <code>unlock()</code>, no overhead beyond the two calls.</li>
+  <li><b><code>std::scoped_lock&lt;Ms...&gt;</code></b> (C++17): like <code>lock_guard</code> but takes any number of mutexes and locks them all with the deadlock-avoidance algorithm of <code>std::lock</code>. With one mutex it behaves like <code>lock_guard</code>. This is the modern default.</li>
+  <li><b><code>std::unique_lock&lt;M&gt;</code></b> (C++11): a movable lock that may or may not own its mutex at any moment. It supports <code>lock()</code>, <code>unlock()</code>, <code>try_lock()</code>, timed locking, <code>owns_lock()</code>, <code>release()</code> (detach without unlocking) and moving ownership out of a function. It costs one extra <code>bool</code> and a branch in the destructor. Condition variables require it.</li>
+  <li><b><code>std::shared_lock&lt;M&gt;</code></b> (C++14): the shared-mode twin of <code>unique_lock</code>. Its constructor calls <code>lock_shared()</code>.</li>
+</ul>
+<pre><code class="language-cpp hljs">std::mutex m;
+std::shared_mutex rw;
+
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::scoped_lock <span class="hljs-title">lk</span><span class="hljs-params">(m)</span></span>;                  <span class="hljs-comment">// CTAD: scoped_lock&lt;std::mutex&gt;</span>
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">g</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m)</span></span>;
+    <span class="hljs-comment">// ... prepare under the lock</span>
+    lk.<span class="hljs-built_in">unlock</span>();                             <span class="hljs-comment">// do slow work without it</span>
+    <span class="hljs-comment">// ...</span>
+    lk.<span class="hljs-built_in">lock</span>();                               <span class="hljs-comment">// take it again; destructor unlocks</span>
+}
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">read_side</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">int</span>&amp; x)</span> </span>{
+    <span class="hljs-function">std::shared_lock <span class="hljs-title">lk</span><span class="hljs-params">(rw)</span></span>;                 <span class="hljs-comment">// many readers at once</span>
+    <span class="hljs-keyword">return</span> x;
+}
+</code></pre>
+
+<h3 id="ch03-lock-tags">defer_lock, try_to_lock and adopt_lock</h3>
+<p>Tag arguments change what the constructor does:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Tag</th><th>Constructor does</th><th>Accepted by</th></tr></thead>
+<tbody>
+<tr><td><code>std::defer_lock</code></td><td>nothing; the lock starts unowned</td><td><code>unique_lock</code>, <code>shared_lock</code></td></tr>
+<tr><td><code>std::try_to_lock</code></td><td>calls <code>try_lock()</code>; check <code>owns_lock()</code></td><td><code>unique_lock</code>, <code>shared_lock</code></td></tr>
+<tr><td><code>std::adopt_lock</code></td><td>assumes the caller already locked it; only unlocks</td><td><code>lock_guard</code>, <code>unique_lock</code>, <code>shared_lock</code>, <code>scoped_lock</code></td></tr>
+</tbody></table></div>
+<p>Note the argument order: <code>std::lock_guard g(m, std::adopt_lock)</code> puts the tag second, but <code>std::scoped_lock s(std::adopt_lock, m1, m2)</code> puts it first, because the mutex list is variadic.</p>
+
+<h3 id="ch03-std-lock">std::lock for several mutexes</h3>
+<p>Locking two mutexes one after the other in different orders in different threads is the classic deadlock (see <a href="#ch03-deadlock">deadlock</a>). <code>std::lock(m1, m2, ...)</code> locks them all without deadlocking, whatever order other <code>std::lock</code> callers use. The standard only says "a deadlock avoidance algorithm such as try-and-back-off"; libstdc++ and libc++ both lock one, then <code>try_lock</code> the rest, and on failure release everything and start again from the mutex that failed. If any lock throws, the ones already taken are released.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">transfer</span><span class="hljs-params">(Account&amp; a, Account&amp; b, <span class="hljs-type">int</span> amount)</span> </span>{
+    <span class="hljs-comment">// C++11 style</span>
+    <span class="hljs-function">std::unique_lock <span class="hljs-title">la</span><span class="hljs-params">(a.m, std::defer_lock)</span></span>;
+    <span class="hljs-function">std::unique_lock <span class="hljs-title">lb</span><span class="hljs-params">(b.m, std::defer_lock)</span></span>;
+    std::<span class="hljs-built_in">lock</span>(la, lb);
+    <span class="hljs-comment">// C++17 style, one line, same algorithm:</span>
+    <span class="hljs-comment">// std::scoped_lock lk(a.m, b.m);</span>
+    a.balance -= amount;
+    b.balance += amount;
+}
+</code></pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>Two famous one-character bugs. <code>std::lock_guard&lt;std::mutex&gt;(m);</code> does not lock <code>m</code>: it declares a new variable named <code>m</code> of type <code>lock_guard</code> (the parentheses around a declarator are allowed). Because <code>lock_guard</code> has no default constructor this fails to compile, which is the lucky outcome; the same pattern with a type that has a default constructor compiles silently. <code>std::scoped_lock{m};</code> does compile: it creates an unnamed temporary that locks and unlocks <code>m</code> at the semicolon, leaving the rest of the scope unprotected. Always name the lock object.</p></div>
+<p>Also, <code>transfer(a, a, 10)</code> with <code>std::scoped_lock lk(a.m, a.m)</code> locks the same <code>std::mutex</code> twice, which is undefined. Check for <code>&amp;a == &amp;b</code> first.</p>
+</section>
+
+<section id="ch03-condvars" data-roles="th"><div class="sec-head"><h2>Condition variables</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A mutex protects some shared state. A condition variable is a waiting room attached to that state: a thread that finds the state "not ready yet" goes to sleep in the waiting room, and a thread that changes the state rings the bell. The condition variable itself remembers nothing. The truth is always in the shared state, and the waiter must re-check it after every wake-up.</p>
+
+<h3 id="ch03-cv-wait">How wait works</h3>
+<p><code>cv.wait(lk)</code> does three things, and the first two are atomic with respect to <code>notify</code>: it unlocks the mutex held by <code>lk</code>, puts the thread to sleep on the condition variable, and when woken, re-locks the mutex before returning. Because unlock and sleep are one step, a notifier that changes the state under the same mutex cannot slip its notification into the gap between "I checked the state" and "I am asleep". That gap is exactly the lost-wakeup bug that hand-rolled "check flag, then sleep" code has.</p>
+<p>That is why <code>wait</code> takes a <code>std::unique_lock&lt;std::mutex&gt;</code> and not a <code>lock_guard</code>: it needs to unlock and re-lock the mutex, and <code>lock_guard</code> has no such operations. <code>std::condition_variable_any</code> accepts any lockable type (a <code>shared_lock</code>, your own spinlock) at some extra cost, and in C++20 it also has overloads that take a <code>std::stop_token</code>.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 270" role="img" aria-label="Condition variable wait and notify sequence">
+<defs><marker id="ch03-c06a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="60" class="t-bold">Waiter</text>
+<text x="20" y="190" class="t-bold">Notifier</text>
+<line x1="90" y1="55" x2="700" y2="55" class="d-line d-dash"/>
+<line x1="90" y1="185" x2="700" y2="185" class="d-line d-dash"/>
+<rect x="95" y="38" width="120" height="34" rx="5" class="d-box d-acc"/>
+<text x="155" y="52" text-anchor="middle" class="t-small">lock m</text>
+<text x="155" y="66" text-anchor="middle" class="t-small">ready? false</text>
+<rect x="225" y="38" width="130" height="34" rx="5" class="d-box d-key"/>
+<text x="290" y="52" text-anchor="middle" class="t-small">wait: unlock m</text>
+<text x="290" y="66" text-anchor="middle" class="t-small">and sleep (atomic)</text>
+<rect x="365" y="38" width="150" height="34" rx="5" class="d-box d-soft"/>
+<text x="440" y="60" text-anchor="middle" class="t-small t-muted">asleep, m is free</text>
+<rect x="545" y="38" width="150" height="34" rx="5" class="d-box d-acc"/>
+<text x="620" y="52" text-anchor="middle" class="t-small">re-lock m, re-check</text>
+<text x="620" y="66" text-anchor="middle" class="t-small">ready? true, go</text>
+<rect x="365" y="168" width="110" height="34" rx="5" class="d-box d-acc"/>
+<text x="420" y="182" text-anchor="middle" class="t-small">lock m</text>
+<text x="420" y="196" text-anchor="middle" class="t-small">ready = true</text>
+<rect x="485" y="168" width="70" height="34" rx="5" class="d-box d-soft"/>
+<text x="520" y="189" text-anchor="middle" class="t-small">unlock m</text>
+<rect x="565" y="168" width="100" height="34" rx="5" class="d-box d-key"/>
+<text x="615" y="189" text-anchor="middle" class="t-small">notify_one()</text>
+<line x1="610" y1="166" x2="610" y2="76" class="d-line-acc" marker-end="url(#ch06-c06a)"/>
+<text x="618" y="125" class="t-small t-acc">wake</text>
+<text x="290" y="110" text-anchor="middle" class="t-small t-trap">no gap here for a</text>
+<text x="290" y="125" text-anchor="middle" class="t-small t-trap">notification to be lost</text>
+<text x="90" y="250" class="t-small t-muted">time →   The state change happens under m, so it is either before the check (waiter never sleeps) or after the sleep (waiter is woken).</text>
+</svg></div><figcaption><b>The predicate is checked and the thread goes to sleep under one mutex.</b> Because <code>wait</code> releases the mutex and sleeps as one step, and the notifier changes <code>ready</code> while holding the same mutex, the change lands either before the check or after the sleep. Both orders are safe.</figcaption></figure>
+
+<h3 id="ch03-cv-predicate">Always wait with a predicate: spurious and stolen wake-ups</h3>
+<p>A waiter can return from <code>wait</code> without the state being ready, for two reasons:</p>
+<ul>
+  <li><b>Spurious wake-ups.</b> The standard explicitly allows <code>wait</code> to return with no notification (POSIX allows the same for <code>pthread_cond_wait</code>). Implementations use this freedom so that signals and futex races do not need extra bookkeeping.</li>
+  <li><b>Stolen wake-ups.</b> Between the notify and the moment the waiter re-acquires the mutex, a third thread can take the mutex and consume the item. This is "Mesa semantics": signal means "the state may have changed", not "the state is now true for you".</li>
+</ul>
+<p>So the waiting code is always a loop. The predicate overload writes the loop for you, and the two forms are equivalent:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m)</span></span>;
+cv.<span class="hljs-built_in">wait</span>(lk, [&amp;] { <span class="hljs-keyword">return</span> !q.<span class="hljs-built_in">empty</span>(); });   <span class="hljs-comment">// preferred</span>
+
+<span class="hljs-comment">// is exactly</span>
+<span class="hljs-keyword">auto</span> pred = [&amp;] { <span class="hljs-keyword">return</span> !q.<span class="hljs-built_in">empty</span>(); };
+<span class="hljs-keyword">while</span> (!<span class="hljs-built_in">pred</span>())
+    cv.<span class="hljs-built_in">wait</span>(lk);
+</code></pre>
+<p>The timed versions follow the same rule. <code>wait_for(lk, d, pred)</code> returns the value of <code>pred()</code> at the end, so <code>false</code> means "timed out and still not ready". Without a predicate, <code>wait_for</code> returns <code>std::cv_status::timeout</code> or <code>no_timeout</code>, and <code>no_timeout</code> tells you nothing about the state.</p>
+
+<h3 id="ch03-cv-lost">Lost wake-ups</h3>
+<p>A notification is not stored. If <code>notify_one()</code> runs when nobody is waiting, it does nothing. A waiter that arrives later and calls <code>wait(lk)</code> without a predicate sleeps forever. The predicate fixes this, because the late waiter sees <code>ready == true</code> and never sleeps.</p>
+<p>The second way to lose a wake-up is changing the state without the mutex, even if the state is a <code>std::atomic&lt;bool&gt;</code>:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-comment">// Waiter                               // Notifier (BROKEN)</span>
+<span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m)</span></span>;
+<span class="hljs-comment">// pred(): ready is false</span>
+                                        ready = <span class="hljs-literal">true</span>;        <span class="hljs-comment">// atomic store, no lock</span>
+                                        cv.<span class="hljs-built_in">notify_one</span>();     <span class="hljs-comment">// nobody waiting yet: lost</span>
+cv.<span class="hljs-built_in">wait</span>(lk);  <span class="hljs-comment">// sleeps forever</span>
+</code></pre>
+<p>The waiter checked the predicate under <code>m</code>, then the notifier changed the state and notified in the window before the waiter went to sleep. Rule: <b>modify the predicate's state while holding the mutex</b>, then notify. Taking and releasing the mutex between the store and the notify is enough to close the window.</p>
+
+<h3 id="ch03-cv-notify">notify_one vs notify_all, and notifying under the lock</h3>
+<p><code>notify_one()</code> wakes at least one waiter (usually exactly one); <code>notify_all()</code> wakes all of them, and they then take the mutex one at a time. Use <code>notify_one</code> when any single waiter can make progress with the change and all waiters wait for the same condition, such as "an item was pushed". Use <code>notify_all</code> when the change may matter to many waiters (shutdown, a barrier opening) or when waiters on the same condition variable wait for <b>different</b> predicates. In the second case <code>notify_one</code> may wake a thread whose predicate is still false; it goes back to sleep, and the thread that could have run is never told. The cleaner fix is one condition variable per predicate, for example <code>not_full</code> and <code>not_empty</code> in a bounded buffer.</p>
+<p>Should you notify while holding the mutex? Both are correct, provided the state was modified under the mutex. Notifying after unlocking avoids "hurry up and wait", where the woken thread immediately blocks on the mutex the notifier still holds (some implementations move the waiter straight to the mutex queue to soften this). Notifying under the lock is required in one case: when the waiter may destroy the condition variable as soon as it sees the state, for example a waiter that owns a stack-allocated <code>condition_variable</code> and returns. If the notifier unlocks first, the waiter can wake spuriously, see the state, return and destroy the object before the notifier calls <code>notify_one()</code> on it.</p>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>The condition variable recipe: (1) shared state protected by a mutex; (2) the waiter takes a <code>unique_lock</code> and calls <code>wait(lk, pred)</code>; (3) the notifier locks, changes the state, and calls <code>notify_one</code> or <code>notify_all</code> (under the lock or just after unlocking). Every lost-wakeup and spurious-wakeup bug is a deviation from these three lines.</p></div>
+</section>
+
+<section id="ch03-semaphores" data-roles="th"><div class="sec-head"><h2>Semaphores, and how they differ from a mutex</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A semaphore is a counter of permits. <code>acquire()</code> (Dijkstra's P) waits until the count is positive and decrements it; <code>release()</code> (V) increments it and wakes a waiter. A counting semaphore initialised to N lets at most N threads through at once. A binary semaphore has a maximum of 1.</p>
+<p>C++20 provides <code>std::counting_semaphore&lt;LeastMaxValue&gt;</code> and <code>std::binary_semaphore</code>, an alias for <code>counting_semaphore&lt;1&gt;</code>, in <code>&lt;semaphore&gt;</code>. The operations are <code>acquire()</code>, <code>try_acquire()</code>, <code>try_acquire_for()</code>, <code>try_acquire_until()</code> and <code>release(n = 1)</code>. Releasing past <code>max()</code>, or releasing a negative count, is undefined. Like <code>try_lock</code>, <code>try_acquire</code> may fail spuriously.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function">std::counting_semaphore&lt;8&gt; <span class="hljs-title">slots</span><span class="hljs-params">(<span class="hljs-number">4</span>)</span></span>;   <span class="hljs-comment">// at most 4 concurrent downloads</span>
+
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">download</span><span class="hljs-params">(<span class="hljs-type">const</span> Url&amp; u)</span> </span>{
+    slots.<span class="hljs-built_in">acquire</span>();
+    <span class="hljs-built_in">fetch</span>(u);                              <span class="hljs-comment">// if this throws, the permit leaks: wrap in RAII</span>
+    slots.<span class="hljs-built_in">release</span>();
+}
+</code></pre>
+
+<h3 id="ch03-sem-vs-mutex">Mutex vs binary semaphore</h3>
+<p>The two look alike (one holder at a time) but have different contracts:</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Mutex</th><th>Binary semaphore</th></tr></thead>
+<tbody>
+<tr><td>Ownership</td><td>Yes. Only the locking thread may unlock.</td><td>No. Any thread may release.</td></tr>
+<tr><td>Purpose</td><td>Mutual exclusion around a critical section</td><td>Signalling between threads ("item ready"), or exclusion without ownership</td></tr>
+<tr><td>Recursion</td><td>Possible with <code>recursive_mutex</code></td><td>Second acquire by the same thread blocks</td></tr>
+<tr><td>Priority inheritance</td><td>Possible, because the owner is known</td><td>Impossible: no owner to boost</td></tr>
+<tr><td>Wrong use</td><td>Unlock from another thread is UB</td><td>Extra release overflows the count (UB past max)</td></tr>
+</tbody></table></div>
+<p>The ownership row is the interview answer. Because a semaphore has no owner, it is the right tool for one thread to signal another (thread A releases, thread B acquires), and the wrong tool for protecting data, because nothing stops an unrelated thread from releasing it and nothing can boost the holder's priority. Linux priority-inheritance mutexes work precisely because a PI futex word stores the owner's thread id, so the kernel knows which thread to boost.</p>
+</section>
+
+<section id="ch03-once-latch" data-roles="th"><div class="sec-head"><h2>call_once, latches and barriers</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch03-call-once">std::call_once and magic statics</h3>
+<p><code>std::call_once(flag, f, args...)</code> runs <code>f</code> exactly once across all threads that call it with the same <code>std::once_flag</code>. Other callers block until the first call finishes and then see all its side effects. If <code>f</code> throws, the call is "exceptional": the exception propagates to that caller, the flag stays unset, and the next caller tries again.</p>
+<p>For the common case of lazily building one object, a function-local <code>static</code> does the same job with less code. Since C++11, initialisation of a block-scope static is thread-safe: concurrent callers wait for the first initialisation, and if the constructor throws, the next caller retries ([stmt.dcl]/4, often called "magic statics"). This is the standard way to write a thread-safe Meyers singleton.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function">Config&amp; <span class="hljs-title">config</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">static</span> Config c = <span class="hljs-built_in">load_config</span>();   <span class="hljs-comment">// runs once, thread-safe since C++11</span>
+    <span class="hljs-keyword">return</span> c;
+}
+</code></pre>
+
+<h3 id="ch03-latch-barrier">std::latch and std::barrier (C++20)</h3>
+<ul>
+  <li><b><code>std::latch</code></b> is a single-use countdown. <code>count_down(n)</code> decrements it, <code>wait()</code> blocks until it reaches zero, <code>arrive_and_wait()</code> does both, <code>try_wait()</code> polls. Once at zero it stays open. Use it for "start all workers at once" or "wait until N tasks finished".</li>
+  <li><b><code>std::barrier</code></b> is reusable. Each phase, N threads call <code>arrive_and_wait()</code>; when the last one arrives, an optional completion function runs once (on one of the arriving threads), the barrier resets for the next phase, and everyone is released. <code>arrive_and_drop()</code> removes a participant for future phases. Use it for iterative algorithms where every thread must finish step k before anyone starts step k+1.</li>
+</ul>
+<p>Before C++20 both were built from a mutex, a condition variable and a counter; the barrier also needs a generation number so that a fast thread that re-enters the next phase does not confuse threads still leaving the current one. Coding drill <a href="#ch03-k-barrier">a reusable barrier</a> asks you to build one.</p>
+</section>
+
+<section id="ch03-deadlock" data-roles="th"><div class="sec-head"><h2>Deadlock: conditions, prevention, detection</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A deadlock is a set of threads in which each one waits for a resource held by another one in the set, so none can ever proceed. Nothing is spinning and nothing crashes; the threads simply sleep forever, and the CPU usage of the process drops to zero. That silence is often how you notice it in production.</p>
+
+<h3 id="ch03-coffman">The four Coffman conditions</h3>
+<p>Coffman, Elphick and Shoshani (1971) showed that a deadlock over resources needs all four of these at once:</p>
+<ol>
+  <li><b>Mutual exclusion.</b> A resource can be held by only one thread at a time.</li>
+  <li><b>Hold and wait.</b> A thread holds at least one resource while waiting for another.</li>
+  <li><b>No preemption.</b> A resource cannot be taken away; the holder must release it voluntarily.</li>
+  <li><b>Circular wait.</b> There is a cycle T1 → T2 → ... → T1 in the wait-for graph, where an edge means "waits for a resource held by".</li>
+</ol>
+<p>Break any one and deadlock is impossible. In practice you break circular wait (lock ordering) or hold and wait (acquire everything at once with <code>std::scoped_lock</code>, or <code>try_lock</code> and back off). Mutual exclusion is the reason the mutex exists, and preemption of a mutex would leave the protected data half updated.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 280" role="img" aria-label="Dining philosophers wait-for cycle and the lock ordering fix">
+<defs><marker id="ch03-c06b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="175" y="22" text-anchor="middle" class="t-bold">Everyone takes left fork first</text>
+<text x="545" y="22" text-anchor="middle" class="t-bold">P3 takes the lower-numbered fork first</text>
+<circle cx="175" cy="60" r="22" class="d-box d-trap"/><text x="175" y="64" text-anchor="middle" class="t-small">P0</text>
+<circle cx="275" cy="140" r="22" class="d-box d-trap"/><text x="275" y="144" text-anchor="middle" class="t-small">P1</text>
+<circle cx="175" cy="220" r="22" class="d-box d-trap"/><text x="175" y="224" text-anchor="middle" class="t-small">P2</text>
+<circle cx="75" cy="140" r="22" class="d-box d-trap"/><text x="75" y="144" text-anchor="middle" class="t-small">P3</text>
+<line x1="193" y1="74" x2="257" y2="124" class="d-line-trap" marker-end="url(#ch06-c06b)"/>
+<line x1="257" y1="156" x2="193" y2="206" class="d-line-trap" marker-end="url(#ch06-c06b)"/>
+<line x1="157" y1="206" x2="93" y2="156" class="d-line-trap" marker-end="url(#ch06-c06b)"/>
+<line x1="93" y1="124" x2="157" y2="74" class="d-line-trap" marker-end="url(#ch06-c06b)"/>
+<text x="175" y="145" text-anchor="middle" class="t-small t-trap">cycle: deadlock</text>
+<text x="175" y="262" text-anchor="middle" class="t-small t-muted">arrow = waits for a fork held by</text>
+<circle cx="545" cy="60" r="22" class="d-box d-key"/><text x="545" y="64" text-anchor="middle" class="t-small">P0</text>
+<circle cx="645" cy="140" r="22" class="d-box d-key"/><text x="645" y="144" text-anchor="middle" class="t-small">P1</text>
+<circle cx="545" cy="220" r="22" class="d-box d-key"/><text x="545" y="224" text-anchor="middle" class="t-small">P2</text>
+<circle cx="445" cy="140" r="22" class="d-box d-acc"/><text x="445" y="144" text-anchor="middle" class="t-small">P3</text>
+<line x1="563" y1="74" x2="627" y2="124" class="d-line-key" marker-end="url(#ch06-c06b)"/>
+<line x1="627" y1="156" x2="563" y2="206" class="d-line-key" marker-end="url(#ch06-c06b)"/>
+<line x1="463" y1="124" x2="527" y2="74" class="d-line d-dash" marker-end="url(#ch06-c06b)"/>
+<text x="470" y="205" text-anchor="middle" class="t-small t-acc">P3 waits for F0</text>
+<text x="470" y="219" text-anchor="middle" class="t-small t-acc">holding nothing</text>
+<text x="545" y="145" text-anchor="middle" class="t-small t-key">no cycle</text>
+<text x="545" y="262" text-anchor="middle" class="t-small t-muted">P2 gets F3 too, eats, releases: chain unwinds</text>
+</svg></div><figcaption><b>Deadlock needs a cycle in the wait-for graph.</b> With four philosophers each holding the left fork and waiting for the right one, the graph is a ring. If every thread acquires forks in increasing number order, philosopher 3 asks for fork 0 before fork 3, holds nothing while waiting, and the ring is broken.</figcaption></figure>
+
+<h3 id="ch03-lock-ordering">Prevention by lock ordering</h3>
+<p>Give every mutex a rank and always acquire in increasing rank. Then a cycle would need some thread to wait for a lower rank while holding a higher one, which the rule forbids. Ways to get a rank:</p>
+<ul>
+  <li>A documented global order ("account lock before ledger lock"), checked in code review.</li>
+  <li>Address order for instances of the same type: lock the mutex with the lower address first. Comparing unrelated pointers with the built-in <code>&lt;</code> is unspecified, so compare with <code>std::less&lt;&gt;</code>, which guarantees a strict total order over pointers.</li>
+  <li>A hierarchical mutex that stores its level and checks, through a <code>thread_local</code> "current level", that each new lock is lower than the last one; violations throw at once in tests instead of deadlocking once a month in production.</li>
+  <li>Acquire all at once with <code>std::scoped_lock(a, b)</code>, which needs no global order.</li>
+</ul>
+<p>The other prevention rules are simple habits: never call unknown code (callbacks, virtual functions supplied by users, signals to observers) while holding a lock, keep critical sections short, and never wait for a thread (<code>join</code>, a future) while holding a lock that thread may need.</p>
+
+<h3 id="ch03-detection">Avoidance and detection</h3>
+<p><b>Avoidance</b> means refusing a request that could lead to deadlock later. Dijkstra's banker's algorithm does this: each process declares its maximum need, and the system grants a request only if the resulting state is safe (some order exists in which every process can finish). It is a textbook favourite but rarely used in general-purpose systems, because the maximum needs are not known in advance.</p>
+<p><b>Detection</b> means letting deadlocks happen and finding the cycle. A database builds a wait-for graph of transactions, finds cycles periodically or on timeout, and aborts a victim. In C++ programs, detection is mostly a debugging activity: attach <code>gdb</code> and run <code>thread apply all bt</code>, look for threads blocked in <code>futex_wait</code> or <code>__lll_lock_wait</code>, and match each blocked mutex to its owner (glibc stores the owner's TID in the <code>pthread_mutex_t</code>, in the field <code>__data.__owner</code>, which gdb can print). ThreadSanitizer reports "lock-order-inversion (potential deadlock)" when it sees two locks taken in both orders, even if the deadlock did not happen on that run. The Linux kernel's lockdep does the same for kernel locks.</p>
+<p><b>Recovery</b> options are limited for mutexes: you cannot preempt a mutex safely, so a process usually dumps state and restarts. Timeouts (<code>try_lock_for</code>) let a thread give up, release what it holds and retry, which converts a deadlock into a possible livelock.</p>
+
+<h3 id="ch03-dining">The dining philosophers</h3>
+<p>Dijkstra's problem: N philosophers sit around a table with one fork between each pair. A philosopher needs both neighbouring forks to eat. If all pick up their left fork at the same time, each waits for a right fork that will never be released: all four Coffman conditions hold. The standard solutions map to the conditions:</p>
+<ul>
+  <li><b>Resource ordering</b> (breaks circular wait): number the forks and always take the lower number first. One philosopher ends up reaching right first.</li>
+  <li><b>An arbitrator or a limit</b> (breaks circular wait): a counting semaphore initialised to N-1 lets at most N-1 philosophers try to pick up forks, so at least one gets both.</li>
+  <li><b>All or nothing</b> (breaks hold and wait): take both forks with <code>std::scoped_lock(left, right)</code>, or take the left, <code>try_lock</code> the right and put the left back on failure.</li>
+  <li><b>Chandy/Misra</b>: forks are dirty or clean and requested by message; it also avoids starvation, but is rarely asked beyond its name.</li>
+</ul>
+</section>
+
+<section id="ch03-liveness" data-roles="th"><div class="sec-head"><h2>Livelock, starvation and priority inversion</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch03-livelock">Livelock and starvation</h3>
+<p><b>Livelock</b>: threads are not blocked, they keep running, but they keep reacting to each other and make no progress. The picture is two people in a corridor who both step aside in the same direction, again and again. In code it appears with naive try-and-back-off: two threads each lock one mutex, fail <code>try_lock</code> on the other, release, and retry in perfect lockstep. Random or exponential back-off, or a fixed lock order, cures it.</p>
+<p><b>Starvation</b>: the system as a whole makes progress, but one thread never does. Causes include unfair locks (a thread that just released a mutex grabs it again before a woken waiter runs; this "barging" is good for throughput and bad for fairness), reader-preferring readers-writer locks that never let a writer in, and strict priority scheduling where a low-priority thread never gets the CPU. <code>std::mutex</code> makes no fairness guarantee. A ticket lock (<a href="#ch02">Ch 2</a>) is FIFO and therefore starvation-free, at the cost of throughput.</p>
+
+<h3 id="ch03-prio-inversion">Priority inversion and the Mars Pathfinder</h3>
+<p>Priority inversion happens with strict priorities and a shared lock. Low-priority task L holds a mutex. High-priority task H wakes and blocks on it, which is fine for a short time. Then medium-priority task M, which does not need the mutex at all, becomes runnable. M preempts L, so L cannot finish its critical section and release the mutex, so H waits for M: an unbounded wait, set by a task H does not even interact with.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 250" role="img" aria-label="Priority inversion timeline and the effect of priority inheritance">
+<text x="20" y="54" class="t-bold">H (high)</text>
+<text x="20" y="114" class="t-bold">M (medium)</text>
+<text x="20" y="174" class="t-bold">L (low)</text>
+<line x1="110" y1="60" x2="700" y2="60" class="d-grid"/>
+<line x1="110" y1="120" x2="700" y2="120" class="d-grid"/>
+<line x1="110" y1="180" x2="700" y2="180" class="d-grid"/>
+<rect x="110" y="162" width="90" height="26" class="d-box d-acc"/>
+<text x="155" y="179" text-anchor="middle" class="t-small">L locks m</text>
+<rect x="200" y="42" width="50" height="26" class="d-box d-key"/>
+<text x="225" y="59" text-anchor="middle" class="t-small">H runs</text>
+<rect x="250" y="42" width="330" height="26" class="d-box d-trap"/>
+<text x="415" y="59" text-anchor="middle" class="t-small t-trap">H blocked on m, waiting for M to finish</text>
+<rect x="270" y="102" width="290" height="26" class="d-box d-soft"/>
+<text x="415" y="119" text-anchor="middle" class="t-small">M runs (does not need m), preempts L</text>
+<rect x="560" y="162" width="40" height="26" class="d-box d-acc"/>
+<text x="580" y="179" text-anchor="middle" class="t-small">L</text>
+<rect x="600" y="42" width="90" height="26" class="d-box d-key"/>
+<text x="645" y="59" text-anchor="middle" class="t-small">H gets m</text>
+<line x1="250" y1="72" x2="250" y2="200" class="d-line d-dash"/>
+<text x="254" y="214" class="t-small t-muted">H calls lock(m)</text>
+<text x="110" y="238" class="t-small t-acc">With priority inheritance, L runs at H's priority from the moment H blocks, so M cannot preempt it.</text>
+</svg></div><figcaption><b>The medium task delays the high task without touching the lock.</b> H's waiting time is bounded only by how long M runs. Priority inheritance raises L to H's priority while H waits, so L finishes its critical section first and H's delay is bounded by one critical section.</figcaption></figure>
+<p>The famous case is the Mars Pathfinder lander in 1997. On VxWorks, a low-priority meteorological data task held the mutex guarding the shared information bus. The high-priority bus management task blocked on it, a long-running medium-priority communications task preempted the low one, and a watchdog noticed that the bus task had not completed its cycle and reset the whole system, repeatedly. Engineers reproduced it on the ground and fixed it by uploading a change that turned on priority inheritance for that mutex.</p>
+<p>The two standard fixes:</p>
+<ul>
+  <li><b>Priority inheritance</b>: while a higher-priority thread waits on a mutex, the owner temporarily runs at the waiter's priority. POSIX: <code>pthread_mutexattr_setprotocol(&amp;attr, PTHREAD_PRIO_INHERIT)</code>; Linux implements it with PI futexes, and the RT kernel uses it for most locks. It needs an owner, which is why semaphores cannot do it.</li>
+  <li><b>Priority ceiling</b> (<code>PTHREAD_PRIO_PROTECT</code>): each mutex has a ceiling priority equal to the highest priority of any thread that uses it, and a thread holding the mutex runs at the ceiling. It also prevents some deadlocks, but you must know every user's priority.</li>
+</ul>
+<p><code>std::mutex</code> has no portable way to request either; real-time code uses a pthread mutex created with the attribute, often wrapped in a small class that meets the <code>Lockable</code> requirements so <code>std::scoped_lock</code> still works.</p>
+</section>
+
+<section id="ch03-classic" data-roles="th"><div class="sec-head"><h2>Classic problems: producer-consumer, readers-writers, monitors</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch03-bounded-buffer">Producer-consumer with a bounded buffer</h3>
+<p>Producers put items into a fixed-capacity buffer and consumers take them out. Producers must wait while it is full and consumers while it is empty. The textbook semaphore solution uses three semaphores: <code>empty</code> (initialised to capacity), <code>full</code> (initialised to 0) and a mutex. A producer does <code>empty.acquire(); lock; push; unlock; full.release()</code>, and a consumer mirrors it. Acquiring the counting semaphore before the mutex matters: if a producer took the mutex first and then blocked on <code>empty</code>, no consumer could ever get the mutex to make space, which is a deadlock.</p>
+<p>In C++ the usual form is a monitor: one mutex and two condition variables, <code>not_full</code> and <code>not_empty</code>. It also makes shutdown easy, because a <code>closed</code> flag becomes part of both predicates. Coding drill <a href="#ch03-k-queue">bounded queue</a> builds it.</p>
+
+<h3 id="ch03-readers-writers">Readers-writers and writer starvation</h3>
+<p>Many readers may read at once; a writer needs exclusive access. The three textbook variants differ only in who goes first when both are waiting:</p>
+<ul>
+  <li><b>Readers preference</b> (first readers-writers problem): a new reader may enter whenever other readers are inside. A steady stream of overlapping readers keeps the count above zero forever and the writer starves.</li>
+  <li><b>Writers preference</b> (second problem): once a writer is waiting, new readers queue behind it. Writers can now starve readers if writes are continuous, but in most systems writes are rare and must not be delayed, so this is the usual choice.</li>
+  <li><b>Fair</b> (third problem): arrival order (FIFO), for example with a ticket or a turnstile mutex that every thread passes through.</li>
+</ul>
+<p>A writer-preferring lock needs only: <code>readers</code> (active count), <code>writer</code> (active flag), <code>waiting_writers</code>, one mutex and one or two condition variables. Readers wait for <code>!writer &amp;&amp; waiting_writers == 0</code>; writers increment <code>waiting_writers</code>, wait for <code>!writer &amp;&amp; readers == 0</code>, then decrement it. Coding drill <a href="#ch03-k-rwlock">readers-writer lock</a> builds it.</p>
+
+<h3 id="ch03-monitors">Monitors</h3>
+<p>A monitor (Hoare and Brinch Hansen, 1973 to 1974) is an object whose methods all run under one implicit mutex, plus condition variables to wait inside the methods. Java's <code>synchronized</code> methods with <code>wait</code>/<code>notify</code> are a monitor. In C++ you write it explicitly: a class with a private <code>std::mutex</code>, private state, condition variables, and every public method starting with <code>std::unique_lock lk(m_);</code>.</p>
+<p>The detail interviewers ask about is signalling semantics. In <b>Hoare semantics</b> (signal-and-wait), the signalled thread runs immediately, inside the monitor, so the condition is guaranteed true and an <code>if</code> would do. In <b>Mesa semantics</b> (signal-and-continue), used by Mesa, POSIX, Java and C++, the signaller keeps running and the woken thread only becomes runnable, so another thread may change the state first. That is the deep reason the waiting code is <code>while (!pred()) wait();</code> and never <code>if</code>.</p>
+</section>
+
+<section id="ch03-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When do you use <code>lock_guard</code>, <code>scoped_lock</code> and <code>unique_lock</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>scoped_lock</code> (C++17) is the default for locking one or several mutexes for a whole scope; <code>lock_guard</code> is its single-mutex C++11 predecessor; <code>unique_lock</code> is for when you need to unlock early, lock later, try or time out, move the lock, or pass it to a condition variable.</p>
+    <p><b>Why.</b> <code>lock_guard</code> and <code>scoped_lock</code> have exactly two operations, lock in the constructor and unlock in the destructor, so they cannot be misused and cost nothing extra. <code>unique_lock</code> tracks whether it owns the mutex (an extra <code>bool</code> and a check in the destructor) to support <code>defer_lock</code>, <code>try_to_lock</code>, <code>unlock()</code>, <code>release()</code> and move. A common wrong answer is "<code>unique_lock</code> is for <code>unique_ptr</code>-like exclusive ownership and <code>lock_guard</code> is shared"; both are exclusive. For shared ownership of a <code>shared_mutex</code>, use <code>shared_lock</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why does <code>condition_variable::wait</code> take a <code>std::unique_lock&lt;std::mutex&gt;</code> and not a <code>lock_guard</code> or a raw mutex?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Because <code>wait</code> must unlock the mutex while the thread sleeps and lock it again before returning, and it must be able to tell that the caller really holds it. <code>unique_lock</code> is the RAII type that supports unlock and relock; <code>lock_guard</code> does not.</p>
+    <p><b>Why.</b> The atomic "unlock and sleep" step is what prevents lost wake-ups (see <a href="#ch03-cv-wait">How wait works</a>). Taking a <code>unique_lock</code> also documents and enforces that the lock is held on entry (the precondition is <code>lk.owns_lock()</code>) and that it is held again on exit, even if <code>wait</code> throws. A raw <code>std::mutex&amp;</code> would lose that exception safety. Restricting the type to <code>unique_lock&lt;std::mutex&gt;</code> lets the implementation call <code>pthread_cond_wait</code> on the native handle directly. If you need another lock type, use <code>std::condition_variable_any</code>, which works with anything that has <code>lock()</code> and <code>unlock()</code>, at the cost of an internal mutex.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What is a spurious wake-up, why does the standard allow it, and is the predicate overload of <code>wait</code> only there to handle it?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A spurious wake-up is a return from <code>wait</code> without any notify. It is allowed so that implementations can be simpler and faster (for example after a signal interrupts the futex wait, or when racing notifies are coalesced). The predicate loop handles it, but it also handles two other problems: stolen wake-ups and notifications that happened before the wait.</p>
+    <p><b>Why.</b> <code>cv.wait(lk, pred)</code> is defined as <code>while (!pred()) wait(lk);</code>. Checking first means a thread that arrives after the notify never sleeps (no lost wake-up). Checking after each wake-up handles both a spurious return and a third thread that consumed the item between the notify and this thread re-acquiring the mutex (Mesa semantics). Candidates who say "spurious wake-ups are rare, so an <code>if</code> is fine in practice" miss the stolen-wake-up case, which happens all the time with several consumers.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>The flag is a <code>std::atomic&lt;bool&gt;</code>, so the notifier does <code>ready = true; cv.notify_one();</code> without locking the mutex. The waiter uses <code>cv.wait(lk, [&amp;]{ return ready.load(); })</code>. There is no data race. Is the code correct?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. It can lose the wake-up and hang the waiter forever, even though it is free of data races.</p>
+    <p><b>Why.</b> The waiter evaluates the predicate while holding the mutex, sees <code>false</code>, and is about to sleep. The notifier does not take the mutex, so it can store <code>true</code> and call <code>notify_one()</code> right in that window, before the waiter is registered as waiting. The notify finds nobody and is dropped; the waiter then sleeps, and nothing will ever re-check the predicate. The fix is to make the store under the mutex (<code>{ std::lock_guard g(m); ready = true; } cv.notify_one();</code>), and then the flag no longer needs to be atomic. The mutex is what orders "check then sleep" against "set then notify". Atomics fix data races, not this ordering problem.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Should you call <code>notify_one()</code> while still holding the mutex, or after releasing it?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Either is correct as long as the shared state was changed under the mutex. Notifying after unlocking is usually slightly faster; notifying under the lock is required when the waiter may destroy the condition variable as soon as it sees the new state.</p>
+    <p><b>Why.</b> If you notify while holding the lock, the woken thread runs, tries to take the mutex, finds it held and blocks again ("hurry up and wait"); some implementations avoid the extra trip with wait morphing. Unlocking first lets the waiter take the mutex at once. The danger of unlocking first: after the unlock the waiter may already see the state (through a spurious wake-up or a timed wait), return, and destroy a <code>condition_variable</code> that the notifier is about to touch. Holding the lock while notifying keeps the waiter from getting past its re-lock until the notify has finished. The wrong answer is "you must always notify under the lock or the notification can be lost": a notification cannot be lost if the state change itself was made under the lock.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A bounded buffer uses one condition variable for both "not full" and "not empty", and both sides call <code>notify_one()</code>. Producers and consumers both wait with correct predicates. Can it hang?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes. A <code>notify_one()</code> can wake a thread of the wrong kind, whose predicate is still false; it goes back to sleep, and the thread that could have made progress is never woken.</p>
+    <p><b>Why.</b> Example with capacity 1: two consumers wait (buffer empty). A producer pushes and notifies one consumer, then pushes again: the buffer is full, so it waits too. The consumer pops and calls <code>notify_one()</code>, which may wake the other consumer instead of the producer. That consumer sees an empty buffer and sleeps. Now everyone waits. Fixes: use two condition variables (producers wait on <code>not_full</code>, consumers on <code>not_empty</code>, and each side notifies the other one), or use <code>notify_all()</code>. The rule: <code>notify_one</code> is safe only when every waiter on that condition variable waits for the same predicate, so any single waiter can use the change.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What is the difference between a mutex and a binary semaphore? Can a binary semaphore replace a mutex?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A mutex has an owner: only the thread that locked it may unlock it. A semaphore is just a counter: any thread may release it. A binary semaphore can provide mutual exclusion, but you lose ownership checks, recursion support and priority inheritance, so it should be used for signalling, not for protecting data.</p>
+    <p><b>Why.</b> Ownership is what lets a mutex implementation detect a re-lock by the owner (<code>PTHREAD_MUTEX_ERRORCHECK</code>, or <code>std::system_error</code> from <code>unique_lock::lock</code>), lets a debugger show who holds it, and lets the kernel boost the owner's priority to fix priority inversion. In C++, unlocking a <code>std::mutex</code> from a thread that does not own it is undefined, while <code>std::binary_semaphore::release()</code> from another thread is the intended use ("thread A finished setup, thread B may start"). The common wrong answer is "they are the same thing with a different name", which comes from older textbooks that used a semaphore initialised to 1 as the only lock.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>State the four Coffman conditions for deadlock. Which one does each common prevention technique break?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Mutual exclusion, hold and wait, no preemption, circular wait. Lock ordering and lock hierarchies break circular wait. Acquiring all locks at once (<code>std::scoped_lock</code>, <code>std::lock</code>) and try-lock with back-off break hold and wait. Timeouts plus release give a voluntary form of preemption. Lock-free algorithms remove mutual exclusion on the lock itself.</p>
+    <p><b>Why.</b> All four are necessary, so removing one suffices. Mutual exclusion is the whole point of a mutex and real preemption of a mutex would expose half-modified state, so in practice the choices are circular wait and hold and wait. Note that <code>std::lock</code> internally does hold and wait for a moment, then releases on failure: it never waits while holding, which is the property that matters.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the difference between deadlock prevention, avoidance and detection? A system has 12 units of one resource. P0 holds 5 and may need up to 10, P1 holds 2 and may need up to 4, P2 holds 2 and may need up to 9. Is the state safe, and should the banker's algorithm grant P2 one more unit?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Prevention makes one Coffman condition impossible by design (lock ordering, all-at-once acquisition). Avoidance checks each request at run time and grants it only if the system stays in a <b>safe state</b> (the banker's algorithm). Detection lets deadlocks happen, finds cycles in the wait-for graph, and recovers by aborting or restarting a victim. The state is safe; the extra unit for P2 must be refused.</p>
+    <p><b>Why.</b> Three units are free (12 minus 9 held) and the remaining needs are P0 5, P1 2, P2 7. The order P1, P0, P2 lets everyone finish: P1 needs 2 of the 3 free and returns its 4 (5 free), P0 needs 5 and returns 10, P2 needs 7 of the 10. If P2 gets one more unit, 2 are free and the needs become P0 5, P1 2, P2 6: P1 can finish (4 free), but then neither P0 nor P2 can, so the state is unsafe and the request waits. An unsafe state is not yet a deadlock, only a state from which the system can no longer guarantee to avoid one; mixing those up is the common wrong answer. Avoidance needs every maximum declared in advance, which is why general-purpose code uses prevention and databases use detection.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>In the semaphore version of the bounded buffer, a producer runs <code>mtx.acquire(); empty.acquire(); push(item); mtx.release(); full.release();</code>, taking the mutex first "to keep the critical section tidy". Consumers mirror it. What goes wrong?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Deadlock when the buffer is full. A producer holds the mutex and sleeps in <code>empty.acquire()</code>; every consumer then blocks on the mutex, so no consumer can ever remove an item and release <code>empty</code>. The correct order is to wait on the counting semaphore first and take the mutex only around the buffer operation: <code>empty.acquire(); mtx.acquire(); push; mtx.release(); full.release();</code>.</p>
+    <p><b>Why.</b> It is hold and wait plus a cycle: the producer holds the mutex and waits for a slot, and the consumers hold no slot but wait for the mutex the producer will not release. The general rule is never to block on a condition (a semaphore, a condition variable without releasing the lock, a future, a join) while holding a lock that the thread able to satisfy it needs. The order of the two <code>release()</code> calls at the end does not matter for correctness. The condition-variable version avoids the trap automatically, because <code>wait</code> releases the mutex while it sleeps. People often answer "it is only slower because the critical section is longer"; it actually hangs as soon as the buffer fills.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A thread calls <code>m.lock()</code> twice on the same <code>std::mutex</code>. What happens? And with <code>std::recursive_mutex</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> With <code>std::mutex</code> it is undefined behaviour; on Linux with glibc the thread usually blocks forever on itself. With <code>std::recursive_mutex</code> the second lock succeeds and increments a count, and the mutex is released only after two <code>unlock()</code> calls.</p>
+    <p><b>Why.</b> The precondition of <code>mutex::lock()</code> is that the calling thread does not own it ([thread.mutex.requirements.mutex]). A default pthread mutex (<code>PTHREAD_MUTEX_NORMAL</code> behaviour) stores no check, so the futex simply says "locked" and the thread sleeps waiting for itself. The standard also permits an implementation to detect it and throw <code>std::system_error</code> with <code>errc::resource_deadlock_would_occur</code>, but you cannot rely on that. A <code>std::unique_lock</code> that already owns its mutex is different: calling <code>lk.lock()</code> again is required to throw that error, because the lock object knows it owns the mutex. Reaching for <code>recursive_mutex</code> to fix this is usually a sign that the locking boundaries are wrong.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Define deadlock, livelock and starvation, with one example of each.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Deadlock: threads block forever waiting for each other (two threads locking A then B and B then A). Livelock: threads keep running but make no progress because they keep reacting to each other (two threads that each try-lock the other's mutex, fail, back off and retry in lockstep). Starvation: the system progresses but one thread never does (a writer waiting on a reader-preferring readers-writer lock while readers overlap forever).</p>
+    <p><b>Why.</b> The difference is in what the CPU does. A deadlocked process uses no CPU; a livelocked one burns 100 percent; a starving one looks healthy except for one stuck request. Fixes differ too: deadlock needs ordering or all-at-once acquisition, livelock needs randomised back-off or ordering, starvation needs a fairness policy (FIFO tickets, writer preference, ageing of priorities).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Explain priority inversion and what went wrong on the Mars Pathfinder. Why can a semaphore-based lock not use the standard fix?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A high-priority task waits for a lock held by a low-priority task, and a medium-priority task that does not need the lock preempts the low one, so the high task effectively waits for the medium one. On Pathfinder (1997, VxWorks), the low-priority meteorological task held the information bus mutex, the high-priority bus manager blocked, a medium-priority communications task kept the low one off the CPU, and a watchdog reset the computer. The fix, uploaded from Earth, enabled priority inheritance on that mutex. A semaphore cannot do it because it has no owner to boost.</p>
+    <p><b>Why.</b> Inversion itself (H waits briefly for L) is unavoidable with locks; the bug is that the wait becomes unbounded because of M. Priority inheritance raises L to H's priority while H waits, bounding H's delay to the length of L's critical section. Priority ceiling (every holder runs at the lock's ceiling priority) is the alternative. Both require knowing which thread holds the lock, which a mutex records and a counting semaphore does not. On Linux use <code>PTHREAD_PRIO_INHERIT</code>; <code>std::mutex</code> does not expose the option.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does using <code>std::scoped_lock</code> everywhere make a program deadlock-free?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. It only prevents deadlock among the mutexes passed to the same <code>scoped_lock</code>. Nested acquisitions still deadlock: thread 1 holds <code>scoped_lock(a)</code> and then calls a function that takes <code>scoped_lock(b)</code>, while thread 2 does the reverse.</p>
+    <p><b>Why.</b> <code>std::lock</code> avoids the cycle by never waiting while holding part of the set it was given. It cannot know about locks you took earlier in another statement, so "hold a, then wait for b" in two separate statements is still hold and wait plus a possible cycle. Deadlocks also do not need mutexes: joining a thread while holding a lock it needs, waiting on a future whose producer needs your lock, or two threads waiting on each other's condition variables all deadlock. A global lock order or lock hierarchy is still needed for nested locking.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is <code>std::shared_mutex</code> always better than <code>std::mutex</code> for a read-mostly map? Which side gets priority when readers and a writer contend?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Not always. For short critical sections a plain mutex is often as fast or faster, and the standard leaves the reader/writer priority policy unspecified, so a writer can starve on some implementations.</p>
+    <p><b>Why.</b> Every <code>lock_shared()</code> performs an atomic read-modify-write on the reader count, so all readers on all cores write the same cache line and it bounces between them (<a href="#ch02">Ch 2</a> covers why that costs about as much as the lock itself). The shared lock is also larger and has more complex code paths. It wins when readers hold the lock long enough that running them in parallel matters, for example during a lookup that walks a big structure. For extreme read-heavy cases, people use RCU, seqlocks or per-core reader counters instead. On priority: libstdc++ implements <code>std::shared_mutex</code> with glibc's <code>pthread_rwlock_t</code>, whose default is reader preference, so writers can starve there; libc++ blocks new readers once a writer waits. Code that needs a particular policy must not rely on either, and should use a lock that states its policy (coding drill <a href="#ch03-k-rwlock">readers-writer lock</a>). The wrong answer is "writers always get priority because they are rarer".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is a monitor, and what is the difference between Hoare and Mesa semantics?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A monitor is an object whose operations run under one mutual-exclusion lock and which uses condition variables to wait inside those operations. Under Hoare semantics a signal hands the monitor directly to the woken thread, so its condition is guaranteed to hold. Under Mesa semantics, used by POSIX, Java and C++, the signaller continues and the woken thread merely becomes runnable, so the condition must be re-checked in a <code>while</code> loop.</p>
+    <p><b>Why.</b> Hoare semantics need an extra context switch on every signal and make the signaller wait, so practical systems chose Mesa semantics and pushed the cost onto the waiter as a re-check. In C++ a monitor is a class with a private mutex, private state and condition variables, where every public member function starts by locking the mutex. Java's <code>synchronized</code> methods with <code>wait()</code>/<code>notifyAll()</code> are the built-in version.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How do you build a thread-safe lazily initialised singleton in C++11 and later? Where does <code>std::call_once</code> still help?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A function-local static: <code>static T&amp; get() { static T t; return t; }</code>. Since C++11 the compiler guarantees that the initialisation runs once even under concurrent calls ([stmt.dcl]/4). <code>std::call_once</code> helps when the one-time action is not "construct this variable", for example initialising a data member of an object lazily or running a setup function, or when you need the once-flag to live in a particular object.</p>
+    <p><b>Why.</b> The compiler implements magic statics with a guard variable checked with an acquire load on the fast path and a lock (<code>__cxa_guard_acquire</code>) on the slow path, which is the same as hand-written double-checked locking done correctly. Hand-written double-checked locking with a plain pointer is a data race and is undefined behaviour. In both mechanisms, if the initialiser throws, nothing is marked as done and the next caller retries. Recursively re-entering the same static's initialisation from its own constructor is undefined (in practice, a deadlock or an exception from the runtime).</p>
+  </div></details>
+</div>
+
+</section>
+
+<section id="ch03-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print? Follow the ownership of the lock through the move and the <code>release()</code>.</p>
+<pre data-run="ch06-ulock"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::mutex m;
+    <span class="hljs-function">std::unique_lock <span class="hljs-title">a</span><span class="hljs-params">(m, std::defer_lock)</span></span>;
+    std::cout &lt;&lt; a.<span class="hljs-built_in">owns_lock</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    a.<span class="hljs-built_in">lock</span>();
+    std::cout &lt;&lt; a.<span class="hljs-built_in">owns_lock</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+
+    <span class="hljs-function">std::unique_lock <span class="hljs-title">b</span><span class="hljs-params">(std::move(a))</span></span>;
+    std::cout &lt;&lt; a.<span class="hljs-built_in">owns_lock</span>() &lt;&lt; b.<span class="hljs-built_in">owns_lock</span>() &lt;&lt; (a.<span class="hljs-built_in">mutex</span>() == <span class="hljs-literal">nullptr</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+
+    std::mutex* p = b.<span class="hljs-built_in">release</span>();
+    std::cout &lt;&lt; b.<span class="hljs-built_in">owns_lock</span>() &lt;&lt; (p == &amp;m) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    p-&gt;<span class="hljs-built_in">unlock</span>();
+
+    m.<span class="hljs-built_in">lock</span>();
+    <span class="hljs-function">std::unique_lock <span class="hljs-title">c</span><span class="hljs-params">(m, std::adopt_lock)</span></span>;
+    std::cout &lt;&lt; c.<span class="hljs-built_in">owns_lock</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch06-ulock">0
+1
+011
+01
+1</pre>
+    <p><b>Why.</b> <code>defer_lock</code> associates the mutex without locking it. Moving a <code>unique_lock</code> transfers both the mutex pointer and the ownership, leaving the source empty (<code>mutex() == nullptr</code>, not owning). <code>release()</code> disassociates the lock from the mutex <b>without unlocking it</b>, so the caller becomes responsible; forgetting the <code>p-&gt;unlock()</code> line would leave <code>m</code> locked and destroying a locked mutex is undefined. <code>adopt_lock</code> takes over a mutex the thread already locked; the destructor of <code>c</code> unlocks it. People often expect <code>release()</code> to unlock, like the name suggests; it behaves like <code>unique_ptr::release()</code>, which also gives up ownership without destroying anything.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The waiter uses a predicate, so the author believes this is safe. ThreadSanitizer disagrees. What is wrong, and what else can go wrong without the timed wait?</p>
+<pre data-run="ch06-flag-race" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;condition_variable&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::mutex m;
+<span class="hljs-type">static</span> std::condition_variable cv;
+<span class="hljs-type">static</span> <span class="hljs-type">bool</span> ready = <span class="hljs-literal">false</span>;
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> data = <span class="hljs-number">0</span>;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">waiter</span><span class="hljs-params">([] {
+        std::unique_lock lk(m);
+        <span class="hljs-keyword">if</span> (cv.wait_for(lk, std::chrono::seconds(<span class="hljs-number">2</span>), [] { <span class="hljs-keyword">return</span> ready; }))
+            std::cout &lt;&lt; <span class="hljs-string">&quot;got &quot;</span> &lt;&lt; data &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    })</span></span>;
+    data = <span class="hljs-number">42</span>;
+    ready = <span class="hljs-literal">true</span>;          <span class="hljs-comment">// written without holding m</span>
+    cv.<span class="hljs-built_in">notify_one</span>();
+    waiter.<span class="hljs-built_in">join</span>();
+}
+</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>ready</code> and <code>data</code> are written by the main thread without the mutex while the waiter reads them under it. That is a data race (undefined behaviour), and it also opens a lost-wake-up window: if the store and the notify land after the waiter checked the predicate but before it went to sleep, a plain <code>wait</code> would sleep forever. The 2-second timeout only hides that hang.</p>
+    <p><b>Why.</b> The mutex does two jobs: it makes the accesses to <code>ready</code> race-free, and it serialises "check predicate then sleep" against "set predicate then notify". Fix:</p>
+<pre><code class="language-cpp hljs">{
+    <span class="hljs-function">std::lock_guard <span class="hljs-title">g</span><span class="hljs-params">(m)</span></span>;
+    data = <span class="hljs-number">42</span>;
+    ready = <span class="hljs-literal">true</span>;
+}
+cv.<span class="hljs-built_in">notify_one</span>();
+</code></pre>
+    <p>Making <code>ready</code> a <code>std::atomic&lt;bool&gt;</code> would remove the data race on <code>ready</code> but not the lost wake-up (and <code>data</code> would still need ordering). TSan reports the race on <code>ready</code> or <code>data</code> on every run, whichever interleaving happens, because there is no happens-before edge between the main thread's writes and the waiter's reads.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This function should increment a shared counter under a lock. Why does it not compile, and what did the author mean?</p>
+<pre data-run="ch06-vexing-guard" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+
+<span class="hljs-type">static</span> std::mutex m;
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> counter = <span class="hljs-number">0</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">bump</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">lock_guard</span>&lt;std::mutex&gt;(m);
+    ++counter;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{ <span class="hljs-built_in">bump</span>(); }
+</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>std::lock_guard&lt;std::mutex&gt;(m);</code> is a declaration, not an expression: it declares a local variable named <code>m</code> of type <code>lock_guard&lt;std::mutex&gt;</code>, shadowing the global mutex. <code>lock_guard</code> has no default constructor, so it fails to compile. The intent was <code>std::lock_guard&lt;std::mutex&gt; g(m);</code>, or in C++17 <code>std::scoped_lock g(m);</code>.</p>
+    <p><b>Why.</b> C++ allows redundant parentheses around a declarator (<code>int (x);</code> declares <code>x</code>), and the rule "if it can be a declaration, it is one" decides the parse. This is a cousin of the most vexing parse. Compilation failure is the lucky outcome here; with a type that has a default constructor the line would compile and silently lock nothing. Naming every lock object avoids the whole family of bugs.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This one compiles cleanly and has a lock. Why does ThreadSanitizer still report a race on <code>counter</code>?</p>
+<pre data-run="ch06-temp-lock" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::mutex m;
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> counter = <span class="hljs-number">0</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">10000</span>; ++i) {
+        std::scoped_lock{m};
+        ++counter;
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; (counter &lt;= <span class="hljs-number">20000</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>std::scoped_lock{m};</code> creates an unnamed temporary. A temporary is destroyed at the end of the full expression, so the mutex is locked and immediately unlocked at the semicolon, and <code>++counter</code> runs without any lock.</p>
+    <p><b>Why.</b> Unlike the parenthesised form in the previous drill, braces cannot form a declarator, so this is an expression statement creating a prvalue that is materialised and destroyed at once. The fix is a named object: <code>std::scoped_lock lk{m};</code>. Some compilers and clang-tidy (<code>bugprone-unused-raii</code>) warn about unused RAII temporaries; <code>-Wall</code> alone does not catch it. The program prints <code>1</code> but the count is often below 20000, and TSan reports the unsynchronised increments every run.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Two threads transfer money between the same two accounts. The program works in tests and hangs about once a week in production. Why, and what is the smallest fix?</p>
+<pre data-run="ch06-transfer-deadlock" data-mode="compile"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Account</span> {
+    std::mutex m;
+    <span class="hljs-type">long</span> balance = <span class="hljs-number">1000</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">transfer</span><span class="hljs-params">(Account&amp; from, Account&amp; to, <span class="hljs-type">long</span> amount)</span> </span>{
+    <span class="hljs-function">std::lock_guard <span class="hljs-title">lf</span><span class="hljs-params">(from.m)</span></span>;
+    <span class="hljs-function">std::lock_guard <span class="hljs-title">lt</span><span class="hljs-params">(to.m)</span></span>;
+    from.balance -= amount;
+    to.balance += amount;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Account a, b;
+    <span class="hljs-function">std::thread <span class="hljs-title">t1</span><span class="hljs-params">([&amp;] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) transfer(a, b, <span class="hljs-number">1</span>); })</span></span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">t2</span><span class="hljs-params">([&amp;] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) transfer(b, a, <span class="hljs-number">1</span>); })</span></span>;
+    t1.<span class="hljs-built_in">join</span>();
+    t2.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; a.balance + b.balance &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Lock-order inversion. <code>t1</code> locks <code>a.m</code> then <code>b.m</code>; <code>t2</code> locks <code>b.m</code> then <code>a.m</code>. If each takes its first lock before the other takes its second, both wait forever. The smallest fix is to lock both at once: <code>std::scoped_lock lk(from.m, to.m);</code>, plus a guard for <code>&amp;from == &amp;to</code>.</p>
+    <p><b>Why.</b> All four Coffman conditions hold: exclusive mutexes, holding one while waiting for the other, no preemption, and a two-node cycle. <code>scoped_lock</code> uses <code>std::lock</code>'s try-and-back-off, so it never waits while holding part of the set. An alternative is ordering by address with <code>std::less&lt;std::mutex*&gt;</code>. This snippet is compile-only because the bug is a hang. ThreadSanitizer on Linux reports it as "lock-order-inversion (potential deadlock)" even on runs that do not hang, because it records that both orders were used. The self-transfer guard matters because <code>scoped_lock(a.m, a.m)</code> locks the same non-recursive mutex twice, which is undefined.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The main thread holds a shared (read) lock. What does a second thread observe when it tries both kinds of lock, and what after the read lock is released?</p>
+<pre data-run="ch06-shared" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;shared_mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::shared_mutex sm;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::shared_lock <span class="hljs-title">reader</span><span class="hljs-params">(sm)</span></span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">t</span><span class="hljs-params">([] {
+        <span class="hljs-type">bool</span> shared = sm.try_lock_shared();
+        <span class="hljs-type">bool</span> exclusive = sm.try_lock();
+        std::cout &lt;&lt; shared &lt;&lt; exclusive &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+        <span class="hljs-keyword">if</span> (shared) sm.unlock_shared();
+        <span class="hljs-keyword">if</span> (exclusive) sm.unlock();
+    })</span></span>;
+    t.<span class="hljs-built_in">join</span>();
+
+    reader.<span class="hljs-built_in">unlock</span>();
+    <span class="hljs-function">std::thread <span class="hljs-title">w</span><span class="hljs-params">([] {
+        <span class="hljs-type">bool</span> exclusive = sm.try_lock();
+        std::cout &lt;&lt; exclusive &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+        <span class="hljs-keyword">if</span> (exclusive) sm.unlock();
+    })</span></span>;
+    w.<span class="hljs-built_in">join</span>();
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch06-shared">10
+1</pre>
+    <p><b>Why.</b> Shared holds are compatible with each other, so <code>try_lock_shared()</code> succeeds while the main thread reads. An exclusive hold is incompatible with any shared hold, so <code>try_lock()</code> fails. After <code>reader.unlock()</code> nobody holds the mutex and the writer gets it. The threads print one after another because of the <code>join()</code> calls, so the output is deterministic. Two details: the test runs in a separate thread because calling any lock function on a <code>shared_mutex</code> the calling thread already holds (in either mode) is undefined, and the <code>try_</code> functions may in theory fail spuriously, which real implementations do not do in an uncontended case like this.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print?</p>
+<pre data-run="ch06-sem"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;semaphore&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::counting_semaphore&lt;4&gt; <span class="hljs-title">s</span><span class="hljs-params">(<span class="hljs-number">3</span>)</span></span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">4</span>; ++i)
+        std::cout &lt;&lt; s.<span class="hljs-built_in">try_acquire</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    s.<span class="hljs-built_in">release</span>(<span class="hljs-number">2</span>);
+    std::cout &lt;&lt; s.<span class="hljs-built_in">try_acquire</span>() &lt;&lt; s.<span class="hljs-built_in">try_acquire</span>() &lt;&lt; s.<span class="hljs-built_in">try_acquire</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; (s.<span class="hljs-built_in">max</span>() &gt;= <span class="hljs-number">4</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch06-sem">1110
+110
+1</pre>
+    <p><b>Why.</b> The semaphore starts with 3 permits, so three <code>try_acquire()</code> calls succeed and the fourth finds zero and returns <code>false</code> without blocking. <code>release(2)</code> adds two permits, which are taken by the next two calls. The template argument is a <b>least</b> maximum value: <code>max()</code> may be larger (implementations typically return the maximum of the counter type), so the only portable statement is <code>max() &gt;= 4</code>. Note that the same thread acquired and released: semaphores have no owner, which is legal here and would be undefined with a mutex.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What happens when you misuse a <code>unique_lock</code>, as opposed to misusing the mutex directly?</p>
+<pre data-run="ch06-ulock-throw"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;system_error&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::mutex m;
+    <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m)</span></span>;
+    <span class="hljs-keyword">try</span> {
+        lk.<span class="hljs-built_in">lock</span>();
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::system_error&amp; e) {
+        std::cout &lt;&lt; <span class="hljs-string">&quot;relock: &quot;</span> &lt;&lt; (e.<span class="hljs-built_in">code</span>() == std::errc::resource_deadlock_would_occur) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+    lk.<span class="hljs-built_in">unlock</span>();
+    <span class="hljs-keyword">try</span> {
+        lk.<span class="hljs-built_in">unlock</span>();
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::system_error&amp; e) {
+        std::cout &lt;&lt; <span class="hljs-string">&quot;double unlock: &quot;</span> &lt;&lt; (e.<span class="hljs-built_in">code</span>() == std::errc::operation_not_permitted) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+    std::cout &lt;&lt; <span class="hljs-string">&quot;owns: &quot;</span> &lt;&lt; lk.<span class="hljs-built_in">owns_lock</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch06-ulock-throw">relock: 1
+double unlock: 1
+owns: 0</pre>
+    <p><b>Why.</b> <code>unique_lock</code> knows whether it owns its mutex, so the standard specifies errors for misuse: <code>lock()</code> while owning throws <code>std::system_error</code> with <code>resource_deadlock_would_occur</code>, and <code>unlock()</code> while not owning throws with <code>operation_not_permitted</code>. The same mistakes on a raw <code>std::mutex</code> (<code>m.lock()</code> twice, or <code>m.unlock()</code> when not owned) are undefined behaviour with no diagnostic; on Linux the first usually hangs forever. The checks live in the wrapper, not in the mutex.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The constructor of a function-local static fails twice before it succeeds. How many times does it run, and what is printed?</p>
+<pre data-run="ch06-once"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> attempts = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Connection</span> {
+    <span class="hljs-built_in">Connection</span>() {
+        ++attempts;
+        <span class="hljs-keyword">if</span> (attempts &lt; <span class="hljs-number">3</span>)
+            <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;init failed&quot;</span>);
+        std::cout &lt;&lt; <span class="hljs-string">&quot;ready after &quot;</span> &lt;&lt; attempts &lt;&lt; <span class="hljs-string">&quot; attempts\n&quot;</span>;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Connection&amp; <span class="hljs-title">connection</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">static</span> Connection c;     <span class="hljs-comment">// thread-safe one-time initialisation</span>
+    <span class="hljs-keyword">return</span> c;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">5</span>; ++i) {
+        <span class="hljs-keyword">try</span> {
+            <span class="hljs-built_in">connection</span>();
+        } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) {
+            std::cout &lt;&lt; <span class="hljs-string">&quot;caught: &quot;</span> &lt;&lt; e.<span class="hljs-built_in">what</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+        }
+    }
+    std::cout &lt;&lt; <span class="hljs-string">&quot;attempts = &quot;</span> &lt;&lt; attempts &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch06-once">caught: init failed
+caught: init failed
+ready after 3 attempts
+attempts = 3</pre>
+    <p><b>Why.</b> If the initialisation of a block-scope static exits by an exception, the variable is not initialised, and the next time control passes through the declaration the initialisation is tried again ([stmt.dcl]/4). After the first success, calls 4 and 5 skip the constructor. <code>std::call_once</code> has the same rule: a callable that throws is an "exceptional execution", the <code>once_flag</code> stays unset, and the next caller runs it again. The wrong answer is "it runs once and later calls rethrow or do nothing", which confuses one-time initialisation with caching the result. (Older libstdc++ builds had bugs with throwing callables in <code>call_once</code> on some targets, GCC bug 66146, which is one more reason to prefer the static.)</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Three threads run four phases of work separated by a <code>std::barrier</code>. The completion function checks that every thread finished the current phase. What is printed?</p>
+<pre data-run="ch06-barrier" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;barrier&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> kThreads = <span class="hljs-number">3</span>, kPhases = <span class="hljs-number">4</span>;
+    std::array&lt;std::atomic&lt;<span class="hljs-type">int</span>&gt;, kThreads&gt; done{};
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; phases = <span class="hljs-number">0</span>;
+    std::atomic&lt;<span class="hljs-type">bool</span>&gt; consistent = <span class="hljs-literal">true</span>;
+
+    <span class="hljs-function">std::barrier <span class="hljs-title">sync</span><span class="hljs-params">(kThreads, [&amp;]() <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-type">int</span> p = ++phases;
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; d : done)
+            <span class="hljs-keyword">if</span> (d.load(std::memory_order_relaxed) != p)
+                consistent = <span class="hljs-literal">false</span>;
+    })</span></span>;
+
+    std::vector&lt;std::thread&gt; pool;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> id = <span class="hljs-number">0</span>; id &lt; kThreads; ++id)
+        pool.<span class="hljs-built_in">emplace_back</span>([&amp;, id] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> p = <span class="hljs-number">0</span>; p &lt; kPhases; ++p) {
+                ++done[id];             <span class="hljs-comment">// this phase&#x27;s work</span>
+                sync.<span class="hljs-built_in">arrive_and_wait</span>();
+            }
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : pool) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;phases &quot;</span> &lt;&lt; phases &lt;&lt; <span class="hljs-string">&quot;, consistent &quot;</span> &lt;&lt; consistent &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch06-barrier">phases 4, consistent 1</pre>
+    <p><b>Why.</b> The completion function runs exactly once per phase, after the last of the three threads arrives and before any of them is released, on one of the arriving threads. Each thread's increment of <code>done[id]</code> happens before its arrival, and arrival happens before the completion function, so the function sees all three counters equal to the phase number. With plain <code>int</code> counters this would still be race-free by the standard. The counters are atomics only to keep ThreadSanitizer quiet: libc++ implements part of <code>std::barrier</code> inside its compiled library, which TSan does not instrument, so TSan cannot see the synchronisation and reports a false race on plain counters. Relaxed loads are enough because the barrier itself provides the ordering. The barrier then resets automatically, which is the difference from <code>std::latch</code>: a latch would open once and stay open. The completion function must be <code>noexcept</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A helper thread is meant to "hand the lock back" to the main thread when it finishes. What is wrong?</p>
+<pre data-run="ch06-foreign-unlock" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::mutex m;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    m.<span class="hljs-built_in">lock</span>();
+    <span class="hljs-function">std::thread <span class="hljs-title">helper</span><span class="hljs-params">([] {
+        <span class="hljs-comment">// ... finish some work ...</span>
+        m.unlock();        <span class="hljs-comment">// unlock a mutex owned by main</span>
+    })</span></span>;
+    helper.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;done\n&quot;</span>;
+}
+</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A <code>std::mutex</code> may only be unlocked by the thread that owns it. Unlocking it from <code>helper</code> is undefined behaviour; on Linux, ThreadSanitizer reports "unlock of an unlocked mutex (or by a wrong thread)". The program may well print <code>done</code>, which proves nothing, so its output is not compared.</p>
+    <p><b>Why.</b> Mutex ownership is part of the contract so that implementations can do priority inheritance, error checking and owner tracking. With a default glibc mutex the call may appear to work, with an error-checking mutex it returns <code>EPERM</code>, and with a PI futex it fails. If one thread must signal another, use a semaphore or a condition variable: <code>std::binary_semaphore done{0};</code>, <code>done.release()</code> in the helper and <code>done.acquire()</code> in main. This is exactly the mutex vs binary semaphore distinction.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The producer thread finishes, including its <code>notify_one()</code>, before the consumer ever calls <code>wait</code>. Does the consumer hang? What is printed?</p>
+<pre data-run="ch06-early-notify" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;condition_variable&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::mutex m;
+<span class="hljs-type">static</span> std::condition_variable cv;
+<span class="hljs-type">static</span> <span class="hljs-type">bool</span> ready = <span class="hljs-literal">false</span>;
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> value = <span class="hljs-number">0</span>;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">producer</span><span class="hljs-params">([] {
+        {
+            std::lock_guard g(m);
+            value = <span class="hljs-number">7</span>;
+            ready = <span class="hljs-literal">true</span>;
+        }
+        cv.notify_one();      <span class="hljs-comment">// nobody is waiting yet</span>
+    })</span></span>;
+    producer.<span class="hljs-built_in">join</span>();
+
+    <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m)</span></span>;
+    cv.<span class="hljs-built_in">wait</span>(lk, [] { <span class="hljs-keyword">return</span> ready; });
+    std::cout &lt;&lt; <span class="hljs-string">&quot;got &quot;</span> &lt;&lt; value &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch06-early-notify">got 7</pre>
+    <p><b>Why.</b> The notification is lost (a condition variable stores nothing), but it does not matter: the predicate overload checks <code>ready</code> before sleeping, finds it <code>true</code> and returns at once. With <code>cv.wait(lk);</code> and no predicate, the consumer would sleep forever, which is the textbook lost wake-up. The state lives in <code>ready</code>, protected by <code>m</code>; the condition variable is only a way to sleep until that state might have changed.</p>
+  </div></details>
+</div>
+
+</section>
+
+<section id="ch03-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code" id="ch03-k-queue">
+  <p class="dq"><span class="lvl">Code</span>Thread-safe bounded blocking queue. Implement <code>BoundedQueue&lt;T&gt;</code> with a fixed capacity: <code>bool push(T)</code> blocks while full, <code>std::optional&lt;T&gt; pop()</code> blocks while empty, and <code>close()</code> wakes everyone. After <code>close()</code>, <code>push</code> returns <code>false</code> and <code>pop</code> keeps returning remaining items, then <code>std::nullopt</code>. Test with 3 producers and 2 consumers; the total must be exact.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A monitor: one mutex guards a <code>std::deque</code> and a <code>closed_</code> flag, with two condition variables so producers and consumers never wake each other by mistake. Each wait uses a predicate that includes <code>closed_</code>, so <code>close()</code> plus <code>notify_all</code> on both releases every blocked thread. <code>pop</code> returns <code>nullopt</code> only when the queue is closed <b>and</b> empty, so no item is lost at shutdown.</p>
+<pre data-run="ch06-k-queue" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;condition_variable&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;deque&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">BoundedQueue</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">BoundedQueue</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> capacity)</span> : cap_(capacity) {</span>}
+
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">push</span><span class="hljs-params">(T v)</span> </span>{
+        <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+        not_full_.<span class="hljs-built_in">wait</span>(lk, [&amp;] { <span class="hljs-keyword">return</span> closed_ || q_.<span class="hljs-built_in">size</span>() &lt; cap_; });
+        <span class="hljs-keyword">if</span> (closed_) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        q_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(v));
+        lk.<span class="hljs-built_in">unlock</span>();
+        not_empty_.<span class="hljs-built_in">notify_one</span>();
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+
+    <span class="hljs-function">std::optional&lt;T&gt; <span class="hljs-title">pop</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+        not_empty_.<span class="hljs-built_in">wait</span>(lk, [&amp;] { <span class="hljs-keyword">return</span> closed_ || !q_.<span class="hljs-built_in">empty</span>(); });
+        <span class="hljs-keyword">if</span> (q_.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;     <span class="hljs-comment">// closed and drained</span>
+        T v = std::<span class="hljs-built_in">move</span>(q_.<span class="hljs-built_in">front</span>());
+        q_.<span class="hljs-built_in">pop_front</span>();
+        lk.<span class="hljs-built_in">unlock</span>();
+        not_full_.<span class="hljs-built_in">notify_one</span>();
+        <span class="hljs-keyword">return</span> v;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">close</span><span class="hljs-params">()</span> </span>{
+        {
+            <span class="hljs-function">std::lock_guard <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+            closed_ = <span class="hljs-literal">true</span>;
+        }
+        not_full_.<span class="hljs-built_in">notify_all</span>();
+        not_empty_.<span class="hljs-built_in">notify_all</span>();
+    }
+
+<span class="hljs-keyword">private</span>:
+    std::mutex m_;
+    std::condition_variable not_full_, not_empty_;
+    std::deque&lt;T&gt; q_;
+    std::<span class="hljs-type">size_t</span> cap_;
+    <span class="hljs-type">bool</span> closed_ = <span class="hljs-literal">false</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> kProducers = <span class="hljs-number">3</span>, kPerProducer = <span class="hljs-number">1000</span>, kConsumers = <span class="hljs-number">2</span>;
+    <span class="hljs-function">BoundedQueue&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">q</span><span class="hljs-params">(<span class="hljs-number">4</span>)</span></span>;
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt; <span class="hljs-title">sums</span><span class="hljs-params">(kConsumers, <span class="hljs-number">0</span>)</span></span>;
+    std::vector&lt;std::thread&gt; producers, consumers;
+
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> p = <span class="hljs-number">0</span>; p &lt; kProducers; ++p)
+        producers.<span class="hljs-built_in">emplace_back</span>([&amp;q, p] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">1</span>; i &lt;= kPerProducer; ++i) q.<span class="hljs-built_in">push</span>(p * kPerProducer + i);
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> c = <span class="hljs-number">0</span>; c &lt; kConsumers; ++c)
+        consumers.<span class="hljs-built_in">emplace_back</span>([&amp;q, &amp;sums, c] {
+            <span class="hljs-keyword">while</span> (<span class="hljs-keyword">auto</span> v = q.<span class="hljs-built_in">pop</span>()) sums[c] += *v;
+        });
+
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : producers) t.<span class="hljs-built_in">join</span>();
+    q.<span class="hljs-built_in">close</span>();
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : consumers) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;total &quot;</span> &lt;&lt; sums[<span class="hljs-number">0</span>] + sums[<span class="hljs-number">1</span>] &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;push after close: &quot;</span> &lt;&lt; q.<span class="hljs-built_in">push</span>(<span class="hljs-number">1</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+<pre class="out" data-out="ch06-k-queue">total 4501500
+push after close: 0</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per operation plus the lock. Pitfalls: waiting with <code>if</code> instead of a predicate; one condition variable with <code>notify_one</code> (wakes the wrong side, see the concept drill); returning <code>nullopt</code> as soon as <code>closed_</code> is set, which drops queued items; notifying only one consumer in <code>close()</code>; and returning a reference to the front element, which another thread may pop. Each consumer has its own slot in <code>sums</code>, so they never write the same variable. The total is 1 + 2 + ... + 3000 = 4501500.</p>
+    <p class="rating">Estimated rating: ~1600 · standard monitor, but shutdown semantics and two condition variables trip many candidates</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code" id="ch03-k-rwlock">
+  <p class="dq"><span class="lvl">Code</span>Writer-preferring readers-writer lock. Implement <code>RWLock</code> with <code>lock()</code>/<code>unlock()</code> for writers and <code>lock_shared()</code>/<code>unlock_shared()</code> for readers, using only <code>std::mutex</code> and <code>std::condition_variable</code>. Once a writer is waiting, new readers must wait. It must work with <code>std::unique_lock</code> and <code>std::shared_lock</code>. Test that readers never see a half-done update.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Keep three fields under an internal mutex: the number of active readers, whether a writer is active, and the number of waiting writers. Readers wait for "no active writer and no waiting writer", which gives writers priority. Writers announce themselves by incrementing <code>waiting_writers_</code>, then wait for "no writer and no readers". Two condition variables keep wake-ups targeted: the last reader out wakes one writer, and a writer leaving wakes the next writer if there is one, otherwise all readers.</p>
+<pre data-run="ch06-k-rwlock" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;condition_variable&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;shared_mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">RWLock</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock_shared</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+        readers_cv_.<span class="hljs-built_in">wait</span>(lk, [&amp;] { <span class="hljs-keyword">return</span> !writer_ &amp;&amp; waiting_writers_ == <span class="hljs-number">0</span>; });
+        ++readers_;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock_shared</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+        <span class="hljs-keyword">if</span> (--readers_ == <span class="hljs-number">0</span>) writers_cv_.<span class="hljs-built_in">notify_one</span>();
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+        ++waiting_writers_;
+        writers_cv_.<span class="hljs-built_in">wait</span>(lk, [&amp;] { <span class="hljs-keyword">return</span> !writer_ &amp;&amp; readers_ == <span class="hljs-number">0</span>; });
+        --waiting_writers_;
+        writer_ = <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+        writer_ = <span class="hljs-literal">false</span>;
+        <span class="hljs-keyword">if</span> (waiting_writers_ &gt; <span class="hljs-number">0</span>) writers_cv_.<span class="hljs-built_in">notify_one</span>();
+        <span class="hljs-keyword">else</span> readers_cv_.<span class="hljs-built_in">notify_all</span>();
+    }
+
+<span class="hljs-keyword">private</span>:
+    std::mutex m_;
+    std::condition_variable readers_cv_, writers_cv_;
+    <span class="hljs-type">int</span> readers_ = <span class="hljs-number">0</span>;
+    <span class="hljs-type">int</span> waiting_writers_ = <span class="hljs-number">0</span>;
+    <span class="hljs-type">bool</span> writer_ = <span class="hljs-literal">false</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    RWLock rw;
+    <span class="hljs-type">long</span> a = <span class="hljs-number">0</span>, b = <span class="hljs-number">0</span>;                  <span class="hljs-comment">// invariant: a == b</span>
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">torn</span><span class="hljs-params">(<span class="hljs-number">4</span>, <span class="hljs-number">0</span>)</span></span>;
+    std::vector&lt;std::thread&gt; threads;
+
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> r = <span class="hljs-number">0</span>; r &lt; <span class="hljs-number">4</span>; ++r)
+        threads.<span class="hljs-built_in">emplace_back</span>([&amp;, r] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">5000</span>; ++i) {
+                std::shared_lock <span class="hljs-built_in">lk</span>(rw);
+                <span class="hljs-keyword">if</span> (a != b) ++torn[r];
+            }
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> w = <span class="hljs-number">0</span>; w &lt; <span class="hljs-number">2</span>; ++w)
+        threads.<span class="hljs-built_in">emplace_back</span>([&amp;] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">2000</span>; ++i) {
+                std::unique_lock <span class="hljs-built_in">lk</span>(rw);
+                ++a;
+                ++b;
+            }
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : threads) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;a=&quot;</span> &lt;&lt; a &lt;&lt; <span class="hljs-string">&quot; b=&quot;</span> &lt;&lt; b &lt;&lt; <span class="hljs-string">&quot; torn reads=&quot;</span> &lt;&lt; torn[<span class="hljs-number">0</span>] + torn[<span class="hljs-number">1</span>] + torn[<span class="hljs-number">2</span>] + torn[<span class="hljs-number">3</span>] &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+<pre class="out" data-out="ch06-k-rwlock">a=4000 b=4000 torn reads=0</pre>
+    <p><b>Complexity and pitfalls.</b> Every operation takes the internal mutex once, so this lock is slower than <code>std::shared_mutex</code> under heavy contention; it exists to make the policy explicit. Pitfalls: forgetting to count waiting writers (that gives reader preference and writer starvation); notifying readers while writers are still waiting (they wake and sleep again, wasting time); using <code>notify_one</code> for readers, which lets only one reader in after a write. Writer preference can starve readers if writes never stop; a fair lock uses a ticket or a turnstile instead. Because the class has the right member names, it satisfies <i>Lockable</i> and <i>SharedLockable</i>, so the standard wrappers work.</p>
+    <p class="rating">Estimated rating: ~1800 · the state machine is small, but the preference policy and the notification targets must both be right</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code" id="ch03-k-order">
+  <p class="dq"><span class="lvl">Code</span>Print in order. Three threads cooperate to print the numbers 1 to 9 in order on one line: thread 0 prints 1, 4, 7, thread 1 prints 2, 5, 8 and thread 2 prints 3, 6, 9. Use one mutex and one condition variable, no sleeping or spinning. The output must be identical on every run.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A shared <code>next</code> number says whose turn it is: thread <code>id</code> may print when <code>(next - 1) % 3 == id</code>. Each thread waits for its turn, prints, advances <code>next</code> and notifies. Because three threads wait for three <b>different</b> predicates on one condition variable, <code>notify_all</code> is required; <code>notify_one</code> could wake the wrong thread and stall everyone. Printing happens under the mutex, so the order is fixed.</p>
+<pre data-run="ch06-k-order" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;condition_variable&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">InOrder</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">InOrder</span>(<span class="hljs-type">int</span> threads, <span class="hljs-type">int</span> last) : <span class="hljs-built_in">threads_</span>(threads), <span class="hljs-built_in">last_</span>(last) {}
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">run</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{
+        <span class="hljs-keyword">for</span> (;;) {
+            <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+            cv_.<span class="hljs-built_in">wait</span>(lk, [&amp;] { <span class="hljs-keyword">return</span> next_ &gt; last_ || (next_ - <span class="hljs-number">1</span>) % threads_ == id; });
+            <span class="hljs-keyword">if</span> (next_ &gt; last_) <span class="hljs-keyword">return</span>;
+            std::cout &lt;&lt; next_ &lt;&lt; (next_ == last_ ? <span class="hljs-string">&#x27;\n&#x27;</span> : <span class="hljs-string">&#x27; &#x27;</span>);
+            ++next_;
+            lk.<span class="hljs-built_in">unlock</span>();
+            cv_.<span class="hljs-built_in">notify_all</span>();
+        }
+    }
+
+<span class="hljs-keyword">private</span>:
+    std::mutex m_;
+    std::condition_variable cv_;
+    <span class="hljs-type">int</span> next_ = <span class="hljs-number">1</span>;
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> threads_, last_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">InOrder <span class="hljs-title">p</span><span class="hljs-params">(<span class="hljs-number">3</span>, <span class="hljs-number">9</span>)</span></span>;
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> id = <span class="hljs-number">0</span>; id &lt; <span class="hljs-number">3</span>; ++id) ts.<span class="hljs-built_in">emplace_back</span>([&amp;p, id] { p.<span class="hljs-built_in">run</span>(id); });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+}
+</code></pre>
+<pre class="out" data-out="ch06-k-order">1 2 3 4 5 6 7 8 9</pre>
+    <p><b>Complexity and pitfalls.</b> Each number costs one wake-up of every waiting thread (the "thundering herd" of <code>notify_all</code>), which is fine for 3 threads; with many threads give each its own condition variable (or <code>binary_semaphore</code>) and notify only the next one. Pitfalls: the termination condition must be in the predicate, or the threads whose turn never comes again sleep forever; printing after <code>unlock()</code> would reorder output; and a thread must not hold the lock while waiting for nothing. The two-thread version (ping-pong, LeetCode 1115 "Print FooBar Alternately") is the same code with <code>threads = 2</code>.</p>
+    <p class="rating">Estimated rating: ~1400 · one predicate and notify_all, but the shutdown condition and the notify_one trap are classic</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code" id="ch03-k-philosophers">
+  <p class="dq"><span class="lvl">Code</span>Dining philosophers without deadlock. Five philosophers share five forks (one <code>std::mutex</code> each); philosopher <code>i</code> needs forks <code>i</code> and <code>(i + 1) % 5</code>. Each must eat 1000 times. Write it so that it cannot deadlock and print how many meals each philosopher had.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Break circular wait with resource ordering: every philosopher locks the lower-numbered fork first. Philosopher 4 therefore reaches for fork 0 before fork 4, so the ring of "holds left, waits for right" cannot close. Locks are RAII objects so a fork is never left held. An equivalent one-line solution is <code>std::scoped_lock lk(fork[a], fork[b]);</code>, which breaks hold and wait instead.</p>
+<pre data-run="ch06-k-philosophers" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> kN = <span class="hljs-number">5</span>, kMeals = <span class="hljs-number">1000</span>;
+    std::array&lt;std::mutex, kN&gt; fork;
+    std::array&lt;<span class="hljs-type">int</span>, kN&gt; meals{};
+    <span class="hljs-type">long</span> <span class="hljs-type">long</span> shared_plate = <span class="hljs-number">0</span>;      <span class="hljs-comment">// shared by all, guarded by plate_m (always locked last)</span>
+    std::mutex plate_m;
+
+    std::vector&lt;std::thread&gt; table;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; kN; ++i)
+        table.<span class="hljs-built_in">emplace_back</span>([&amp;, i] {
+            <span class="hljs-type">int</span> first = std::<span class="hljs-built_in">min</span>(i, (i + <span class="hljs-number">1</span>) % kN);
+            <span class="hljs-type">int</span> second = std::<span class="hljs-built_in">max</span>(i, (i + <span class="hljs-number">1</span>) % kN);
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> k = <span class="hljs-number">0</span>; k &lt; kMeals; ++k) {
+                std::lock_guard <span class="hljs-built_in">a</span>(fork[first]);
+                std::lock_guard <span class="hljs-built_in">b</span>(fork[second]);
+                ++meals[i];                       <span class="hljs-comment">// own counter</span>
+                std::lock_guard <span class="hljs-built_in">p</span>(plate_m);
+                ++shared_plate;
+            }
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : table) t.<span class="hljs-built_in">join</span>();
+
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; kN; ++i) std::cout &lt;&lt; <span class="hljs-string">&quot;P&quot;</span> &lt;&lt; i &lt;&lt; <span class="hljs-string">&quot; ate &quot;</span> &lt;&lt; meals[i] &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;total &quot;</span> &lt;&lt; shared_plate &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+<pre class="out" data-out="ch06-k-philosophers">P0 ate 1000
+P1 ate 1000
+P2 ate 1000
+P3 ate 1000
+P4 ate 1000
+total 5000</pre>
+    <p><b>Complexity and pitfalls.</b> Neighbours exclude each other, so at most two of five eat at once. Pitfalls: "pick up left, <code>try_lock</code> right, put left down and retry" is deadlock-free but can livelock if everyone retries in lockstep (add random back-off); a global "table" mutex around both picks is correct but serialises everything; and nothing here is <b>fair</b>, since a fast philosopher may eat many times in a row (it still finishes because each loop is bounded). The waiter solution, a <code>std::counting_semaphore&lt;4&gt;</code> that admits at most four philosophers, also breaks the cycle.</p>
+    <p class="rating">Estimated rating: ~1500 · the ordering trick is short once you can name the Coffman condition it breaks</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code" id="ch03-k-sem">
+  <p class="dq"><span class="lvl">Code</span>Counting semaphore from a mutex and a condition variable. Implement <code>Semaphore</code> with <code>acquire()</code>, <code>try_acquire()</code> and <code>release(n = 1)</code>, plus an RAII <code>Permit</code> guard. Use it to cap a pool of 8 workers at 3 concurrent tasks and verify that the cap held.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> The semaphore is a counter in a monitor: <code>acquire</code> waits for <code>count_ &gt; 0</code> and decrements, <code>release(n)</code> adds <code>n</code> and wakes waiters (one if <code>n == 1</code>, all otherwise, since several may now proceed). A <code>Permit</code> guard releases in its destructor so an exception cannot leak a permit. The test tracks the number of active workers and the maximum seen with atomics.</p>
+<pre data-run="ch06-k-sem" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;condition_variable&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Semaphore</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Semaphore</span><span class="hljs-params">(<span class="hljs-type">int</span> initial)</span> : count_(initial) {</span>}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+        cv_.<span class="hljs-built_in">wait</span>(lk, [&amp;] { <span class="hljs-keyword">return</span> count_ &gt; <span class="hljs-number">0</span>; });
+        --count_;
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">try_acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+        <span class="hljs-keyword">if</span> (count_ == <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        --count_;
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(<span class="hljs-type">int</span> n = <span class="hljs-number">1</span>)</span> </span>{
+        {
+            <span class="hljs-function">std::lock_guard <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+            count_ += n;
+        }
+        <span class="hljs-keyword">if</span> (n == <span class="hljs-number">1</span>) cv_.<span class="hljs-built_in">notify_one</span>();
+        <span class="hljs-keyword">else</span> cv_.<span class="hljs-built_in">notify_all</span>();
+    }
+
+<span class="hljs-keyword">private</span>:
+    std::mutex m_;
+    std::condition_variable cv_;
+    <span class="hljs-type">int</span> count_;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Permit</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Permit</span><span class="hljs-params">(Semaphore&amp; s)</span> : s_(s) {</span> s_.<span class="hljs-built_in">acquire</span>(); }
+    ~<span class="hljs-built_in">Permit</span>() { s_.<span class="hljs-built_in">release</span>(); }
+    <span class="hljs-built_in">Permit</span>(<span class="hljs-type">const</span> Permit&amp;) = <span class="hljs-keyword">delete</span>;
+    Permit&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Permit&amp;) = <span class="hljs-keyword">delete</span>;
+<span class="hljs-keyword">private</span>:
+    Semaphore&amp; s_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Semaphore <span class="hljs-title">slots</span><span class="hljs-params">(<span class="hljs-number">3</span>)</span></span>;
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; active = <span class="hljs-number">0</span>, peak = <span class="hljs-number">0</span>, finished = <span class="hljs-number">0</span>;
+
+    std::vector&lt;std::thread&gt; workers;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> w = <span class="hljs-number">0</span>; w &lt; <span class="hljs-number">8</span>; ++w)
+        workers.<span class="hljs-built_in">emplace_back</span>([&amp;] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> job = <span class="hljs-number">0</span>; job &lt; <span class="hljs-number">200</span>; ++job) {
+                Permit <span class="hljs-built_in">p</span>(slots);
+                <span class="hljs-type">int</span> now = ++active;
+                <span class="hljs-type">int</span> seen = peak.<span class="hljs-built_in">load</span>();
+                <span class="hljs-keyword">while</span> (now &gt; seen &amp;&amp; !peak.<span class="hljs-built_in">compare_exchange_weak</span>(seen, now)) {}
+                std::this_thread::<span class="hljs-built_in">yield</span>();
+                --active;
+                ++finished;
+            }
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : workers) t.<span class="hljs-built_in">join</span>();
+
+    std::cout &lt;&lt; <span class="hljs-string">&quot;finished &quot;</span> &lt;&lt; finished &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;peak within cap: &quot;</span> &lt;&lt; (peak &lt;= <span class="hljs-number">3</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;permits left: &quot;</span> &lt;&lt; slots.<span class="hljs-built_in">try_acquire</span>() &lt;&lt; slots.<span class="hljs-built_in">try_acquire</span>()
+              &lt;&lt; slots.<span class="hljs-built_in">try_acquire</span>() &lt;&lt; slots.<span class="hljs-built_in">try_acquire</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+<pre class="out" data-out="ch06-k-sem">finished 1600
+peak within cap: 1
+permits left: 1110</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per call plus the mutex. The peak itself is timing-dependent, so the test prints only whether it stayed within the cap, never the value. Pitfalls: changing <code>count_</code> outside the mutex (lost wake-ups again); <code>notify_one</code> after <code>release(3)</code>, which leaves two runnable waiters asleep; and no RAII guard, so an exception leaks a permit and the pool slowly shrinks to zero. The last line shows the semaphore is back to its 3 permits after all workers finished.</p>
+    <p class="rating">Estimated rating: ~1300 · a direct monitor, the RAII guard and release(n) notify choice are the details</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code" id="ch03-k-barrier">
+  <p class="dq"><span class="lvl">Code</span>Reusable barrier. Implement <code>Barrier(n)</code> with <code>arrive_and_wait()</code>: the first <code>n - 1</code> callers block, the <code>n</code>-th releases them all, and the barrier is immediately ready for the next round. Do not use <code>std::barrier</code>. Prove it works across several phases with 4 threads.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A counter of arrivals plus a <b>generation number</b>. Each caller remembers the generation it arrived in; the last arrival resets the counter, increments the generation and notifies all. Waiters wait for "generation changed", not for "counter is zero", because a fast thread may already have arrived for the next phase and incremented the counter again before slow threads woke up. The test uses two barrier waits per phase: one after writing, one after reading, so writes of phase k+1 cannot overlap reads of phase k.</p>
+<pre data-run="ch06-k-barrier" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;condition_variable&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Barrier</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Barrier</span><span class="hljs-params">(<span class="hljs-type">int</span> n)</span> : n_(n) {</span>}
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">arrive_and_wait</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+        std::<span class="hljs-type">size_t</span> gen = generation_;
+        <span class="hljs-keyword">if</span> (++arrived_ == n_) {
+            arrived_ = <span class="hljs-number">0</span>;
+            ++generation_;
+            lk.<span class="hljs-built_in">unlock</span>();
+            cv_.<span class="hljs-built_in">notify_all</span>();
+            <span class="hljs-keyword">return</span>;
+        }
+        cv_.<span class="hljs-built_in">wait</span>(lk, [&amp;] { <span class="hljs-keyword">return</span> generation_ != gen; });
+    }
+
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">generation</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+        <span class="hljs-keyword">return</span> generation_;
+    }
+
+<span class="hljs-keyword">private</span>:
+    std::mutex m_;
+    std::condition_variable cv_;
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> n_;
+    <span class="hljs-type">int</span> arrived_ = <span class="hljs-number">0</span>;
+    std::<span class="hljs-type">size_t</span> generation_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> kThreads = <span class="hljs-number">4</span>, kPhases = <span class="hljs-number">5</span>;
+    <span class="hljs-function">Barrier <span class="hljs-title">barrier</span><span class="hljs-params">(kThreads)</span></span>;
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">slot</span><span class="hljs-params">(kThreads, <span class="hljs-number">0</span>)</span></span>;
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; errors = <span class="hljs-number">0</span>;
+
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> id = <span class="hljs-number">0</span>; id &lt; kThreads; ++id)
+        ts.<span class="hljs-built_in">emplace_back</span>([&amp;, id] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> p = <span class="hljs-number">1</span>; p &lt;= kPhases; ++p) {
+                slot[id] = p;                          <span class="hljs-comment">// write phase</span>
+                barrier.<span class="hljs-built_in">arrive_and_wait</span>();
+                <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> v : slot)                     <span class="hljs-comment">// read phase</span>
+                    <span class="hljs-keyword">if</span> (v != p) ++errors;
+                barrier.<span class="hljs-built_in">arrive_and_wait</span>();
+            }
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;errors &quot;</span> &lt;&lt; errors &lt;&lt; <span class="hljs-string">&quot;, generations &quot;</span> &lt;&lt; barrier.<span class="hljs-built_in">generation</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+</code></pre>
+<pre class="out" data-out="ch06-k-barrier">errors 0, generations 10</pre>
+    <p><b>Complexity and pitfalls.</b> Each phase costs n lock acquisitions and one broadcast. The generation is the whole trick: with a predicate like <code>arrived_ == 0</code>, a thread that wakes late may see the counter already at 1 for the next phase and sleep forever. Pitfalls: forgetting to reset <code>arrived_</code>; using <code>notify_one</code>; and testing with a single wait per phase, which lets a fast thread overwrite its slot while others are still reading (TSan would report it). The barrier synchronises through the mutex, so the plain <code>int</code> slots are race-free.</p>
+    <p class="rating">Estimated rating: ~1700 · the generation counter is the insight most first attempts miss</p>
+  </div></details>
+</div>
+
+</section>
+
+<section id="ch03-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+  <li>Default to <code>std::mutex</code> plus <code>std::scoped_lock</code>; use <code>unique_lock</code> only for condition variables, early unlock, timeouts or moving the lock. Always name the lock object.</li>
+  <li><code>std::mutex</code>: re-locking by the owner, unlocking by a non-owner and destroying while locked are all undefined. <code>try_lock</code> may fail spuriously. <code>recursive_mutex</code> is a design smell; <code>shared_mutex</code> helps only when readers hold the lock for a while, and its reader/writer priority is unspecified.</li>
+  <li>Condition variable recipe: change state under the mutex, then notify; wait with <code>cv.wait(lk, pred)</code>, which is <code>while (!pred()) wait(lk);</code>. This handles spurious wake-ups, stolen wake-ups and notifies that came before the wait. An atomic flag set without the mutex still loses wake-ups.</li>
+  <li><code>notify_one</code> only when all waiters wait for the same predicate; otherwise <code>notify_all</code> or one condition variable per predicate. Notify after unlocking for speed, under the lock if the waiter may destroy the condition variable.</li>
+  <li>Semaphores count permits and have no owner: right for signalling and limiting concurrency, wrong for protecting data (no priority inheritance, anyone can release). C++20: <code>counting_semaphore</code>, <code>binary_semaphore</code>, <code>latch</code> (single use), <code>barrier</code> (reusable, completion function per phase).</li>
+  <li>Deadlock needs mutual exclusion, hold and wait, no preemption and circular wait. Break circular wait with a global lock order or hierarchy, or hold and wait with <code>std::scoped_lock(a, b)</code>. Never call unknown code or join a thread while holding a lock.</li>
+  <li>Livelock burns CPU without progress (fix with random back-off); starvation is one thread never progressing (fix with fairness). Priority inversion (Mars Pathfinder 1997) is fixed by priority inheritance or ceilings, which need an owner.</li>
+  <li>Classics: bounded buffer = mutex + <code>not_full</code> + <code>not_empty</code> + closed flag; readers-writers = count readers, count waiting writers for writer preference; dining philosophers = lock forks in number order; monitors use Mesa semantics, hence the <code>while</code>. One-time init: function-local <code>static</code> or <code>std::call_once</code>, both retry after an exception.</li>
+</ul>
+</section>

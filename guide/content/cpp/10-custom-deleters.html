@@ -1,0 +1,1364 @@
+---
+title: Custom deleters
+part: Part C · Memory management
+lede: A smart pointer is a pointer plus a rule for releasing it. This chapter is about that rule: how `unique_ptr` stores it in its type (and what that costs in bytes), how `shared_ptr` hides it in the control block, and how to wrap C handles, file descriptors, pool memory and mappings safely. Interviewers use deleters to test whether you understand type erasure, the empty base optimisation and the exact null and exception rules.
+desc: Function objects, lambdas, size cost, C handles, shared_ptr type erasure
+hours: 3
+prereqs: [Ch 9](#ch09) smart pointers, [Ch 7](#ch07) new/delete
+---
+<section id="ch10-why" data-roles="th"><div class="sec-head"><h2>Why custom deleters exist</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Ownership is about resources, and memory is only one kind of resource. A <code>FILE*</code> must go back through <code>fclose</code>, a file descriptor through <code>close</code>, a mapping through <code>munmap</code>, a block from a pool back to that pool, and an array from <code>new[]</code> through <code>delete[]</code>. If a smart pointer could only call <code>delete</code>, every one of these would need a hand-written RAII class. A custom deleter lets you reuse the whole smart pointer machinery (move semantics, exception safety, reset, release, comparison) and change only the last step.</p>
+<p><b>Under the hood.</b> <code>std::unique_ptr&lt;T, D&gt;</code> stores a pointer of type <code>D::pointer</code> (or <code>T*</code> if <code>D</code> has no such member) and an object of type <code>D</code>. Its destructor is, in effect:</p>
+<pre><code class="language-cpp hljs">~<span class="hljs-built_in">unique_ptr</span>() {
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">get</span>() != <span class="hljs-literal">nullptr</span>) <span class="hljs-built_in">get_deleter</span>()(<span class="hljs-built_in">get</span>());
+}</code></pre>
+<p><code>std::shared_ptr&lt;T&gt;</code> does the same thing later, when the strong count reaches zero, and it keeps the deleter in the control block instead of in the pointer object (<a href="#ch09">Ch 9</a> covers the control block itself).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Resource</th><th>Acquire</th><th>Release (the deleter calls)</th><th>Null value</th></tr></thead>
+<tbody>
+<tr><td>C stream</td><td><code>fopen</code>, <code>tmpfile</code>, <code>popen</code></td><td><code>fclose</code> (<code>pclose</code> for <code>popen</code>)</td><td><code>nullptr</code></td></tr>
+<tr><td>File descriptor, socket</td><td><code>open</code>, <code>socket</code>, <code>accept</code>, <code>pipe</code></td><td><code>close</code></td><td><code>-1</code> (0 is a valid fd)</td></tr>
+<tr><td>Memory mapping</td><td><code>mmap</code></td><td><code>munmap(addr, length)</code>, needs the length</td><td><code>MAP_FAILED</code>, which is not <code>nullptr</code></td></tr>
+<tr><td>C allocation</td><td><code>malloc</code>, <code>strdup</code>, <code>getline</code></td><td><code>free</code></td><td><code>nullptr</code></td></tr>
+<tr><td>C library handle</td><td><code>sqlite3_open</code>, <code>EVP_MD_CTX_new</code>, <code>curl_easy_init</code></td><td>the matching <code>*_close</code> or <code>*_free</code></td><td><code>nullptr</code></td></tr>
+<tr><td>Array</td><td><code>new T[n]</code></td><td><code>delete[]</code> (use <code>unique_ptr&lt;T[]&gt;</code>)</td><td><code>nullptr</code></td></tr>
+<tr><td>Pool or arena block</td><td><code>pool.acquire()</code></td><td><code>pool.release(p)</code>, needs the pool</td><td><code>nullptr</code></td></tr>
+</tbody></table></div>
+<p>Two columns in that table drive the design of a deleter. The <b>release</b> column decides whether the deleter needs state (a length, a pool pointer). The <b>null value</b> column decides whether a plain pointer type can represent "no resource" at all. For a file descriptor it cannot, and <a href="#ch10-fd-handles">a custom pointer type</a> fixes that.</p>
+<pre data-run="ch12-file" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">FileCloser</span> {
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(std::FILE* f)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;fclose&quot;</span>);
+        std::<span class="hljs-built_in">fclose</span>(f);
+    }
+};
+<span class="hljs-keyword">using</span> File = std::unique_ptr&lt;std::FILE, FileCloser&gt;;
+
+<span class="hljs-function"><span class="hljs-type">static</span> File <span class="hljs-title">open_temp</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">File</span>(std::<span class="hljs-built_in">tmpfile</span>()); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    File f = <span class="hljs-built_in">open_temp</span>();
+    <span class="hljs-keyword">if</span> (!f) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    std::<span class="hljs-built_in">fputs</span>(<span class="hljs-string">&quot;hello\n&quot;</span>, f.<span class="hljs-built_in">get</span>());
+    std::<span class="hljs-built_in">rewind</span>(f.<span class="hljs-built_in">get</span>());
+    <span class="hljs-type">char</span> line[<span class="hljs-number">16</span>];
+    <span class="hljs-keyword">if</span> (std::<span class="hljs-built_in">fgets</span>(line, <span class="hljs-keyword">sizeof</span> line, f.<span class="hljs-built_in">get</span>())) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;read: %s&quot;</span>, line);
+    File g = std::<span class="hljs-built_in">move</span>(f);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;f empty: %d\n&quot;</span>, f == <span class="hljs-literal">nullptr</span>);
+}</code></pre>
+<pre class="out" data-out="ch12-file">read: hello
+f empty: 1
+fclose</pre>
+<p>The stream is closed exactly once, by <code>g</code>, at the end of <code>main</code>. The moved-from <code>f</code> holds <code>nullptr</code>, so its destructor does not call the deleter. Early returns and exceptions get the same guarantee for free.</p>
+</section>
+
+<section id="ch10-unique-deleters" data-roles="th"><div class="sec-head"><h2>unique_ptr&lt;T, D&gt;: three ways to spell the deleter</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> For <code>unique_ptr</code> the deleter is part of the type. <code>unique_ptr&lt;FILE, A&gt;</code> and <code>unique_ptr&lt;FILE, B&gt;</code> are unrelated types: you cannot assign one to the other or put both in one vector. That is the price of zero overhead, because the compiler sees the exact deleter and can inline it.</p>
+<h3 id="ch10-three-forms">Function object, lambda, function pointer</h3>
+<pre data-run="ch12-forms" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">FileCloser</span> {                       <span class="hljs-comment">// 1. a named function-object type</span>
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(std::FILE* f)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">fclose</span>(f); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">close_file</span><span class="hljs-params">(std::FILE* f)</span> </span>{ std::<span class="hljs-built_in">fclose</span>(f); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::unique_ptr&lt;std::FILE, FileCloser&gt; <span class="hljs-title">a</span><span class="hljs-params">(std::tmpfile())</span></span>;
+
+    <span class="hljs-keyword">using</span> LambdaCloser = <span class="hljs-keyword">decltype</span>([](std::FILE* f) { std::<span class="hljs-built_in">fclose</span>(f); });  <span class="hljs-comment">// 2. C++20 only</span>
+    <span class="hljs-function">std::unique_ptr&lt;std::FILE, LambdaCloser&gt; <span class="hljs-title">b</span><span class="hljs-params">(std::tmpfile())</span></span>;
+
+    <span class="hljs-keyword">auto</span> closer = [](std::FILE* f) { std::<span class="hljs-built_in">fclose</span>(f); };                   <span class="hljs-comment">// 2b. lambda object</span>
+    <span class="hljs-function">std::unique_ptr&lt;std::FILE, <span class="hljs-title">decltype</span><span class="hljs-params">(closer)</span>&gt; <span class="hljs-title">c</span><span class="hljs-params">(std::tmpfile(), closer)</span></span>;
+
+    <span class="hljs-function">std::unique_ptr&lt;std::FILE, <span class="hljs-title">decltype</span><span class="hljs-params">(&amp;close_file)</span>&gt; <span class="hljs-title">d</span><span class="hljs-params">(std::tmpfile(), &amp;close_file)</span></span>;  <span class="hljs-comment">// 3. pointer</span>
+
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d %d %d\n&quot;</span>, a != <span class="hljs-literal">nullptr</span>, b != <span class="hljs-literal">nullptr</span>, c != <span class="hljs-literal">nullptr</span>, d != <span class="hljs-literal">nullptr</span>);
+}</code></pre>
+<pre class="out" data-out="ch12-forms">1 1 1 1</pre>
+<ul>
+<li><b>Function-object type.</b> The best default. It is default constructible, so <code>File(fopen(...))</code> works with one argument, it costs no space, and the name documents the intent. Mark <code>operator()</code> <code>noexcept</code>.</li>
+<li><b>Lambda.</b> Before C++20 a lambda closure type has no default constructor and a lambda cannot appear in <code>decltype</code>, so you must pass the lambda object to every constructor (form 2b). C++20 made captureless lambdas default constructible and allowed lambdas in unevaluated operands, which gives form 2. A stateless lambda costs no space either.</li>
+<li><b>Function pointer.</b> <code>decltype(&amp;fclose)</code> is <code>int (*)(FILE*)</code>. The pointer is a runtime value, so it takes 8 bytes inside every <code>unique_ptr</code>, the call is indirect unless the optimiser proves the value, and you must pass it at every construction: a value-initialised function pointer is null, so the one-argument constructor does not take part in overload resolution for pointer deleters (it would leave you with a null deleter to call later).</li>
+</ul>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p><code>std::unique_ptr&lt;FILE, decltype(&amp;fclose)&gt; f(fopen("a", "r"));</code> does not compile. The single-argument constructor requires <code>D</code> to be default constructible and <b>not a pointer type</b> ([unique.ptr.single.ctor]). Write <code>f(fopen("a", "r"), &amp;fclose)</code>, or better, use a function-object type.</p></div>
+<h3 id="ch10-addressable">A note on taking the address of library functions</h3>
+<p>C++20 [namespace.std] says the behaviour is unspecified (possibly ill-formed) if a program takes the address of a standard library function that is not designated <i>addressable</i>, and almost none are. <code>&amp;std::fclose</code> works on every real implementation, but the strictly portable spelling is a lambda or function object that <i>calls</i> <code>fclose</code>. It also avoids a GCC <code>-Wignored-attributes</code> warning on glibc, where <code>fclose</code> carries a <code>nonnull</code> attribute that is lost in <code>decltype(&amp;fclose)</code>. One more trick you may see in code reviews turns a function pointer into a zero-size type:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">auto</span> F&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">FnDeleter</span> {
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">P</span>&gt; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(P p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-built_in">F</span>(p); }
+};
+<span class="hljs-keyword">using</span> File = std::unique_ptr&lt;std::FILE, FnDeleter&lt;&amp;std::fclose&gt;&gt;;   <span class="hljs-comment">// pointer is a template argument, 0 bytes</span></code></pre>
+<h3 id="ch10-deleter-api">What unique_ptr requires of D</h3>
+<ul>
+<li><code>d(ptr)</code> must be well-formed and must not throw. The destructor and <code>reset</code> call it.</li>
+<li><code>get_deleter()</code> returns a reference to the stored deleter, so a stateful deleter can be inspected or changed.</li>
+<li><code>D</code> may be an lvalue reference type, <code>unique_ptr&lt;T, D&amp;&gt;</code>. Then the pointer stores a reference to an external deleter object, which must outlive it. This is how several pointers share one stateful deleter without copying it.</li>
+<li>If <code>D</code> has a nested type <code>pointer</code>, that type is stored instead of <code>T*</code>. It must satisfy <i>NullablePointer</i>: value-initialises to null, compares with <code>nullptr</code>, converts to <code>bool</code> in a condition.</li>
+<li><code>release()</code> gives up ownership <b>without</b> calling the deleter. <code>reset(q)</code> stores <code>q</code> first and then deletes the old pointer, so a deleter that inspects the smart pointer sees the new state.</li>
+</ul>
+</section>
+
+<section id="ch10-size" data-roles="th"><div class="sec-head"><h2>The size cost and the empty base optimisation</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> An empty class still has <code>sizeof</code> 1, so a naive <code>struct { T* p; D d; }</code> would be 16 bytes even for an empty <code>D</code>, because of padding. Library implementations avoid this. libstdc++ stores the pair in a <code>std::tuple</code> whose elements are base classes when they are empty, and libc++ uses a <code>__compressed_pair</code>. Both rely on the <b>empty base optimisation</b> (EBO): an empty base class subobject may occupy zero bytes. In your own code, C++20 <code>[[no_unique_address]]</code> on a member gives the same effect without inheritance.</p>
+<pre data-run="ch12-sizes" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">CloseFile</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(std::FILE* f)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">fclose</span>(f); } };
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">close_file</span><span class="hljs-params">(std::FILE* f)</span> </span>{ std::<span class="hljs-built_in">fclose</span>(f); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> lam = [](std::FILE* f) { std::<span class="hljs-built_in">fclose</span>(f); };
+    <span class="hljs-type">int</span> log_fd = <span class="hljs-number">2</span>;
+    <span class="hljs-keyword">auto</span> stateful = [log_fd](std::FILE* f) { (<span class="hljs-type">void</span>)log_fd; std::<span class="hljs-built_in">fclose</span>(f); };
+    <span class="hljs-keyword">using</span> F = std::FILE;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;default_delete   %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;function object  %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;F, CloseFile&gt;));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;stateless lambda %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;F, <span class="hljs-keyword">decltype</span>(lam)&gt;));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;function pointer %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;F, <span class="hljs-keyword">decltype</span>(&amp;close_file)&gt;));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;stateful lambda  %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;F, <span class="hljs-keyword">decltype</span>(stateful)&gt;));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;std::function    %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;F, std::function&lt;<span class="hljs-built_in">void</span>(F*)&gt;&gt;));
+}</code></pre>
+<pre class="out" data-out="ch12-sizes">default_delete   8
+function object  8
+stateless lambda 8
+function pointer 16
+stateful lambda  16
+std::function    40</pre>
+<p>These numbers are for 64-bit Linux and macOS with both libstdc++ and libc++. The last line depends on <code>sizeof(std::function)</code>, which is 32 on both libraries today but is not fixed by the standard. The stateful lambda captures an <code>int</code> (4 bytes), and alignment pads the pair to 16.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 270" role="img" aria-label="unique_ptr object size for five kinds of deleter">
+<text x="20" y="24" class="t-bold">sizeof(unique_ptr&lt;FILE, D&gt;) on a 64-bit target (one cell = 8 bytes)</text>
+<text x="20" y="62" class="t-small">function object / default_delete</text>
+<rect x="250" y="44" width="110" height="28" class="d-acc"/><text x="305" y="63" text-anchor="middle" class="t-mono t-small">FILE* p</text>
+<rect x="362" y="44" width="40" height="28" class="d-soft d-dash"/><text x="382" y="63" text-anchor="middle" class="t-small t-muted">D</text>
+<text x="420" y="63" class="t-small t-key">8 B: D is an empty base, 0 bytes</text>
+<text x="20" y="104" class="t-small">stateless lambda</text>
+<rect x="250" y="86" width="110" height="28" class="d-acc"/><text x="305" y="105" text-anchor="middle" class="t-mono t-small">FILE* p</text>
+<rect x="362" y="86" width="40" height="28" class="d-soft d-dash"/><text x="382" y="105" text-anchor="middle" class="t-small t-muted">λ</text>
+<text x="420" y="105" class="t-small t-key">8 B: closure has no members</text>
+<text x="20" y="146" class="t-small">function pointer</text>
+<rect x="250" y="128" width="110" height="28" class="d-acc"/><text x="305" y="147" text-anchor="middle" class="t-mono t-small">FILE* p</text>
+<rect x="362" y="128" width="110" height="28" class="d-trap"/><text x="417" y="147" text-anchor="middle" class="t-mono t-small">int(*)(FILE*)</text>
+<text x="490" y="147" class="t-small t-trap">16 B: pointer value stored</text>
+<text x="20" y="188" class="t-small">lambda capturing an int</text>
+<rect x="250" y="170" width="110" height="28" class="d-acc"/><text x="305" y="189" text-anchor="middle" class="t-mono t-small">FILE* p</text>
+<rect x="362" y="170" width="55" height="28" class="d-trap"/><text x="389" y="189" text-anchor="middle" class="t-mono t-small">int</text>
+<rect x="417" y="170" width="55" height="28" class="d-soft"/><text x="444" y="189" text-anchor="middle" class="t-small t-muted">pad</text>
+<text x="490" y="189" class="t-small t-trap">16 B: state plus padding</text>
+<text x="20" y="230" class="t-small">std::function deleter</text>
+<rect x="250" y="212" width="110" height="28" class="d-acc"/><text x="305" y="231" text-anchor="middle" class="t-mono t-small">FILE* p</text>
+<rect x="362" y="212" width="250" height="28" class="d-trap"/><text x="487" y="231" text-anchor="middle" class="t-mono t-small">std::function (32 B, may allocate)</text>
+<text x="630" y="231" class="t-small t-trap">40 B</text>
+<line x1="250" y1="256" x2="690" y2="256" class="d-grid"/>
+</svg></div><figcaption><b>Stateless deleters are free, stateful ones are paid per pointer.</b> The empty base optimisation lets an empty deleter share the address of the pointer member, so it adds nothing. A function pointer is state (a runtime value), so it doubles the size. A <code>std::function</code> deleter adds type erasure and possibly a heap allocation to every pointer.</figcaption></figure>
+<p><b>Why the size matters.</b> A <code>vector&lt;unique_ptr&lt;Node, decltype(&amp;free_node)&gt;&gt;</code> with ten million entries wastes 80 MB on copies of the same function pointer, and halves the number of pointers per cache line. In latency-sensitive code the indirect call also blocks inlining. Prefer an empty function-object type whenever the release action is fixed at compile time.</p>
+<h3 id="ch10-no-unique-address">Doing it yourself: [[no_unique_address]]</h3>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Handle</span> {
+    T* p_ = <span class="hljs-literal">nullptr</span>;
+    [[no_unique_address]] D d_;     <span class="hljs-comment">// occupies no storage if D is empty (GCC, Clang; MSVC ignores it)</span>
+};</code></pre>
+<p>MSVC accepts but ignores the standard attribute for ABI reasons and offers <code>[[msvc::no_unique_address]]</code> instead. Before C++20 the portable technique was to inherit privately from <code>D</code> when <code>std::is_empty_v&lt;D&gt;</code> and <code>D</code> is not <code>final</code>.</p>
+</section>
+
+<section id="ch10-shared-deleters" data-roles="th"><div class="sec-head"><h2>shared_ptr deleters: type-erased, in the control block</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> For <code>shared_ptr&lt;T&gt;</code> the deleter is <i>not</i> part of the type. Every <code>shared_ptr&lt;int&gt;</code> is the same 16-byte object, two pointers: one to the <code>int</code> and one to a control block. The control block is a class template instantiated for the exact pointer, deleter and allocator types, and the <code>shared_ptr</code> talks to it through virtual functions. That is classic type erasure.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 300" role="img" aria-label="Two shared_ptr objects of the same type pointing to control blocks with different deleters">
+<defs><marker id="ch10-c12a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="22" class="t-bold">Same static type shared_ptr&lt;int&gt;, different control block types</text>
+<rect x="20" y="50" width="150" height="56" class="d-acc"/>
+<text x="95" y="44" text-anchor="middle" class="t-small t-bold">shared_ptr&lt;int&gt; a</text>
+<text x="30" y="72" class="t-mono t-small">int* ptr</text><text x="30" y="96" class="t-mono t-small">ctrl*</text>
+<line x1="20" y1="78" x2="170" y2="78" class="d-grid"/>
+<rect x="20" y="190" width="150" height="56" class="d-acc"/>
+<text x="95" y="184" text-anchor="middle" class="t-small t-bold">shared_ptr&lt;int&gt; b</text>
+<text x="30" y="212" class="t-mono t-small">int* ptr</text><text x="30" y="236" class="t-mono t-small">ctrl*</text>
+<line x1="20" y1="218" x2="170" y2="218" class="d-grid"/>
+<rect x="290" y="40" width="250" height="116" class="d-box"/>
+<text x="300" y="58" class="t-small t-bold">control block, default deleter</text>
+<text x="300" y="80" class="t-mono t-small">vptr → dispose: delete p</text>
+<text x="300" y="100" class="t-mono t-small">use_count = 1</text>
+<text x="300" y="120" class="t-mono t-small">weak_count = 1</text>
+<text x="300" y="140" class="t-mono t-small">int* p</text>
+<rect x="290" y="176" width="250" height="116" class="d-key"/>
+<text x="300" y="194" class="t-small t-bold">control block, Pool deleter</text>
+<text x="300" y="216" class="t-mono t-small">vptr → dispose: d(p)</text>
+<text x="300" y="236" class="t-mono t-small">use_count, weak_count</text>
+<text x="300" y="256" class="t-mono t-small">int* p</text>
+<text x="300" y="276" class="t-mono t-small">PoolDeleter d { Pool* }</text>
+<rect x="610" y="60" width="100" height="36" class="d-soft"/><text x="660" y="83" text-anchor="middle" class="t-mono t-small">int (heap)</text>
+<rect x="610" y="200" width="100" height="36" class="d-soft"/><text x="660" y="223" text-anchor="middle" class="t-mono t-small">int (pool)</text>
+<path d="M150,92 L288,92" class="d-line" marker-end="url(#ch12-c12a)"/>
+<path d="M150,232 L288,232" class="d-line" marker-end="url(#ch12-c12a)"/>
+<path d="M140,68 C 260,10 520,20 608,72" class="d-line d-dash" marker-end="url(#ch12-c12a)"/>
+<path d="M140,208 C 300,165 560,170 608,212" class="d-line d-dash" marker-end="url(#ch12-c12a)"/>
+<text x="560" y="124" class="t-small t-muted">virtual call</text>
+<text x="560" y="138" class="t-small t-muted">when use_count → 0</text>
+</svg></div><figcaption><b>The deleter lives in the control block.</b> Both pointers have the same type and size. The control block for <code>b</code> is a different class that also stores the deleter object, and the shared_ptr reaches it through a virtual <code>dispose</code> call when the last strong owner goes away. The dashed arrows are the stored object pointers.</figcaption></figure>
+<pre data-run="ch12-erasure" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> global_counter = <span class="hljs-number">3</span>;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::shared_ptr&lt;<span class="hljs-type">int</span>&gt;&gt; v;
+    v.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">shared_ptr</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-keyword">new</span> <span class="hljs-built_in">int</span>(<span class="hljs-number">1</span>)));
+    v.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">shared_ptr</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-keyword">new</span> <span class="hljs-built_in">int</span>(<span class="hljs-number">2</span>), [](<span class="hljs-type">int</span>* p) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;lambda frees %d\n&quot;</span>, *p);
+        <span class="hljs-keyword">delete</span> p;
+    }));
+    v.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">shared_ptr</span>&lt;<span class="hljs-type">int</span>&gt;(&amp;global_counter, [](<span class="hljs-type">int</span>*) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;no-op for a static&quot;</span>); }));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;all the same type, sizeof %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(v[<span class="hljs-number">0</span>]));
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; p : v) p.<span class="hljs-built_in">reset</span>();
+}</code></pre>
+<pre class="out" data-out="ch12-erasure">all the same type, sizeof 16
+lambda frees 2
+no-op for a static</pre>
+<h3 id="ch10-shared-rules">Rules that differ from unique_ptr</h3>
+<ul>
+<li><b>Capture at construction.</b> The constructor <code>template&lt;class Y, class D&gt; shared_ptr(Y* p, D d)</code> records <code>Y</code> and <code>D</code> in the control block type. Later conversions to <code>shared_ptr&lt;Base&gt;</code> or <code>shared_ptr&lt;void&gt;</code> keep calling the original deleter with the original <code>Y*</code>, which is why <code>shared_ptr&lt;void&gt;(new Foo)</code> runs <code>~Foo</code> and <code>shared_ptr&lt;Base&gt;(new Derived)</code> is correct even without a virtual destructor.</li>
+<li><b>Requirements on D.</b> <code>D</code> must be move constructible, and <code>d(p)</code> must be well-formed and must not throw.</li>
+<li><b>Allocation failure.</b> The constructor allocates the control block. If that throws, it calls <code>d(p)</code> before rethrowing, so the resource never leaks. That is why <code>shared_ptr&lt;FILE&gt;(fopen(...), fclose)</code> is exception safe on its own.</li>
+<li><b>Inspection.</b> <code>std::get_deleter&lt;D&gt;(sp)</code> returns a <code>D*</code> to the stored deleter, or <code>nullptr</code> if the type does not match exactly. There is no way to ask "what is the deleter type?", only "is it this type?".</li>
+<li><b>Cost.</b> The deleter is stored once per owned object, in the control block, not once per pointer. Calling it is a virtual call, which is irrelevant compared with the atomic decrement before it.</li>
+<li><b>Conversion from unique_ptr.</b> <code>shared_ptr&lt;T&gt;(std::move(u))</code> moves the <code>unique_ptr</code>'s deleter into the new control block, so a <code>unique_ptr&lt;FILE, FileCloser&gt;</code> becomes a <code>shared_ptr&lt;FILE&gt;</code> that still calls <code>FileCloser</code>. If <code>D</code> is a reference type, the control block stores <code>std::ref(u.get_deleter())</code> instead, so the external deleter object must outlive every copy of the <code>shared_ptr</code>.</li>
+</ul>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>unique_ptr: deleter in the type, stored inline, zero cost if empty, statically dispatched. shared_ptr: deleter erased, stored in the control block, one virtual call, any deleter fits the same <code>shared_ptr&lt;T&gt;</code>.</p></div>
+<h3 id="ch10-deleter-lifetime">When is the deleter object itself destroyed?</h3>
+<p>The deleter is <i>called</i> when the strong count reaches zero. When the deleter <i>object</i> is destroyed is left to the implementation: the standard only promises that <code>get_deleter</code> stays valid while some <code>shared_ptr</code> or <code>weak_ptr</code> shares ownership. libstdc++ destroys the deleter together with the control block, when the weak count also reaches zero. libc++ destroys it right after calling it. If your deleter captures something heavy (a <code>shared_ptr</code> to a pool, a big buffer), a long-lived <code>weak_ptr</code> may keep that alive on libstdc++.</p>
+</section>
+
+<section id="ch10-make-functions" data-roles="th"><div class="sec-head"><h2>Deleters and the make functions</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> <code>make_unique</code> and <code>make_shared</code> both decide <i>how</i> the object is allocated, so they also decide how it is freed. There is no overload that takes a deleter, and there cannot be a sensible one: a deleter is the answer to "how do I free memory someone else allocated?", and with a make function nobody else allocated it.</p>
+<ul>
+<li><code>make_unique&lt;T&gt;(args...)</code> is <code>unique_ptr&lt;T&gt;(new T(args...))</code>, always with <code>default_delete</code>. For a custom deleter, call the constructor: <code>unique_ptr&lt;T, D&gt;(pool.acquire(), D{&amp;pool})</code>.</li>
+<li><code>make_shared&lt;T&gt;(args...)</code> allocates the control block and the object in one block, and destroys the object with a direct destructor call, not with <code>delete</code>. A user deleter would have nothing valid to free.</li>
+<li><code>std::allocate_shared&lt;T&gt;(alloc, args...)</code> is the customisation point instead. It takes an allocator, rebinds it to the internal control-block-plus-object type, allocates once through it and constructs the object with <code>allocator_traits::construct</code>. Use it when the memory must come from a pool or arena but you still want a single allocation.</li>
+<li>The three-argument constructor <code>shared_ptr(p, d, alloc)</code> uses <code>alloc</code> only for the control block. The object was allocated by you, and <code>d</code> frees it.</li>
+</ul>
+<pre data-run="ch12-allocate-shared" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> allocations = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">CountingAlloc</span> {
+    <span class="hljs-keyword">using</span> value_type = T;
+    <span class="hljs-built_in">CountingAlloc</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">U</span>&gt; <span class="hljs-built_in">CountingAlloc</span>(<span class="hljs-type">const</span> CountingAlloc&lt;U&gt;&amp;) {}
+    <span class="hljs-function">T* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        ++allocations;
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;T*&gt;(::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(n * <span class="hljs-built_in">sizeof</span>(T)));
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">deallocate</span><span class="hljs-params">(T* p, std::<span class="hljs-type">size_t</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{ ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(p)</span></span>; }
+    <span class="hljs-keyword">friend</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> CountingAlloc&amp;, <span class="hljs-type">const</span> CountingAlloc&amp;) { <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Point</span> { <span class="hljs-type">int</span> x, y; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> a = std::<span class="hljs-built_in">allocate_shared</span>&lt;Point&gt;(CountingAlloc&lt;Point&gt;{}, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;allocate_shared: %d allocation(s) through the allocator\n&quot;</span>, allocations);
+
+    allocations = <span class="hljs-number">0</span>;
+    <span class="hljs-function">std::shared_ptr&lt;Point&gt; <span class="hljs-title">b</span><span class="hljs-params">(<span class="hljs-keyword">new</span> Point{<span class="hljs-number">3</span>, <span class="hljs-number">4</span>}, std::default_delete&lt;Point&gt;{}, CountingAlloc&lt;Point&gt;{})</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;shared_ptr(p, d, a): %d allocation(s) through the allocator, plus the new\n&quot;</span>, allocations);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d\n&quot;</span>, a-&gt;x + a-&gt;y, b-&gt;x + b-&gt;y);
+}</code></pre>
+<pre class="out" data-out="ch12-allocate-shared">allocate_shared: 1 allocation(s) through the allocator
+shared_ptr(p, d, a): 1 allocation(s) through the allocator, plus the new
+3 7</pre>
+<div class="callout tip"><p class="callout-title">Tip</p><p>For "objects from my pool, shared ownership", you have two designs. <code>allocate_shared</code> with a pool allocator gives one allocation and the pool sees the combined block size. A raw pool pointer plus a <code>PoolDeleter</code> gives two allocations (the control block comes from the global heap) but keeps the pool's block size equal to <code>sizeof(T)</code>. Pick the second if the pool is a fixed-size block pool (<a href="#ch13">Ch 13</a>).</p></div>
+</section>
+
+<section id="ch10-null-noexcept" data-roles="th"><div class="sec-head"><h2>Null handles, exceptions and close errors</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch10-null-rules">Is the deleter called for a null pointer?</h3>
+<p>This is the single most asked deleter question, and the two smart pointers answer it differently.</p>
+<ul>
+<li><b>unique_ptr: no.</b> The destructor and <code>reset</code> only call the deleter if the stored pointer is not null ([unique.ptr.single.dtor]). So <code>unique_ptr&lt;FILE, FileCloser&gt;(fopen("missing", "r"))</code> is safe even though <code>fclose(nullptr)</code> is undefined.</li>
+<li><b>shared_ptr: yes, if you gave it a deleter.</b> <code>shared_ptr(nullptr_t, D d)</code> and <code>shared_ptr(p, d)</code> with <code>p == nullptr</code> both create a control block that <i>owns</i> the null pointer. <code>use_count()</code> is 1, and when it drops to 0 the deleter is called with <code>nullptr</code>. A default-constructed <code>shared_ptr</code> has no control block, so nothing is called.</li>
+</ul>
+<pre data-run="ch12-null" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">say</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;deleter called with %s\n&quot;</span>, p ? <span class="hljs-string">&quot;an object&quot;</span> : <span class="hljs-string">&quot;nullptr&quot;</span>);
+    <span class="hljs-keyword">delete</span> p;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        <span class="hljs-function">std::unique_ptr&lt;<span class="hljs-type">int</span>, <span class="hljs-title">void</span> <span class="hljs-params">(*)</span><span class="hljs-params">(<span class="hljs-type">int</span>*)</span>&gt; <span class="hljs-title">u</span><span class="hljs-params">(<span class="hljs-literal">nullptr</span>, say)</span></span>;
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;unique_ptr leaves scope&quot;</span>);
+    }
+    {
+        <span class="hljs-function">std::shared_ptr&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">s</span><span class="hljs-params">(<span class="hljs-literal">nullptr</span>, say)</span></span>;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;use_count %ld\n&quot;</span>, s.<span class="hljs-built_in">use_count</span>());
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;shared_ptr leaves scope&quot;</span>);
+    }
+    {
+        std::shared_ptr&lt;<span class="hljs-type">int</span>&gt; e;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;empty use_count %ld\n&quot;</span>, e.<span class="hljs-built_in">use_count</span>());
+    }
+}</code></pre>
+<pre class="out" data-out="ch12-null">unique_ptr leaves scope
+use_count 1
+shared_ptr leaves scope
+deleter called with nullptr
+empty use_count 0</pre>
+<p>So a <code>shared_ptr</code> deleter for a C API that rejects null must check: <code>[](FILE* f) { if (f) fclose(f); }</code>. Note also that a <code>shared_ptr</code> holding null with a deleter is <i>non-empty</i> but <code>if (sp)</code> is false, because <code>operator bool</code> tests the stored pointer, not the control block.</p>
+<h3 id="ch10-fd-handles">Handles that are not pointers</h3>
+<p>A file descriptor is an <code>int</code> whose null value is <code>-1</code>. <code>unique_ptr&lt;int, D&gt;</code> would store an <code>int*</code>, which is wrong. Give the deleter a nested <code>pointer</code> type that wraps the fd and satisfies <i>NullablePointer</i>, and <code>unique_ptr</code> stores that instead. The <a href="#ch10-coding">coding section</a> builds this completely. The common alternative is a 30-line dedicated <code>UniqueFd</code> class, which is what most codebases (for example Android's <code>unique_fd</code>) actually ship. Both are fine answers in an interview, as long as you say why <code>int*</code> is wrong and why 0 is a valid descriptor.</p>
+<h3 id="ch10-no-throw">Deleters must not throw</h3>
+<p>The standard requires that the deleter call does not throw, and destructors are implicitly <code>noexcept</code>. If a deleter throws from inside <code>~unique_ptr</code>, <code>std::terminate</code> is called. Mark your deleter <code>noexcept</code> so the contract is visible and checked.</p>
+<p>A deleter also has no way to report an error. <code>fclose</code> flushes buffered output, and the flush can fail (disk full, NFS errors). <code>close</code> on some file systems reports deferred write errors. If the error matters, close explicitly on the success path and check the result:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">save</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* path, <span class="hljs-type">const</span> std::string&amp; data)</span> </span>{
+    <span class="hljs-function">File <span class="hljs-title">f</span><span class="hljs-params">(std::fopen(path, <span class="hljs-string">&quot;w&quot;</span>))</span></span>;
+    <span class="hljs-keyword">if</span> (!f) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+    <span class="hljs-keyword">if</span> (std::<span class="hljs-built_in">fwrite</span>(data.<span class="hljs-built_in">data</span>(), <span class="hljs-number">1</span>, data.<span class="hljs-built_in">size</span>(), f.<span class="hljs-built_in">get</span>()) != data.<span class="hljs-built_in">size</span>()) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">fclose</span>(f.<span class="hljs-built_in">release</span>()) == <span class="hljs-number">0</span>;   <span class="hljs-comment">// explicit close: the error is observed; the deleter only covers failure paths</span>
+}</code></pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>Retrying <code>close</code> after <code>EINTR</code> is wrong on Linux: the descriptor is already released, and a retry may close a descriptor another thread just received. A deleter should call <code>close</code> once and ignore the result.</p></div>
+<div class="table-wrap"><table>
+<thead><tr><th>Key facts</th><th>unique_ptr&lt;T, D&gt;</th><th>shared_ptr&lt;T&gt;</th></tr></thead>
+<tbody>
+<tr><td>Deleter part of the type</td><td>yes</td><td>no (type-erased)</td></tr>
+<tr><td>Where it is stored</td><td>inside the pointer object (EBO if empty)</td><td>in the control block</td></tr>
+<tr><td>Size with a stateless deleter</td><td>8 bytes</td><td>16 bytes (always)</td></tr>
+<tr><td>Size with a function pointer deleter</td><td>16 bytes</td><td>16 bytes (the pointer is in the control block)</td></tr>
+<tr><td>Deleter called for null</td><td>never</td><td>yes, if constructed with a deleter</td></tr>
+<tr><td>Works with the make function</td><td>no, call the constructor</td><td>no, use <code>allocate_shared</code> for allocator control</td></tr>
+<tr><td>Inspect the deleter</td><td><code>get_deleter()</code> member</td><td><code>std::get_deleter&lt;D&gt;(sp)</code> free function</td></tr>
+<tr><td>Incomplete <code>T</code> at destruction</td><td>error with <code>default_delete</code></td><td>fine, deleter captured at construction</td></tr>
+<tr><td>Custom handle type (fd)</td><td>yes, via <code>D::pointer</code></td><td>no, always stores <code>T*</code></td></tr>
+</tbody></table></div>
+</section>
+
+<section id="ch10-arrays-pools" data-roles="th"><div class="sec-head"><h2>Arrays, no-op deleters, pools and mmap</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch10-arrays">Arrays</h3>
+<p><code>unique_ptr&lt;T[]&gt;</code> uses <code>default_delete&lt;T[]&gt;</code>, which calls <code>delete[]</code>, and provides <code>operator[]</code> instead of <code>*</code> and <code>-&gt;</code>. It also refuses conversions from <code>Derived*</code>, because indexing an array through a base pointer is broken. <code>shared_ptr&lt;T[]&gt;</code> works the same way since C++17, and <code>make_shared&lt;T[]&gt;(n)</code> since C++20. Before C++17 you had to write <code>shared_ptr&lt;T&gt;(new T[n], std::default_delete&lt;T[]&gt;())</code>, and forgetting the deleter meant <code>delete</code> on a <code>new[]</code> pointer, which is undefined behaviour (<a href="#ch07">Ch 7</a> explains the array cookie). For buffers from <code>malloc</code> use <code>unique_ptr&lt;char[], FreeDeleter&gt;</code>. In most code, <code>std::vector</code> is still the better array owner.</p>
+<h3 id="ch10-noop">No-op deleters</h3>
+<p>A deleter that does nothing turns a smart pointer into a non-owning one: <code>shared_ptr&lt;Logger&gt;(&amp;global_logger, [](Logger*) {})</code>. It is useful when an interface demands a <code>shared_ptr</code> and you want to pass a static or stack object that is known to outlive every user. It is also a design smell, because the type now lies: it says "shared ownership" while nobody owns the object, and if the stack object dies first you get a dangling pointer that the type system cannot see. The aliasing constructor (<a href="#ch09">Ch 9</a>) is the better tool when there is a real owner to tie the lifetime to. The cleaner fix is to change the interface to take <code>T&amp;</code> or <code>T*</code>.</p>
+<h3 id="ch10-pool-deleter">Stateful deleters: pools and mappings</h3>
+<p>A pool deleter must know which pool to return to, so it carries a <code>Pool*</code>, and every <code>unique_ptr</code> grows to 16 bytes. If there is exactly one pool per type, a stateless deleter that calls a static or thread-local pool keeps the size at 8. A <code>munmap</code> deleter must know the length. Store it in the deleter, or wrap the mapping in a span-like type and give the deleter a <code>pointer</code> typedef.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Unmap</span> {
+    std::<span class="hljs-type">size_t</span> len;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ ::<span class="hljs-built_in">munmap</span>(p, len); }
+};
+<span class="hljs-type">void</span>* raw = ::<span class="hljs-built_in">mmap</span>(<span class="hljs-literal">nullptr</span>, len, PROT_READ, MAP_PRIVATE, fd, <span class="hljs-number">0</span>);
+<span class="hljs-keyword">if</span> (raw == MAP_FAILED) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">system_error</span>(errno, std::<span class="hljs-built_in">generic_category</span>());   <span class="hljs-comment">// MAP_FAILED is (void*)-1, not null</span>
+<span class="hljs-function">std::unique_ptr&lt;<span class="hljs-type">void</span>, Unmap&gt; <span class="hljs-title">map</span><span class="hljs-params">(raw, Unmap{len})</span></span>;</code></pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>Check for <code>MAP_FAILED</code> <i>before</i> handing the pointer to the smart pointer. <code>unique_ptr</code> only skips the deleter for <code>nullptr</code>, so a <code>MAP_FAILED</code> pointer would be passed to <code>munmap</code>. The same applies to <code>INVALID_HANDLE_VALUE</code> on Windows and <code>SIG_ERR</code>-style sentinels.</p></div>
+<p>A pool deleter also creates a lifetime rule: <b>the pool must outlive every pointer it handed out</b>. Declare the pool before the pointers (members are destroyed in reverse order of declaration), or make the deleter hold a <code>shared_ptr</code> to the pool. The <a href="#ch10-reading">reading drills</a> include the bug you get when this is wrong.</p>
+</section>
+
+<section id="ch10-incomplete" data-roles="th"><div class="sec-head"><h2>default_delete and incomplete types: the PIMPL destructor</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> <code>std::default_delete&lt;T&gt;::operator()</code> contains <code>static_assert(sizeof(T) &gt; 0)</code> (in effect), so it refuses to compile if <code>T</code> is incomplete at the point where it is instantiated. That is deliberate: <code>delete</code> on a pointer to an incomplete class type compiles with a warning but is undefined behaviour if the class has a non-trivial destructor, because the destructor is never called. C++26 goes further and makes deleting a pointer to an incomplete class type ill-formed (P3144).</p>
+<p>In the PIMPL idiom the header only declares <code>struct Impl;</code>. If the class does not declare a destructor, the compiler defines one implicitly <i>inline, wherever it is used</i>, which is in client code that only saw the header. There <code>Impl</code> is incomplete, so <code>default_delete&lt;Impl&gt;</code> fails.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="Where the PIMPL destructor is instantiated decides whether Impl is complete">
+<defs><marker id="ch10-c12b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="20" y="20" width="200" height="110" class="d-box"/>
+<text x="30" y="40" class="t-bold t-small">parser.h</text>
+<text x="30" y="62" class="t-mono t-small">class Parser {</text>
+<text x="30" y="80" class="t-mono t-small"> struct Impl;</text>
+<text x="30" y="98" class="t-mono t-small"> unique_ptr&lt;Impl&gt; p;</text>
+<text x="30" y="116" class="t-mono t-small">};</text>
+<rect x="260" y="20" width="200" height="90" class="d-trap"/>
+<text x="270" y="40" class="t-bold t-small">main.cpp (client)</text>
+<text x="270" y="62" class="t-mono t-small">#include "parser.h"</text>
+<text x="270" y="80" class="t-mono t-small">Parser x; // ~Parser here</text>
+<text x="270" y="98" class="t-small t-trap">Impl incomplete: error</text>
+<rect x="500" y="20" width="200" height="110" class="d-key"/>
+<text x="510" y="40" class="t-bold t-small">parser.cpp</text>
+<text x="510" y="62" class="t-mono t-small">struct Parser::Impl {…};</text>
+<text x="510" y="80" class="t-mono t-small">Parser::~Parser()</text>
+<text x="510" y="98" class="t-mono t-small">    = default;</text>
+<text x="510" y="116" class="t-small t-key">Impl complete: OK</text>
+<path d="M220,70 L258,70" class="d-line" marker-end="url(#ch12-c12b)"/>
+<path d="M220,110 C 330,170 420,170 498,110" class="d-line" marker-end="url(#ch12-c12b)"/>
+<text x="20" y="160" class="t-small">Fix: declare ~Parser() in the header and define it (even as = default) in parser.cpp,</text>
+<text x="20" y="180" class="t-small">after the definition of Impl. Do the same for the move constructor and move assignment,</text>
+<text x="20" y="200" class="t-small">which also destroy an Impl. shared_ptr&lt;Impl&gt; has no such problem: its deleter is</text>
+<text x="20" y="220" class="t-small">captured where the object is created, inside parser.cpp.</text>
+</svg></div><figcaption><b>The destructor is instantiated where it is defined.</b> An implicit destructor is defined inline at the first use in client code, where <code>Impl</code> is incomplete. Declaring it in the header and defaulting it in the .cpp moves the instantiation of <code>default_delete&lt;Impl&gt;</code> to a place where <code>Impl</code> is complete.</figcaption></figure>
+<pre><code class="language-cpp hljs"><span class="hljs-comment">// parser.h</span>
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Parser</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Parser</span>();
+    ~<span class="hljs-built_in">Parser</span>();                              <span class="hljs-comment">// declared only</span>
+    <span class="hljs-built_in">Parser</span>(Parser&amp;&amp;) <span class="hljs-keyword">noexcept</span>;              <span class="hljs-comment">// these also destroy an Impl</span>
+    Parser&amp; <span class="hljs-keyword">operator</span>=(Parser&amp;&amp;) <span class="hljs-keyword">noexcept</span>;
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">parse</span><span class="hljs-params">(std::string_view s)</span></span>;
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Impl</span>;
+    std::unique_ptr&lt;Impl&gt; impl_;
+};
+
+<span class="hljs-comment">// parser.cpp</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Parser</span>::Impl { std::vector&lt;<span class="hljs-type">int</span>&gt; tokens; };
+Parser::<span class="hljs-built_in">Parser</span>() : <span class="hljs-built_in">impl_</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Impl&gt;()) {}
+Parser::~<span class="hljs-built_in">Parser</span>() = <span class="hljs-keyword">default</span>;                <span class="hljs-comment">// Impl is complete here</span>
+Parser::<span class="hljs-built_in">Parser</span>(Parser&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+Parser&amp; Parser::<span class="hljs-keyword">operator</span>=(Parser&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;</code></pre>
+<p>The same error appears with any class that has a <code>unique_ptr</code> member to a forward-declared type, not only PIMPL. Note that <code>unique_ptr&lt;Impl&gt;</code> as a member is fine while <code>Impl</code> is incomplete: only the functions that destroy (destructor, <code>reset</code>, move assignment) need the complete type.</p>
+</section>
+
+<section id="ch10-out-ptr" data-roles="th"><div class="sec-head"><h2>C++23 std::out_ptr and std::inout_ptr</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>C APIs often return a handle through an output parameter: <code>int sqlite3_open(const char*, sqlite3** out)</code>. Before C++23 you wrote a temporary raw pointer, called the function and then <code>reset</code> the smart pointer, and every early return between the two steps was a leak. <code>std::out_ptr(sp)</code> (in <code>&lt;memory&gt;</code>) creates a temporary object that converts to <code>T**</code>, and at the end of the full expression its destructor calls <code>sp.reset(p)</code> if the C function wrote a non-null pointer. It also resets <code>sp</code> first, so the old handle is released before the call. <code>std::inout_ptr</code> is for APIs that take an existing handle, free or reallocate it and write back the new one: it passes the current pointer in after calling <code>release()</code>.</p>
+<pre data-run="ch12-out-ptr" data-std="c++23" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Widget</span> { <span class="hljs-type">int</span> id; };
+<span class="hljs-comment">// A C-style API: the handle comes back through an out parameter.</span>
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">widget_create</span><span class="hljs-params">(Widget** out, <span class="hljs-type">int</span> id)</span> </span>{ *out = <span class="hljs-keyword">new</span> Widget{id}; <span class="hljs-keyword">return</span> <span class="hljs-number">0</span>; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">widget_destroy</span><span class="hljs-params">(Widget* w)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;destroy %d\n&quot;</span>, w-&gt;id); <span class="hljs-keyword">delete</span> w; }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">WidgetDeleter</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Widget* w)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-built_in">widget_destroy</span>(w); } };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::unique_ptr&lt;Widget, WidgetDeleter&gt; w;
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">widget_create</span>(std::<span class="hljs-built_in">out_ptr</span>(w), <span class="hljs-number">7</span>) != <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;got %d\n&quot;</span>, w-&gt;id);
+    <span class="hljs-built_in">widget_create</span>(std::<span class="hljs-built_in">out_ptr</span>(w), <span class="hljs-number">8</span>);   <span class="hljs-comment">// w is reset (destroy 7) before the call</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;got %d\n&quot;</span>, w-&gt;id);
+}</code></pre>
+<pre class="out" data-out="ch12-out-ptr">got 7
+destroy 7
+got 8
+destroy 8</pre>
+<p>For a <code>shared_ptr</code>, <code>out_ptr</code> needs the deleter as an extra argument, <code>std::out_ptr(sp, WidgetDeleter{})</code>, because <code>shared_ptr::reset(p)</code> alone would use <code>delete</code>. <code>inout_ptr</code> does not work with <code>shared_ptr</code> at all, because a shared object cannot be released.</p>
+</section>
+
+<section id="ch10-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why does a smart pointer need a custom deleter at all? Give three resources where <code>delete</code> is the wrong release.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Because the release action depends on how the resource was acquired. <code>FILE*</code> from <code>fopen</code> needs <code>fclose</code>, a buffer from <code>malloc</code> needs <code>free</code>, an <code>mmap</code> region needs <code>munmap(addr, len)</code>, a pool block needs <code>pool.release</code>, and <code>new T[n]</code> needs <code>delete[]</code>.</p>
+    <p><b>Why.</b> Calling the wrong release is undefined behaviour: <code>delete</code> on <code>malloc</code> memory or on a <code>FILE*</code> corrupts the heap or skips flushing. The deleter lets you keep all of <code>unique_ptr</code>'s guarantees (single owner, exception safety, moves) and change only the last step. A weak answer says "for logging"; that is a use, but not the reason the feature exists.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Your stateless deleter is declared <code>struct Closer final { void operator()(int* p) const noexcept { delete p; } };</code>. It is still an empty class. Is <code>unique_ptr&lt;int, Closer&gt;</code> still 8 bytes?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. With both libstdc++ (GCC 16) and libc++ (LLVM 22) it is 16 bytes, the same as a function pointer deleter. Remove <code>final</code> and it goes back to 8. A hand-written pair with <code>[[no_unique_address]]</code> stays at 8 even for a <code>final</code> type.</p>
+    <p><b>Why.</b> The library size optimisation is the empty base optimisation, and you cannot derive from a <code>final</code> class. So the libraries store the deleter as an ordinary member instead, which takes 1 byte and is padded to pointer alignment. <code>[[no_unique_address]]</code> works on a member, so it does not care about <code>final</code>. The standard fixes neither size. The usual wrong answer is "8, the deleter is empty". Being empty is necessary for the zero-cost layout, but it is not enough. (The basic sizes for function pointers and lambdas are a <a href="#ch09">Ch 9</a> drill.)</p>
+<pre data-run="ch12-final-deleter" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Closer</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">delete</span> p; } };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">FinalCloser</span> <span class="hljs-keyword">final</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">delete</span> p; } };
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pair</span> { T* p; [[no_unique_address]] D d; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;plain %zu, final %zu, no_unique_address final %zu\n&quot;</span>,
+                <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;<span class="hljs-type">int</span>, Closer&gt;), <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;<span class="hljs-type">int</span>, FinalCloser&gt;),
+                <span class="hljs-built_in">sizeof</span>(Pair&lt;<span class="hljs-type">int</span>, FinalCloser&gt;));
+}</code></pre>
+<pre class="out" data-out="ch12-final-deleter">plain 8, final 16, no_unique_address final 8</pre>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is the deleter called when the managed pointer is null? Answer for <code>unique_ptr</code> and for <code>shared_ptr</code>.</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>unique_ptr</code>: never. <code>shared_ptr</code>: yes, if it was constructed with a deleter, even from <code>nullptr</code>; no, if it is default-constructed or constructed from a plain <code>nullptr</code> without a deleter.</p>
+    <p><b>Why.</b> <code>~unique_ptr</code> is specified as "if <code>get() != nullptr</code>, calls <code>get_deleter()(get())</code>". <code>shared_ptr(nullptr_t, D)</code> is specified to own <code>p</code> (a null pointer): a control block is allocated, <code>use_count()</code> is 1, and when it drops to zero the deleter runs with <code>nullptr</code>. So a <code>shared_ptr&lt;FILE&gt;(fopen(...), fclose)</code> whose <code>fopen</code> failed calls <code>fclose(nullptr)</code>, which is undefined. Guard inside the deleter. People usually assume the two smart pointers agree.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can you store a <code>shared_ptr&lt;int&gt;</code> with a lambda deleter and one with <code>default_delete</code> in the same <code>vector</code>? What about <code>unique_ptr</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes for <code>shared_ptr</code>: both are <code>shared_ptr&lt;int&gt;</code>. No for <code>unique_ptr</code>: <code>unique_ptr&lt;int&gt;</code> and <code>unique_ptr&lt;int, Lambda&gt;</code> are different types.</p>
+    <p><b>Why.</b> <code>shared_ptr</code>'s deleter is type-erased into the control block; the pointer object only holds a pointer to a polymorphic control block base. <code>unique_ptr</code> carries the deleter as a template parameter so it can store it inline and call it without indirection. To mix deleters in a <code>unique_ptr</code> container you would need a type-erased deleter such as <code>std::function&lt;void(int*)&gt;</code>, at a cost of 32 extra bytes per element and a possible allocation.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why is there no <code>make_shared</code> or <code>make_unique</code> overload that takes a deleter? What do you use instead?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A make function allocates the object itself, so it already knows how to free it; a deleter only makes sense for memory or a resource that someone else acquired. Use the constructor (<code>unique_ptr&lt;T, D&gt;(p, d)</code> or <code>shared_ptr&lt;T&gt;(p, d)</code>) when you acquired the resource, and <code>std::allocate_shared</code> when you want to control where <code>make_shared</code>'s single block comes from.</p>
+    <p><b>Why.</b> <code>make_shared</code> places the object inside the control block allocation and destroys it with a direct destructor call. A user deleter receiving that pointer could not legally free it, since it is not the start of any allocation. The allocator is the right customisation point: it controls both allocation and deallocation of the combined block. Saying "it was just forgotten" is the common wrong answer.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can <code>unique_ptr</code> manage a POSIX file descriptor? What goes wrong with <code>unique_ptr&lt;int, FdCloser&gt;</code> written naively?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes, but only if the deleter defines a nested <code>pointer</code> type that holds the fd and satisfies <i>NullablePointer</i>, with <code>-1</code> as its null state. Written naively, <code>unique_ptr&lt;int, FdCloser&gt;</code> stores an <code>int*</code>, so you would have to heap-allocate the int or cast the fd to a pointer.</p>
+    <p><b>Why.</b> <code>unique_ptr</code> stores <code>D::pointer</code> if it exists, otherwise <code>T*</code>. Casting an fd to <code>int*</code> (<code>reinterpret_cast&lt;int*&gt;(fd)</code>) breaks for fd 0, which is a valid descriptor (stdin) but would compare equal to <code>nullptr</code>, so it would never be closed, while an invalid fd <code>-1</code> would be "non-null" and passed to <code>close</code>. A small dedicated <code>UniqueFd</code> class is often clearer; the coding section shows both.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What happens if a deleter throws an exception?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The standard requires that the deleter call does not throw, so it is a contract violation. In practice the exception leaves <code>~unique_ptr</code> (or the shared_ptr release path), which is <code>noexcept</code>, and <code>std::terminate</code> is called.</p>
+    <p><b>Why.</b> Destructors are implicitly <code>noexcept(true)</code> since C++11 unless a member or base has a throwing destructor, and <code>unique_ptr</code>'s destructor is not one of those. Even outside a destructor, a throwing release would make <code>reset</code> unable to give the strong exception guarantee. Mark deleters <code>noexcept</code>, swallow or log errors inside, and close explicitly on the success path if the error must be observed.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span><code>u</code> is a <code>std::unique_ptr&lt;int, Counter&amp;&gt;</code> that refers to an external counting deleter. Which deleter does <code>std::shared_ptr&lt;int&gt; s(std::move(u));</code> store, and what follows from that? Can you go the other way, from a <code>shared_ptr</code> to a <code>unique_ptr</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> For a reference deleter type, the converting constructor stores <code>std::ref(u.get_deleter())</code>, a <code>std::reference_wrapper&lt;Counter&gt;</code>. It does not store a copy of the <code>Counter</code>. So <code>std::get_deleter&lt;Counter&gt;(s)</code> is null, and the external <code>Counter</code> must outlive every copy of <code>s</code>, including copies on other threads. For a non-reference <code>D</code>, the deleter is moved into the control block. The other direction does not exist: <code>shared_ptr</code> has no <code>release()</code>.</p>
+    <p><b>Why.</b> [util.smartptr.shared.const] specifies the <code>unique_ptr&lt;Y, D&gt;&amp;&amp;</code> constructor as <code>shared_ptr(r.release(), std::ref(r.get_deleter()))</code> when <code>D</code> is a reference, because a reference cannot be stored in a control block. A <code>shared_ptr</code> cannot give up ownership, because other owners or <code>weak_ptr</code>s may exist and the deleter belongs to the control block. Even with <code>use_count() == 1</code>, there is no way to take the object out. The usual wrong answers are "it copies the <code>Counter</code>" and "call <code>release()</code> when you are the last owner". If you may need unique ownership later, keep the <code>unique_ptr</code> and convert as late as possible.</p>
+<pre data-run="ch12-ref-to-shared" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Counter</span> {
+    <span class="hljs-type">int</span> n = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{ ++n; <span class="hljs-keyword">delete</span> p; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Counter c;
+    {
+        <span class="hljs-function">std::unique_ptr&lt;<span class="hljs-type">int</span>, Counter&amp;&gt; <span class="hljs-title">u</span><span class="hljs-params">(<span class="hljs-keyword">new</span> <span class="hljs-type">int</span>(<span class="hljs-number">1</span>), c)</span></span>;
+        <span class="hljs-function">std::shared_ptr&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">s</span><span class="hljs-params">(std::move(u))</span></span>;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;reference_wrapper stored: %d, Counter stored: %d\n&quot;</span>,
+                    std::get_deleter&lt;std::reference_wrapper&lt;Counter&gt;&gt;(s) != <span class="hljs-literal">nullptr</span>,
+                    std::<span class="hljs-built_in">get_deleter</span>&lt;Counter&gt;(s) != <span class="hljs-literal">nullptr</span>);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;external counter: %d\n&quot;</span>, c.n);
+}</code></pre>
+<pre class="out" data-out="ch12-ref-to-shared">reference_wrapper stored: 1, Counter stored: 0
+external counter: 1</pre>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How does <code>shared_ptr&lt;T&gt;</code> store a deleter of any type without the deleter becoming part of its own type? Sketch the mechanism.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It uses type erasure. The <code>shared_ptr</code> holds a pointer to a non-template control block base class that has virtual functions. The constructor template <code>shared_ptr(Y* p, D d)</code> knows <code>Y</code> and <code>D</code>, so it allocates a derived class template instantiated for exactly those types. That derived class stores <code>p</code> and <code>d</code> and overrides the virtual "dispose" function to call <code>d(p)</code>.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">ControlBase</span> {
+    std::atomic&lt;<span class="hljs-type">long</span>&gt; strong{<span class="hljs-number">1</span>}, weak{<span class="hljs-number">1</span>};
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">dispose</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>= <span class="hljs-number">0</span>;   <span class="hljs-comment">// destroy the object: strong count hit 0</span>
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">destroy</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>= <span class="hljs-number">0</span>;   <span class="hljs-comment">// free this block: weak count hit 0</span>
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">ControlBase</span>() = <span class="hljs-keyword">default</span>;
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">Y</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">ControlWithDeleter</span> <span class="hljs-keyword">final</span> : ControlBase {
+    Y* p;
+    D d;
+    <span class="hljs-built_in">ControlWithDeleter</span>(Y* p, D d) : <span class="hljs-built_in">p</span>(p), <span class="hljs-built_in">d</span>(std::<span class="hljs-built_in">move</span>(d)) {}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">dispose</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-built_in">d</span>(p); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">destroy</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">delete</span> <span class="hljs-keyword">this</span>; }
+};
+<span class="hljs-comment">// shared_ptr&lt;T&gt; = { T* ptr; ControlBase* ctrl; }: the same layout for every D</span></code></pre>
+    <p><b>Why.</b> The type information is captured once, at construction, inside a class the <code>shared_ptr</code> only sees through its base. That is why any deleter fits the same <code>shared_ptr&lt;T&gt;</code>, why <code>shared_ptr&lt;void&gt;(new Foo)</code> still runs <code>~Foo</code> (it stores a <code>Foo*</code>), and why <code>std::get_deleter</code> must check the type at run time. The costs are a virtual call when the count reaches zero and a separate allocation for the block (unless you use <code>make_shared</code>). A common wrong answer is "it stores a <code>std::function</code>". That would also work, but real implementations use a hand-written virtual base, with no extra allocation for the callable.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What does <code>std::get_deleter</code> do, and why is it a free function template rather than a member like <code>unique_ptr::get_deleter</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>std::get_deleter&lt;D&gt;(sp)</code> returns a <code>D*</code> to the deleter stored in <code>sp</code>'s control block if its type is exactly <code>D</code>, and <code>nullptr</code> otherwise.</p>
+    <p><b>Why.</b> The deleter type is erased, so <code>shared_ptr&lt;T&gt;</code> has no static knowledge of it; the caller must guess the type and the control block checks it at run time (implementations compare <code>typeid</code>). <code>unique_ptr::get_deleter()</code> can be a member returning <code>D&amp;</code> because <code>D</code> is in the type. Use cases: reading state from a stateful deleter (a pool id, a length), or detecting that a pointer came from a particular factory.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Write the custom deleter you would use in production to own a <code>FILE*</code> with <code>unique_ptr</code>, and justify each choice. What is wrong with <code>std::unique_ptr&lt;FILE&gt; f(fopen("a.txt", "r"));</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">FileCloser</span> {
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(std::FILE* f)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">fclose</span>(f); }
+};
+<span class="hljs-keyword">using</span> File = std::unique_ptr&lt;std::FILE, FileCloser&gt;;
+
+<span class="hljs-function">File <span class="hljs-title">f</span><span class="hljs-params">(std::fopen(<span class="hljs-string">&quot;a.txt&quot;</span>, <span class="hljs-string">&quot;r&quot;</span>))</span></span>;   <span class="hljs-comment">// one argument: FileCloser is default constructible</span>
+<span class="hljs-keyword">if</span> (!f) { <span class="hljs-comment">/* handle the error */</span> }</code></pre>
+    <p>The version with the default deleter calls <code>delete</code> on a pointer that came from <code>fopen</code>. That is undefined behaviour: the stream is never flushed or closed, and the C library's memory goes back to the wrong allocator.</p>
+    <p><b>Why.</b> An empty function object costs no space and lets the one-argument constructor work, and its call can be inlined. It is <code>noexcept</code> because it runs from a destructor. It needs no null check, because <code>unique_ptr</code> never calls the deleter on null (a <code>shared_ptr</code> deleter would need <code>if (f)</code>). It calls <code>fclose</code> rather than taking <code>&amp;fclose</code>, which avoids the 8-byte function pointer, the extra constructor argument and the rule that standard library functions are not addressable. It ignores the return value. When you wrote data and need to know that the close succeeded, call <code>std::fclose(f.release())</code> and check it. The common wrong answers are <code>unique_ptr&lt;FILE, decltype(&amp;fclose)&gt; f(fopen(...))</code>, which does not compile, and the default deleter.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>When is the deleter <i>object</i> of a <code>shared_ptr</code> destroyed: when the strong count reaches zero, or when the control block is freed?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The standard leaves it to the implementation. libstdc++ destroys it with the control block (when the weak count also reaches zero); libc++ destroys it immediately after calling it.</p>
+    <p><b>Why.</b> [util.smartptr.getdeleter] only says the returned pointer stays valid while a <code>shared_ptr</code> or <code>weak_ptr</code> shares ownership of the deleter, and that it is unspecified whether it remains valid longer. Programs that depend on the deleter's destructor running at a specific time (for example a deleter that captures a <code>shared_ptr</code> to a pool and you expect the pool to die with the last strong reference) behave differently across libraries when <code>weak_ptr</code>s are alive. The program below shows it.</p>
+<pre data-run="ch12-deleter-lifetime" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">D</span> {
+    <span class="hljs-built_in">D</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">D</span>(<span class="hljs-type">const</span> D&amp;) = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">D</span>(D&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;deleter called&quot;</span>); <span class="hljs-keyword">delete</span> p; }
+    ~<span class="hljs-built_in">D</span>() { <span class="hljs-keyword">if</span> (live) std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;deleter destroyed&quot;</span>); }
+    <span class="hljs-type">bool</span> live = <span class="hljs-literal">false</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::weak_ptr&lt;<span class="hljs-type">int</span>&gt; w;
+    {
+        <span class="hljs-function">std::shared_ptr&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">s</span><span class="hljs-params">(<span class="hljs-keyword">new</span> <span class="hljs-type">int</span>(<span class="hljs-number">1</span>), D{})</span></span>;
+        std::<span class="hljs-built_in">get_deleter</span>&lt;D&gt;(s)-&gt;live = <span class="hljs-literal">true</span>;  <span class="hljs-comment">// mark the stored copy only</span>
+        w = s;
+    }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;only a weak_ptr left&quot;</span>);
+    w.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;end&quot;</span>);
+}</code></pre>
+    <p>libstdc++ prints "deleter called", "only a weak_ptr left", "deleter destroyed", "end". libc++ prints "deleter called", "deleter destroyed", "only a weak_ptr left", "end". The output is not compared because it is implementation-specific.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why should a deleter for <code>fclose</code> or <code>close</code> ignore the return value, and how do you handle close errors that matter?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The deleter runs from a destructor, often during stack unwinding, so it cannot throw and has no caller to return an error to. When the error matters (a file you wrote), call <code>fclose(f.release())</code> explicitly on the success path and check it; the deleter then only covers failure paths, where the data is being abandoned anyway.</p>
+    <p><b>Why.</b> <code>fclose</code> flushes the stdio buffer, so it is where "disk full" is first reported. Silently ignoring it in a destructor can lose data. Throwing from the deleter is worse: it calls <code>std::terminate</code>. For <code>close</code> on Linux, do not retry on <code>EINTR</code>: the fd is gone regardless and a retry can close someone else's new descriptor.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What problem does C++23 <code>std::out_ptr</code> solve?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It lets you pass a smart pointer directly to a C function that returns a handle through a <code>T**</code> out parameter. The temporary adaptor converts to <code>T**</code>, and when the full expression ends it calls <code>reset</code> on the smart pointer with whatever the function wrote.</p>
+    <p><b>Why.</b> The manual pattern (raw temporary, call, then <code>reset</code>) has a window where the handle is owned by nobody, and it is easy to forget the reset on one path. <code>out_ptr</code> also resets the smart pointer before the call, so the old handle is released first. For <code>shared_ptr</code> you must pass the deleter: <code>std::out_ptr(sp, Deleter{})</code>. <code>std::inout_ptr</code> covers APIs that consume the old handle and write a new one.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch10-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print on a 64-bit target with GCC or Clang?</p>
+<pre data-run="ch12-r-ebo" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Empty</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">delete</span> p; } };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">WithId</span> {
+    <span class="hljs-type">int</span> id = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">delete</span> p; }
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Naive</span> { T* p; D d; };
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Compressed</span> { T* p; [[no_unique_address]] D d; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Naive&lt;<span class="hljs-type">int</span>, Empty&gt;), <span class="hljs-built_in">sizeof</span>(Compressed&lt;<span class="hljs-type">int</span>, Empty&gt;));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;<span class="hljs-type">int</span>, Empty&gt;), <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;<span class="hljs-type">int</span>, WithId&gt;));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(std::unique_ptr&lt;<span class="hljs-type">int</span>, Empty&amp;&gt;));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch12-r-ebo">16 8
+8 16
+16</pre>
+    <p><b>Answer.</b> The naive pair is 16 because the empty member takes 1 byte and is padded to pointer alignment; <code>[[no_unique_address]]</code> lets the empty member overlap, giving 8. <code>unique_ptr</code> with an empty deleter is 8 and with an <code>int</code> member is 16. A reference deleter type <code>Empty&amp;</code> stores a reference, which is a pointer under the hood, so it is 16 even though <code>Empty</code> is empty.</p>
+    <p><b>Why.</b> EBO and <code>[[no_unique_address]]</code> only apply to empty <i>class</i> types. A reference is not an object of class type, it is stored as an address. People often answer 8 for the last line because "the deleter is empty". (MSVC ignores the standard <code>[[no_unique_address]]</code>, so the second number would be 16 there.)</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this not compile, and what are two fixes?</p>
+<pre data-run="ch12-r-fnptr-ctor" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">close_file</span><span class="hljs-params">(std::FILE* f)</span> </span>{ std::<span class="hljs-built_in">fclose</span>(f); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::unique_ptr&lt;std::FILE, <span class="hljs-title">decltype</span><span class="hljs-params">(&amp;close_file)</span>&gt; <span class="hljs-title">f</span><span class="hljs-params">(std::tmpfile())</span></span>;
+    std::<span class="hljs-built_in">fputs</span>(<span class="hljs-string">&quot;x&quot;</span>, f.<span class="hljs-built_in">get</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The one-argument constructor of <code>unique_ptr&lt;T, D&gt;</code> is constrained to deleters that are default constructible and are <b>not pointer types</b>. <code>D</code> here is <code>void (*)(FILE*)</code>, so overload resolution finds no viable constructor. Fix 1: pass the function, <code>f(std::tmpfile(), &amp;close_file)</code>. Fix 2 (better): use a function-object type, <code>struct CloseFile { void operator()(FILE* f) const noexcept { fclose(f); } };</code>, which also halves the size.</p>
+    <p><b>Why.</b> A value-initialised function pointer is null; if the constructor were allowed, the destructor would call a null function pointer. The standard rules it out at compile time ([unique.ptr.single.ctor]: "Constraints: <code>is_pointer_v&lt;deleter_type&gt;</code> is false and <code>is_default_constructible_v&lt;deleter_type&gt;</code> is true").</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print?</p>
+<pre data-run="ch12-r-void" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> { ~<span class="hljs-built_in">Base</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;~Base&quot;</span>); } };         <span class="hljs-comment">// not virtual</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Base { ~<span class="hljs-built_in">Derived</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;~Derived&quot;</span>); } };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        <span class="hljs-function">std::shared_ptr&lt;<span class="hljs-type">void</span>&gt; <span class="hljs-title">v</span><span class="hljs-params">(<span class="hljs-keyword">new</span> Derived)</span></span>;
+    }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;--&quot;</span>);
+    {
+        <span class="hljs-function">std::shared_ptr&lt;Base&gt; <span class="hljs-title">b</span><span class="hljs-params">(<span class="hljs-keyword">new</span> Derived)</span></span>;
+    }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;--&quot;</span>);
+    {
+        <span class="hljs-function">std::shared_ptr&lt;Base&gt; <span class="hljs-title">c</span><span class="hljs-params">(<span class="hljs-keyword">static_cast</span>&lt;Base*&gt;(<span class="hljs-keyword">new</span> Derived))</span></span>;
+        std::shared_ptr&lt;Base&gt; keep = c;
+    }
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch12-r-void">~Derived
+~Base
+--
+~Derived
+~Base
+--
+~Base</pre>
+    <p><b>Answer.</b> The first two blocks run the full <code>Derived</code> destructor; the third runs only <code>~Base</code>, which is undefined behaviour (deleting a <code>Derived</code> through a <code>Base*</code> without a virtual destructor).</p>
+    <p><b>Why.</b> The <code>shared_ptr(Y* p)</code> constructor deduces <code>Y</code> from the argument and builds a control block that deletes a <code>Y*</code>. In the first two blocks <code>Y = Derived</code>. In the third, the cast happened before the constructor saw the pointer, so <code>Y = Base</code>. Copying (<code>keep</code>) never changes the stored deleter. This is a favourite because candidates either say "always ~Base without a virtual destructor" or "shared_ptr always gets it right". (ASan does not flag the third block because <code>Derived</code> adds no members, so the sizes match; it is still UB.)</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A connection pool counts open and closed handles. At the end it reports one leak. Where is it?</p>
+<pre data-run="ch12-r-release" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> opened = <span class="hljs-number">0</span>, closed = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Conn</span> { <span class="hljs-type">int</span> id; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">ConnCloser</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Conn* c)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ ++closed; <span class="hljs-keyword">delete</span> c; } };
+<span class="hljs-keyword">using</span> ConnPtr = std::unique_ptr&lt;Conn, ConnCloser&gt;;
+
+<span class="hljs-function"><span class="hljs-type">static</span> ConnPtr <span class="hljs-title">connect</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{ ++opened; <span class="hljs-keyword">return</span> <span class="hljs-built_in">ConnPtr</span>(<span class="hljs-keyword">new</span> Conn{id}); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    ConnPtr a = <span class="hljs-built_in">connect</span>(<span class="hljs-number">1</span>);
+    ConnPtr b = <span class="hljs-built_in">connect</span>(<span class="hljs-number">2</span>);
+    ConnPtr c = <span class="hljs-built_in">connect</span>(<span class="hljs-number">3</span>);
+    a.<span class="hljs-built_in">reset</span>();            <span class="hljs-comment">// done with 1</span>
+    b.<span class="hljs-built_in">release</span>();          <span class="hljs-comment">// done with 2</span>
+    c = <span class="hljs-built_in">connect</span>(<span class="hljs-number">4</span>);       <span class="hljs-comment">// replace 3</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;opened %d closed-before-exit %d\n&quot;</span>, opened, closed);
+    c.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;opened %d closed %d\n&quot;</span>, opened, closed);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch12-r-release">opened 4 closed-before-exit 2
+opened 4 closed 3</pre>
+    <p><b>Answer.</b> <code>b.release()</code> drops ownership without calling the deleter, and the returned pointer is discarded, so connection 2 leaks. It should be <code>b.reset()</code>. The move assignment <code>c = connect(4)</code> correctly closes connection 3.</p>
+    <p><b>Why.</b> <code>release</code> means "I take the resource back", and clang-tidy's <code>bugprone-unused-return-value</code> check flags a discarded <code>release()</code> by default, because discarding its result is almost always a leak. LeakSanitizer would also catch this on Linux, but the counters prove it on any platform.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>In what order do the lines appear?</p>
+<pre data-run="ch12-r-reset-order" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Noisy</span> {
+    <span class="hljs-type">int</span> id;
+    ~<span class="hljs-built_in">Noisy</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;~Noisy %d\n&quot;</span>, id); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tell</span> {
+    <span class="hljs-type">const</span> std::unique_ptr&lt;Noisy, Tell&gt;* owner = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Noisy* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;deleting %d, owner now holds %d\n&quot;</span>, p-&gt;id, (*owner) ? (*owner)-&gt;id : <span class="hljs-number">-1</span>);
+        <span class="hljs-keyword">delete</span> p;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::unique_ptr&lt;Noisy, Tell&gt; <span class="hljs-title">u</span><span class="hljs-params">(<span class="hljs-keyword">new</span> Noisy{<span class="hljs-number">1</span>})</span></span>;
+    u.<span class="hljs-built_in">get_deleter</span>().owner = &amp;u;
+    u.<span class="hljs-built_in">reset</span>(<span class="hljs-keyword">new</span> Noisy{<span class="hljs-number">2</span>});
+    u.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;end&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch12-r-reset-order">deleting 1, owner now holds 2
+~Noisy 1
+deleting 2, owner now holds -1
+~Noisy 2
+end</pre>
+    <p><b>Answer.</b> In <code>reset(q)</code> the new pointer is stored first and the old one is deleted afterwards, so the deleter already sees the new value. <code>reset()</code> stores null first, then deletes.</p>
+    <p><b>Why.</b> [unique.ptr.single.modifiers] specifies: assign <code>p</code> to the stored pointer, then if the old value was not null call <code>get_deleter()(old)</code>. That order makes <code>reset</code> safe if the deleted object's destructor reaches back into the owner (for example a node that resets its parent's child pointer). Many candidates assume "delete old, then assign new".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This compiles cleanly. What happens at run time?</p>
+<pre data-run="ch12-r-stack" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">sum</span><span class="hljs-params">(<span class="hljs-type">const</span> std::unique_ptr&lt;<span class="hljs-type">int</span>[]&gt;&amp; a, <span class="hljs-type">int</span> n)</span> </span>{
+    <span class="hljs-type">int</span> s = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) s += a[i];
+    <span class="hljs-keyword">return</span> s;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> scratch[<span class="hljs-number">4</span>] = {<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">4</span>};
+    <span class="hljs-function">std::unique_ptr&lt;<span class="hljs-type">int</span>[]&gt; <span class="hljs-title">view</span><span class="hljs-params">(scratch)</span></span>;   <span class="hljs-comment">// &quot;just to pass it to sum&quot;</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, <span class="hljs-built_in">sum</span>(view, <span class="hljs-number">4</span>));
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> When <code>view</code> is destroyed, <code>default_delete&lt;int[]&gt;</code> calls <code>delete[]</code> on a stack array. That is undefined behaviour; ASan reports "attempting free on address which was not malloc()-ed", and without it the program usually crashes in the allocator.</p>
+    <p><b>Why.</b> A smart pointer with the default deleter asserts ownership of heap memory from <code>new[]</code>. To pass a non-owning view, take a <code>std::span&lt;const int&gt;</code> (or <code>const int*</code> and a size). A no-op deleter would silence the crash but keep the misleading type. GCC may also warn with <code>-Wfree-nonheap-object</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A pool hands out objects with a deleter that returns them to the pool. Sometimes the program crashes on exit. Why?</p>
+<pre data-run="ch12-r-pool-order" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pool</span> {
+    std::vector&lt;<span class="hljs-type">int</span>*&gt; free_list;
+    ~<span class="hljs-built_in">Pool</span>() { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span>* p : free_list) <span class="hljs-keyword">delete</span> p; }
+    <span class="hljs-function"><span class="hljs-type">int</span>* <span class="hljs-title">acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (free_list.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span> <span class="hljs-keyword">new</span> <span class="hljs-built_in">int</span>(<span class="hljs-number">0</span>);
+        <span class="hljs-type">int</span>* p = free_list.<span class="hljs-built_in">back</span>();
+        free_list.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">return</span> p;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> </span>{ free_list.<span class="hljs-built_in">push_back</span>(p); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">ToPool</span> {
+    Pool* pool;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ pool-&gt;<span class="hljs-built_in">release</span>(p); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Service</span> {
+    std::unique_ptr&lt;<span class="hljs-type">int</span>, ToPool&gt; current;   <span class="hljs-comment">// declared first</span>
+    Pool pool;                              <span class="hljs-comment">// declared second</span>
+    <span class="hljs-built_in">Service</span>() : <span class="hljs-built_in">current</span>(<span class="hljs-literal">nullptr</span>, ToPool{&amp;pool}) {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">4</span>; ++i) pool.<span class="hljs-built_in">release</span>(<span class="hljs-keyword">new</span> <span class="hljs-built_in">int</span>(i));
+        current.<span class="hljs-built_in">reset</span>(pool.<span class="hljs-built_in">acquire</span>());
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Service s;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;value %d\n&quot;</span>, *s.current);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Members are destroyed in reverse order of declaration, so <code>pool</code> is destroyed <i>before</i> <code>current</code>. Then <code>current</code>'s deleter calls <code>release</code> on a destroyed pool, and <code>push_back</code> writes into the vector's freed buffer: heap-use-after-free, which ASan reports.</p>
+    <p><b>Why.</b> A stateful deleter that points to its pool creates a lifetime dependency the type system does not check. Fix: declare <code>Pool pool;</code> before every member that holds pointers from it, or let the deleter hold a <code>shared_ptr&lt;Pool&gt;</code> (or a <code>weak_ptr</code> and fall back to <code>delete</code> when the pool is gone). Using <code>pool</code> in <code>current</code>'s member initialiser is also suspicious, since <code>pool</code> is not yet constructed there; taking its address is fine, calling it would not be. Compilers warn about that with <code>-Wuninitialized</code> only in some cases.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Two <code>unique_ptr</code>s share one counting deleter through a reference type. What is printed?</p>
+<pre data-run="ch12-r-ref-deleter" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Counter</span> {
+    <span class="hljs-type">int</span> freed = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{ ++freed; <span class="hljs-keyword">delete</span> p; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Counter shared_counter;
+    {
+        <span class="hljs-function">std::unique_ptr&lt;<span class="hljs-type">int</span>, Counter&amp;&gt; <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-keyword">new</span> <span class="hljs-type">int</span>(<span class="hljs-number">1</span>), shared_counter)</span></span>;
+        <span class="hljs-function">std::unique_ptr&lt;<span class="hljs-type">int</span>, Counter&amp;&gt; <span class="hljs-title">b</span><span class="hljs-params">(<span class="hljs-keyword">new</span> <span class="hljs-type">int</span>(<span class="hljs-number">2</span>), shared_counter)</span></span>;
+        <span class="hljs-function">std::unique_ptr&lt;<span class="hljs-type">int</span>, Counter&gt; <span class="hljs-title">c</span><span class="hljs-params">(<span class="hljs-keyword">new</span> <span class="hljs-type">int</span>(<span class="hljs-number">3</span>), shared_counter)</span></span>;   <span class="hljs-comment">// copies the deleter</span>
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;freed through the reference: %d\n&quot;</span>, shared_counter.freed);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch12-r-ref-deleter">freed through the reference: 2</pre>
+    <p><b>Answer.</b> 2. <code>a</code> and <code>b</code> store a <code>Counter&amp;</code> and increment the same object. <code>c</code> stores its own copy of <code>Counter</code>, so its increment goes to the copy, which dies with <code>c</code>.</p>
+    <p><b>Why.</b> With <code>D = Counter&amp;</code> the deleter is a reference to an external object, so state is shared and the external object must outlive the pointers. With <code>D = Counter</code> the constructor copies the argument. Note that <code>operator()</code> here is non-const, which works because <code>unique_ptr</code> calls the deleter through a non-const reference. The common wrong answer is 3.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This shared_ptr wrapper for a C stream crashes on some platforms when the file is missing. Why, and what is the one-line fix?</p>
+<pre data-run="ch12-r-shared-null" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> closes = <span class="hljs-number">0</span>;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">checked_close</span><span class="hljs-params">(std::FILE* f)</span> </span>{
+    ++closes;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;fclose called with %s\n&quot;</span>, f ? <span class="hljs-string">&quot;a stream&quot;</span> : <span class="hljs-string">&quot;nullptr&quot;</span>);
+    <span class="hljs-keyword">return</span> f ? std::<span class="hljs-built_in">fclose</span>(f) : EOF;   <span class="hljs-comment">// stand-in: real fclose(nullptr) is undefined</span>
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::shared_ptr&lt;std::FILE&gt; <span class="hljs-title">log</span><span class="hljs-params">(std::fopen(<span class="hljs-string">&quot;/no/such/dir/log.txt&quot;</span>, <span class="hljs-string">&quot;r&quot;</span>), checked_close)</span></span>;
+    <span class="hljs-keyword">if</span> (!log) std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;open failed&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> When <code>fopen</code> fails, the <code>shared_ptr</code> still owns the null pointer through a control block, and its deleter is called with <code>nullptr</code>. With the real <code>fclose</code> as the deleter that is undefined behaviour (glibc crashes). Fix: guard in the deleter, <code>[](FILE* f) { if (f) std::fclose(f); }</code>, or construct the <code>shared_ptr</code> only after checking the result. The program prints "open failed" and then "fclose called with nullptr".</p>
+    <p><b>Why.</b> <code>shared_ptr(p, d)</code> takes ownership of <code>p</code> whatever its value; only <code>unique_ptr</code> skips null. <code>if (!log)</code> is true because <code>operator bool</code> checks the stored pointer, yet <code>use_count()</code> is 1. It is marked <code>data-mode="ub"</code> because the path being demonstrated is undefined with the real <code>fclose</code>, even though this stand-in is safe.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this PIMPL class fail to compile in <code>main</code>? (Imagine <code>Engine</code> in a header and <code>Engine::Impl</code> defined in another file that <code>main.cpp</code> never sees.)</p>
+<pre data-run="ch12-r-pimpl" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Engine</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Engine</span>() = <span class="hljs-keyword">default</span>;
+    ~<span class="hljs-built_in">Engine</span>() = <span class="hljs-keyword">default</span>;        <span class="hljs-comment">// &quot;I declared the destructor&quot;</span>
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Impl</span>;
+    std::unique_ptr&lt;Impl&gt; impl_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Engine e;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>~Engine() = default;</code> inside the class is a definition, so the destructor is still defined in the header, where <code>Impl</code> is incomplete. Destroying <code>impl_</code> instantiates <code>default_delete&lt;Impl&gt;::operator()</code>, whose static assertion fails. Fix: write <code>~Engine();</code> in the header and <code>Engine::~Engine() = default;</code> in the .cpp after <code>struct Engine::Impl { ... };</code>.</p>
+    <p><b>Why.</b> Defaulting on first declaration makes the function inline and defined at that point. Only an out-of-line definition moves the instantiation to the translation unit that has the complete type. GCC reports "invalid application of 'sizeof' to incomplete type"; Clang reports the same in <code>default_delete</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Two smart pointers manage one buffer from <code>malloc</code>. What goes wrong?</p>
+<pre data-run="ch12-r-double" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Free</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">free</span>(p); } };
+<span class="hljs-keyword">using</span> Buf = std::unique_ptr&lt;<span class="hljs-type">char</span>[], Free&gt;;
+
+<span class="hljs-function"><span class="hljs-type">static</span> Buf <span class="hljs-title">duplicate</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s)</span> </span>{
+    <span class="hljs-type">char</span>* raw = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(std::<span class="hljs-built_in">malloc</span>(std::<span class="hljs-built_in">strlen</span>(s) + <span class="hljs-number">1</span>));
+    std::<span class="hljs-built_in">strcpy</span>(raw, s);
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">Buf</span>(raw);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Buf a = <span class="hljs-built_in">duplicate</span>(<span class="hljs-string">&quot;hello&quot;</span>);
+    <span class="hljs-function">Buf <span class="hljs-title">b</span><span class="hljs-params">(a.get())</span></span>;          <span class="hljs-comment">// &quot;share&quot; it</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s %s\n&quot;</span>, a.<span class="hljs-built_in">get</span>(), b.<span class="hljs-built_in">get</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>b(a.get())</code> creates a second owner of the same pointer, so <code>free</code> runs twice: a double free, reported by ASan as "attempting double-free".</p>
+    <p><b>Why.</b> Constructing a smart pointer from a raw pointer always means "take ownership". The deleter does not change that rule. To share, use <code>shared_ptr&lt;char[]&gt;(a.release(), Free{})</code> and copy the <code>shared_ptr</code>; to lend, pass <code>a.get()</code> as a plain <code>const char*</code>. The same bug with <code>shared_ptr</code> (two control blocks for one pointer) is in <a href="#ch09">Ch 9</a>.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch10-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Make <code>std::unique_ptr</code> own a POSIX file descriptor. Write a deleter <code>FdCloser</code> with a nested <code>pointer</code> type so that <code>using UniqueFd = std::unique_ptr&lt;int, FdCloser&gt;;</code> stores an <code>int</code> fd (not an <code>int*</code>), treats <code>-1</code> as null, treats 0 as a valid descriptor, and closes exactly once. Test it with <code>pipe()</code>: write through one end, read from the other, move a handle, and count the closes.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>unique_ptr</code> stores <code>D::pointer</code> when that type exists. Make it a tiny struct holding the fd, with a default constructor and a <code>nullptr_t</code> constructor that both give <code>-1</code>, an explicit <code>operator bool</code> that tests <code>fd &gt;= 0</code>, and defaulted equality. That satisfies <i>NullablePointer</i>, so <code>unique_ptr</code> skips the deleter for <code>-1</code> and moves set the source to <code>-1</code>.</p>
+<pre data-run="ch12-k-fd" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> close_calls = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">FdCloser</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">pointer</span> {
+        <span class="hljs-type">int</span> fd = <span class="hljs-number">-1</span>;
+        <span class="hljs-built_in">pointer</span>() = <span class="hljs-keyword">default</span>;
+        <span class="hljs-built_in">pointer</span>(std::<span class="hljs-type">nullptr_t</span>) {}
+        <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">pointer</span><span class="hljs-params">(<span class="hljs-type">int</span> f)</span> : fd(f) {</span>}
+        <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">bool</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> fd &gt;= <span class="hljs-number">0</span>; }
+        <span class="hljs-keyword">friend</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(pointer, pointer) = <span class="hljs-keyword">default</span>;
+    };
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(pointer p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{
+        ++close_calls;
+        ::<span class="hljs-built_in">close</span>(p.fd);    <span class="hljs-comment">// once, result ignored: no retry on EINTR</span>
+    }
+};
+<span class="hljs-keyword">using</span> UniqueFd = std::unique_ptr&lt;<span class="hljs-type">int</span>, FdCloser&gt;;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">fd_of</span><span class="hljs-params">(<span class="hljs-type">const</span> UniqueFd&amp; u)</span> </span>{ <span class="hljs-keyword">return</span> u.<span class="hljs-built_in">get</span>().fd; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> fds[<span class="hljs-number">2</span>];
+    <span class="hljs-keyword">if</span> (::<span class="hljs-built_in">pipe</span>(fds) != <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-function">UniqueFd <span class="hljs-title">rd</span><span class="hljs-params">(FdCloser::pointer{fds[<span class="hljs-number">0</span>]})</span>, <span class="hljs-title">wr</span><span class="hljs-params">(FdCloser::pointer{fds[<span class="hljs-number">1</span>]})</span></span>;
+
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span> msg[] = <span class="hljs-string">&quot;ping&quot;</span>;
+    <span class="hljs-keyword">if</span> (::<span class="hljs-built_in">write</span>(<span class="hljs-built_in">fd_of</span>(wr), msg, <span class="hljs-keyword">sizeof</span> msg) != <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">ssize_t</span>&gt;(<span class="hljs-keyword">sizeof</span> msg)) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-type">char</span> buf[<span class="hljs-number">8</span>] = {};
+    <span class="hljs-keyword">if</span> (::<span class="hljs-built_in">read</span>(<span class="hljs-built_in">fd_of</span>(rd), buf, <span class="hljs-keyword">sizeof</span> buf) &lt;= <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;read: %s\n&quot;</span>, buf);
+
+    UniqueFd moved = std::<span class="hljs-built_in">move</span>(wr);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after move: wr %s, moved %s\n&quot;</span>, wr ? <span class="hljs-string">&quot;valid&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>, moved ? <span class="hljs-string">&quot;valid&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>);
+
+    <span class="hljs-function">UniqueFd <span class="hljs-title">zero</span><span class="hljs-params">(FdCloser::pointer{<span class="hljs-number">0</span>})</span></span>;              <span class="hljs-comment">// fd 0 is valid: must not count as null</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;fd 0 is %s\n&quot;</span>, zero ? <span class="hljs-string">&quot;valid&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>);
+    (<span class="hljs-type">void</span>)zero.<span class="hljs-built_in">release</span>();                               <span class="hljs-comment">// do not close our stdin</span>
+
+    UniqueFd none;                                      <span class="hljs-comment">// null: deleter never called</span>
+    moved.<span class="hljs-built_in">reset</span>();
+    rd.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;close calls: %d\n&quot;</span>, close_calls);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sizeof(UniqueFd) = %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(UniqueFd));
+}</code></pre>
+<pre class="out" data-out="ch12-k-fd">read: ping
+after move: wr null, moved valid
+fd 0 is valid
+close calls: 2
+sizeof(UniqueFd) = 4</pre>
+    <p><b>Complexity and pitfalls.</b> Every operation is O(1) and the handle is the size of an <code>int</code>. Pitfalls: using <code>int*</code> or casting the fd to a pointer (fd 0 becomes "null"); testing <code>fd != 0</code> instead of <code>fd &gt;= 0</code>; retrying <code>close</code> on <code>EINTR</code>; forgetting the <code>nullptr_t</code> constructor, which <code>unique_ptr</code>'s default constructor and <code>reset()</code> need. <code>release()</code> returns the <code>pointer</code> struct, so give the class a helper if callers need the raw fd.</p>
+    <p class="rating">Estimated rating: ~1600 · knowing the D::pointer hook and NullablePointer requirements is the whole problem</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>ScopeGuard</code>: <code>auto g = make_scope_exit([&amp;] { ... });</code> runs the callable when <code>g</code> leaves scope, unless <code>g.dismiss()</code> was called. It must be movable (the moved-from guard does nothing), not copyable, and must not add overhead for a captureless or reference-capturing lambda beyond the lambda and one <code>bool</code>. Show the classic use: roll back a two-step update if the second step throws.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A class template over the callable type <code>F</code>, storing <code>F</code> and an <code>active</code> flag. The destructor calls <code>f_()</code> if active. The move constructor steals the callable and dismisses the source. A deleter-based version (<code>unique_ptr&lt;void, Lambda&gt;</code> with a dummy pointer) also works, but it abuses the pointer and cannot be dismissed without <code>release</code>; the dedicated class is clearer. This is the shape of <code>std::experimental::scope_exit</code> from the Library Fundamentals TS v3.</p>
+<pre data-run="ch12-k-scopeguard" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ScopeGuard</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ScopeGuard</span><span class="hljs-params">(F f)</span> <span class="hljs-title">noexcept</span><span class="hljs-params">(std::is_nothrow_move_constructible_v&lt;F&gt;)</span> : f_(std::move(f)) {</span>}
+    <span class="hljs-built_in">ScopeGuard</span>(ScopeGuard&amp;&amp; o) <span class="hljs-built_in">noexcept</span>(std::is_nothrow_move_constructible_v&lt;F&gt;)
+        : <span class="hljs-built_in">f_</span>(std::<span class="hljs-built_in">move</span>(o.f_)), <span class="hljs-built_in">active_</span>(std::<span class="hljs-built_in">exchange</span>(o.active_, <span class="hljs-literal">false</span>)) {}
+    <span class="hljs-built_in">ScopeGuard</span>(<span class="hljs-type">const</span> ScopeGuard&amp;) = <span class="hljs-keyword">delete</span>;
+    ScopeGuard&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> ScopeGuard&amp;) = <span class="hljs-keyword">delete</span>;
+    ScopeGuard&amp; <span class="hljs-keyword">operator</span>=(ScopeGuard&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">ScopeGuard</span>() { <span class="hljs-keyword">if</span> (active_) <span class="hljs-built_in">f_</span>(); }      <span class="hljs-comment">// f_ must not throw: we may be unwinding</span>
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">dismiss</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{ active_ = <span class="hljs-literal">false</span>; }
+<span class="hljs-keyword">private</span>:
+    F f_;
+    <span class="hljs-type">bool</span> active_ = <span class="hljs-literal">true</span>;
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+<span class="hljs-function">ScopeGuard&lt;F&gt; <span class="hljs-title">make_scope_exit</span><span class="hljs-params">(F f)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">ScopeGuard</span>&lt;F&gt;(std::<span class="hljs-built_in">move</span>(f)); }
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">step_two</span><span class="hljs-params">(<span class="hljs-type">int</span> value)</span> </span>{
+    <span class="hljs-keyword">if</span> (value &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">invalid_argument</span>(<span class="hljs-string">&quot;negative&quot;</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">add_both</span><span class="hljs-params">(std::vector&lt;<span class="hljs-type">int</span>&gt;&amp; a, std::vector&lt;<span class="hljs-type">int</span>&gt;&amp; b, <span class="hljs-type">int</span> value)</span> </span>{
+    a.<span class="hljs-built_in">push_back</span>(value);
+    <span class="hljs-keyword">auto</span> undo = <span class="hljs-built_in">make_scope_exit</span>([&amp;] { a.<span class="hljs-built_in">pop_back</span>(); std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;rolled back&quot;</span>); });
+    <span class="hljs-built_in">step_two</span>(value);
+    b.<span class="hljs-built_in">push_back</span>(value);
+    undo.<span class="hljs-built_in">dismiss</span>();               <span class="hljs-comment">// commit</span>
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;<span class="hljs-type">int</span>&gt; a, b;
+    <span class="hljs-built_in">add_both</span>(a, b, <span class="hljs-number">1</span>);
+    <span class="hljs-keyword">try</span> { <span class="hljs-built_in">add_both</span>(a, b, <span class="hljs-number">-5</span>); } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;caught %s\n&quot;</span>, e.<span class="hljs-built_in">what</span>()); }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a=%zu b=%zu\n&quot;</span>, a.<span class="hljs-built_in">size</span>(), b.<span class="hljs-built_in">size</span>());
+
+    <span class="hljs-type">int</span> n = <span class="hljs-number">0</span>;
+    {
+        <span class="hljs-keyword">auto</span> g1 = <span class="hljs-built_in">make_scope_exit</span>([&amp;n] { ++n; });
+        <span class="hljs-keyword">auto</span> g2 = std::<span class="hljs-built_in">move</span>(g1);  <span class="hljs-comment">// only g2 fires</span>
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;fired %d time(s), sizeof %zu\n&quot;</span>, n, <span class="hljs-built_in">sizeof</span>(ScopeGuard&lt;<span class="hljs-built_in">void</span> (*)()&gt;));
+}</code></pre>
+<pre class="out" data-out="ch12-k-scopeguard">rolled back
+caught negative
+a=1 b=1
+fired 1 time(s), sizeof 16</pre>
+    <p><b>Complexity and pitfalls.</b> Zero allocation; the size is the closure plus a <code>bool</code> plus padding (a function pointer callable gives 16). Pitfalls: a copyable guard runs the action twice; forgetting to dismiss the moved-from guard; throwing from the action during unwinding calls <code>std::terminate</code>; writing <code>make_scope_exit(...)</code> without naming the result destroys the temporary immediately (mark the class <code>[[nodiscard]]</code> in production). Guaranteed copy elision in C++17 makes returning the guard from <code>make_scope_exit</code> free.</p>
+    <p class="rating">Estimated rating: ~1400 · small class, but move semantics and unwinding rules must be right</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a fixed-capacity <code>ObjectPool&lt;T, N&gt;</code> whose <code>acquire(args...)</code> returns <code>std::unique_ptr&lt;T, Returner&gt;</code>. When the pointer dies, the object is destroyed and its slot goes back to the pool. <code>acquire</code> returns a null pointer when the pool is full. The pool must not be moved while handles exist (make it non-movable). Report how many slots are free.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> The pool owns an aligned byte array of <code>N</code> slots and a free list of slot indices. <code>acquire</code> pops an index and constructs <code>T</code> there with placement new (<a href="#ch12">Ch 12</a>). The deleter holds a <code>Pool*</code> (stateful, so the handle is 16 bytes) and calls <code>pool-&gt;give_back(p)</code>, which runs <code>~T</code> and pushes the index. If the constructor throws, the slot must be returned before propagating.</p>
+<pre data-run="ch12-k-pool" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, std::<span class="hljs-type">size_t</span> N&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ObjectPool</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Returner</span> {
+        ObjectPool* pool = <span class="hljs-literal">nullptr</span>;
+        <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(T* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ pool-&gt;<span class="hljs-built_in">give_back</span>(p); }
+    };
+    <span class="hljs-keyword">using</span> Handle = std::unique_ptr&lt;T, Returner&gt;;
+
+    <span class="hljs-built_in">ObjectPool</span>() { <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; N; ++i) free_[i] = N - <span class="hljs-number">1</span> - i; }
+    <span class="hljs-built_in">ObjectPool</span>(<span class="hljs-type">const</span> ObjectPool&amp;) = <span class="hljs-keyword">delete</span>;
+    ObjectPool&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> ObjectPool&amp;) = <span class="hljs-keyword">delete</span>;
+
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span>... Args&gt;
+    <span class="hljs-function">Handle <span class="hljs-title">acquire</span><span class="hljs-params">(Args&amp;&amp;... args)</span> </span>{
+        <span class="hljs-keyword">if</span> (nfree_ == <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(<span class="hljs-literal">nullptr</span>, Returner{<span class="hljs-keyword">this</span>});
+        std::<span class="hljs-type">size_t</span> idx = free_[--nfree_];
+        T* p;
+        <span class="hljs-keyword">try</span> {
+            p = ::<span class="hljs-built_in">new</span> (<span class="hljs-built_in">slot</span>(idx)) <span class="hljs-built_in">T</span>(std::forward&lt;Args&gt;(args)...);
+        } <span class="hljs-built_in">catch</span> (...) {
+            free_[nfree_++] = idx;
+            <span class="hljs-keyword">throw</span>;
+        }
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">Handle</span>(p, Returner{<span class="hljs-keyword">this</span>});
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">available</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> nfree_; }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">slot</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> i)</span> </span>{ <span class="hljs-keyword">return</span> storage_ + i * <span class="hljs-built_in">sizeof</span>(T); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">give_back</span><span class="hljs-params">(T* p)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-type">size_t</span> idx = <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(<span class="hljs-built_in">reinterpret_cast</span>&lt;std::byte*&gt;(p) - storage_) / <span class="hljs-built_in">sizeof</span>(T);
+        p-&gt;~<span class="hljs-built_in">T</span>();
+        free_[nfree_++] = idx;
+    }
+    <span class="hljs-built_in">alignas</span>(T) std::byte storage_[<span class="hljs-function">N * <span class="hljs-title">sizeof</span><span class="hljs-params">(T)</span>]</span>;
+    std::<span class="hljs-type">size_t</span> free_[N];
+    std::<span class="hljs-type">size_t</span> nfree_ = N;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    ObjectPool&lt;std::string, <span class="hljs-number">2</span>&gt; pool;
+    {
+        <span class="hljs-keyword">auto</span> a = pool.<span class="hljs-built_in">acquire</span>(<span class="hljs-string">&quot;first, long enough to need a heap buffer&quot;</span>);
+        <span class="hljs-keyword">auto</span> b = pool.<span class="hljs-built_in">acquire</span>(<span class="hljs-number">3</span>, <span class="hljs-string">&#x27;x&#x27;</span>);
+        <span class="hljs-keyword">auto</span> c = pool.<span class="hljs-built_in">acquire</span>(<span class="hljs-string">&quot;no room&quot;</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s | %s | c is %s | free %zu\n&quot;</span>, a-&gt;<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, <span class="hljs-number">5</span>).<span class="hljs-built_in">c_str</span>(), b-&gt;<span class="hljs-built_in">c_str</span>(),
+                    c ? <span class="hljs-string">&quot;set&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>, pool.<span class="hljs-built_in">available</span>());
+        a.<span class="hljs-built_in">reset</span>();
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after reset free %zu\n&quot;</span>, pool.<span class="hljs-built_in">available</span>());
+        <span class="hljs-keyword">auto</span> d = pool.<span class="hljs-built_in">acquire</span>(<span class="hljs-string">&quot;reused&quot;</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s free %zu\n&quot;</span>, d-&gt;<span class="hljs-built_in">c_str</span>(), pool.<span class="hljs-built_in">available</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;all returned, free %zu, handle size %zu\n&quot;</span>, pool.<span class="hljs-built_in">available</span>(),
+                <span class="hljs-built_in">sizeof</span>(ObjectPool&lt;<span class="hljs-type">int</span>, <span class="hljs-number">1</span>&gt;::Handle));
+}</code></pre>
+<pre class="out" data-out="ch12-k-pool">first | xxx | c is null | free 0
+after reset free 1
+reused free 0
+all returned, free 2, handle size 16</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) acquire and release, no heap allocation by the pool. Pitfalls: the pool must outlive every handle (declare it first; see the reading drill); the slot must be returned if the constructor throws; the storage must be aligned for <code>T</code>; destroying <code>T</code> in the deleter, not only marking the slot free, or <code>std::string</code> buffers leak. If there is one global pool per type, a stateless deleter brings the handle back to 8 bytes.</p>
+    <p class="rating">Estimated rating: ~1800 · combines a stateful deleter, placement new, alignment and exception safety</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Build a <code>Registry</code> of named resources: <code>open(name)</code> returns a <code>std::shared_ptr&lt;Resource&gt;</code>; opening a name that is already open returns the same object; when the last user drops it, a custom deleter closes it and removes the entry. The registry must not keep resources alive by itself.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Store <code>weak_ptr&lt;Resource&gt;</code> values in a map, so the registry observes without owning. <code>open</code> tries <code>lock()</code>; on a miss it creates the resource with <code>shared_ptr(new Resource, Closer{this, name})</code>. The deleter erases the entry and deletes the resource. Because the deleter runs when the strong count is zero, the map entry is already expired and safe to erase; check that the entry is still the expired one, in case a new resource with the same name was opened in between. A single-threaded version is shown; with threads, guard the map with a mutex taken in both <code>open</code> and the deleter.</p>
+<pre data-run="ch12-k-registry" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Resource</span> {
+    std::string name;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Resource</span><span class="hljs-params">(std::string n)</span> : name(std::move(n)) {</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;open %s\n&quot;</span>, name.<span class="hljs-built_in">c_str</span>()); }
+    ~<span class="hljs-built_in">Resource</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;close %s\n&quot;</span>, name.<span class="hljs-built_in">c_str</span>()); }
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Registry</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::shared_ptr&lt;Resource&gt; <span class="hljs-title">open</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; name)</span> </span>{
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> it = live_.<span class="hljs-built_in">find</span>(name); it != live_.<span class="hljs-built_in">end</span>())
+            <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> sp = it-&gt;second.<span class="hljs-built_in">lock</span>()) <span class="hljs-keyword">return</span> sp;
+        <span class="hljs-function">std::shared_ptr&lt;Resource&gt; <span class="hljs-title">sp</span><span class="hljs-params">(<span class="hljs-keyword">new</span> Resource(name), Closer{<span class="hljs-keyword">this</span>, name})</span></span>;
+        live_[name] = sp;
+        <span class="hljs-keyword">return</span> sp;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> live_.<span class="hljs-built_in">size</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Closer</span> {
+        Registry* reg;
+        std::string name;
+        <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Resource* r)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{
+            <span class="hljs-keyword">auto</span> it = reg-&gt;live_.<span class="hljs-built_in">find</span>(name);
+            <span class="hljs-keyword">if</span> (it != reg-&gt;live_.<span class="hljs-built_in">end</span>() &amp;&amp; it-&gt;second.<span class="hljs-built_in">expired</span>()) reg-&gt;live_.<span class="hljs-built_in">erase</span>(it);
+            <span class="hljs-keyword">delete</span> r;
+        }
+    };
+    std::map&lt;std::string, std::weak_ptr&lt;Resource&gt;&gt; live_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Registry reg;
+    <span class="hljs-keyword">auto</span> a = reg.<span class="hljs-built_in">open</span>(<span class="hljs-string">&quot;db&quot;</span>);
+    <span class="hljs-keyword">auto</span> b = reg.<span class="hljs-built_in">open</span>(<span class="hljs-string">&quot;db&quot;</span>);
+    <span class="hljs-keyword">auto</span> c = reg.<span class="hljs-built_in">open</span>(<span class="hljs-string">&quot;cache&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;same object: %d, entries %zu, db users %ld\n&quot;</span>, a == b, reg.<span class="hljs-built_in">size</span>(), a.<span class="hljs-built_in">use_count</span>());
+    a.<span class="hljs-built_in">reset</span>();
+    b.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;entries %zu\n&quot;</span>, reg.<span class="hljs-built_in">size</span>());
+    <span class="hljs-keyword">auto</span> d = reg.<span class="hljs-built_in">open</span>(<span class="hljs-string">&quot;db&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;entries %zu\n&quot;</span>, reg.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch12-k-registry">open db
+open cache
+same object: 1, entries 2, db users 2
+close db
+entries 1
+open db
+entries 2
+close db
+close cache</pre>
+    <p><b>Complexity and pitfalls.</b> O(log n) per open and close. Pitfalls: storing <code>shared_ptr</code> in the map (nothing ever closes); <code>Closer</code> holding a raw <code>Registry*</code>, so the registry must outlive all handles (here <code>reg</code> is declared first, so it is destroyed last); erasing an entry that already belongs to a newer resource; locking order with threads (the deleter can run on any thread that drops the last reference, so it must take the same mutex, and <code>open</code> must not hold that mutex while a <code>shared_ptr</code> it obtained might be destroyed). Destruction order at the end: <code>d</code> is declared last and destroyed first, then <code>c</code>.</p>
+    <p class="rating">Estimated rating: ~1900 · weak_ptr cache plus a deleter that reaches back into its owner</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write your own <code>Unique&lt;T, D = std::default_delete&lt;T&gt;&gt;</code> with move-only semantics, <code>get</code>, <code>release</code>, <code>reset</code>, <code>get_deleter</code> and <code>operator-&gt;</code>. It must be 8 bytes with an empty deleter, use the store-then-delete order in <code>reset</code>, never call the deleter on null, and prove its size with <code>static_assert</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Store <code>T* p_</code> and <code>[[no_unique_address]] D d_</code>. Moves use <code>std::exchange</code> on the pointer and move the deleter. <code>reset(q)</code> exchanges the stored pointer with <code>q</code> and then deletes the old value if it was not null. Move assignment is <code>reset(other.release())</code> plus moving the deleter.</p>
+<pre data-run="ch12-k-unique" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span> = std::default_delete&lt;T&gt;&gt;
+<span class="hljs-keyword">class</span> Unique {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Unique</span>() <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Unique</span><span class="hljs-params">(T* p)</span> <span class="hljs-keyword">noexcept</span> : p_(p) {</span>}
+    <span class="hljs-built_in">Unique</span>(T* p, D d) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">p_</span>(p), <span class="hljs-built_in">d_</span>(std::<span class="hljs-built_in">move</span>(d)) {}
+    <span class="hljs-built_in">Unique</span>(Unique&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">p_</span>(std::<span class="hljs-built_in">exchange</span>(o.p_, <span class="hljs-literal">nullptr</span>)), <span class="hljs-built_in">d_</span>(std::<span class="hljs-built_in">move</span>(o.d_)) {}
+    Unique&amp; <span class="hljs-keyword">operator</span>=(Unique&amp;&amp; o) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;o) {
+            <span class="hljs-built_in">reset</span>(o.<span class="hljs-built_in">release</span>());
+            d_ = std::<span class="hljs-built_in">move</span>(o.d_);
+        }
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    <span class="hljs-built_in">Unique</span>(<span class="hljs-type">const</span> Unique&amp;) = <span class="hljs-keyword">delete</span>;
+    Unique&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Unique&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">Unique</span>() { <span class="hljs-keyword">if</span> (p_) <span class="hljs-built_in">d_</span>(p_); }
+
+    <span class="hljs-function">T* <span class="hljs-title">get</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> p_; }
+    T* <span class="hljs-keyword">operator</span>-&gt;() <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> { <span class="hljs-keyword">return</span> p_; }
+    T&amp; <span class="hljs-keyword">operator</span>*() <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> { <span class="hljs-keyword">return</span> *p_; }
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">bool</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> p_ != <span class="hljs-literal">nullptr</span>; }
+    <span class="hljs-function">D&amp; <span class="hljs-title">get_deleter</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> d_; }
+    [[nodiscard]] <span class="hljs-function">T* <span class="hljs-title">release</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">exchange</span>(p_, <span class="hljs-literal">nullptr</span>); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">(T* q = <span class="hljs-literal">nullptr</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        T* old = std::<span class="hljs-built_in">exchange</span>(p_, q);   <span class="hljs-comment">// store first</span>
+        <span class="hljs-keyword">if</span> (old) <span class="hljs-built_in">d_</span>(old);                <span class="hljs-comment">// then delete</span>
+    }
+
+<span class="hljs-keyword">private</span>:
+    T* p_ = <span class="hljs-literal">nullptr</span>;
+    [[no_unique_address]] D d_{};
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Loud</span> {
+    <span class="hljs-type">int</span> id;
+    ~<span class="hljs-built_in">Loud</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;~Loud %d\n&quot;</span>, id); }
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">CountingDelete</span> {
+    <span class="hljs-type">int</span>* count;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Loud* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ ++*count; <span class="hljs-keyword">delete</span> p; }
+};
+
+<span class="hljs-built_in">static_assert</span>(<span class="hljs-built_in">sizeof</span>(Unique&lt;Loud&gt;) == <span class="hljs-built_in">sizeof</span>(Loud*));
+<span class="hljs-built_in">static_assert</span>(<span class="hljs-built_in">sizeof</span>(Unique&lt;Loud, CountingDelete&gt;) == <span class="hljs-number">2</span> * <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*));
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Unique&lt;Loud&gt; <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-keyword">new</span> Loud{<span class="hljs-number">1</span>})</span></span>;
+    Unique&lt;Loud&gt; b = std::<span class="hljs-built_in">move</span>(a);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a %s, b holds %d\n&quot;</span>, a ? <span class="hljs-string">&quot;set&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>, b-&gt;id);
+    b.<span class="hljs-built_in">reset</span>(<span class="hljs-keyword">new</span> Loud{<span class="hljs-number">2</span>});
+
+    <span class="hljs-type">int</span> deletes = <span class="hljs-number">0</span>;
+    {
+        <span class="hljs-function">Unique&lt;Loud, CountingDelete&gt; <span class="hljs-title">c</span><span class="hljs-params">(<span class="hljs-keyword">new</span> Loud{<span class="hljs-number">3</span>}, CountingDelete{&amp;deletes})</span></span>;
+        <span class="hljs-function">Unique&lt;Loud, CountingDelete&gt; <span class="hljs-title">d</span><span class="hljs-params">(<span class="hljs-literal">nullptr</span>, CountingDelete{&amp;deletes})</span></span>;
+        d = std::<span class="hljs-built_in">move</span>(c);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;counted deletes: %d\n&quot;</span>, deletes);
+}</code></pre>
+<pre class="out" data-out="ch12-k-unique">a null, b holds 1
+~Loud 1
+~Loud 3
+counted deletes: 1
+~Loud 2</pre>
+    <p><b>Complexity and pitfalls.</b> All operations O(1). Pitfalls: self-move-assignment (guarded); deleting before storing in <code>reset</code>; calling the deleter on null in the destructor (the counter shows only one delete, for the object that existed); forgetting <code>noexcept</code> on moves: <code>std::vector&lt;Unique&gt;</code> still compiles and still moves (<code>move_if_noexcept</code> uses a throwing move when there is no copy constructor), but it loses the strong exception guarantee on reallocation. The real <code>unique_ptr</code> also supports converting moves from <code>Unique&lt;Derived&gt;</code>, array specialisation and <code>D::pointer</code>.</p>
+    <p class="rating">Estimated rating: ~1700 · standard interview implementation, the EBO detail and reset order separate good answers</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Map an anonymous memory region with <code>mmap</code> and own it with <code>std::unique_ptr&lt;std::byte[], Unmap&gt;</code>, where <code>Unmap</code> remembers the length. Handle <code>MAP_FAILED</code> correctly, write and read the region, and expose the size through <code>get_deleter()</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>munmap</code> needs the address and the length, so the deleter is stateful and stores the length. Call <code>mmap</code> first and check for <code>MAP_FAILED</code> (which is <code>(void*)-1</code>, not null) before constructing the smart pointer; on failure return an empty pointer. Using the array form gives <code>operator[]</code>.</p>
+<pre data-run="ch12-k-mmap" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/mman.h&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> unmaps = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Unmap</span> {
+    std::<span class="hljs-type">size_t</span> len = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(std::byte* p)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{
+        ++unmaps;
+        ::<span class="hljs-built_in">munmap</span>(p, len);
+    }
+};
+<span class="hljs-keyword">using</span> Mapping = std::unique_ptr&lt;std::byte[], Unmap&gt;;
+
+<span class="hljs-function"><span class="hljs-type">static</span> Mapping <span class="hljs-title">map_anonymous</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> len)</span> </span>{
+    <span class="hljs-type">void</span>* raw = ::<span class="hljs-built_in">mmap</span>(<span class="hljs-literal">nullptr</span>, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, <span class="hljs-number">-1</span>, <span class="hljs-number">0</span>);
+    <span class="hljs-keyword">if</span> (raw == MAP_FAILED) <span class="hljs-keyword">return</span> <span class="hljs-built_in">Mapping</span>(<span class="hljs-literal">nullptr</span>, Unmap{<span class="hljs-number">0</span>});
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">Mapping</span>(<span class="hljs-built_in">static_cast</span>&lt;std::byte*&gt;(raw), Unmap{len});
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Mapping m = <span class="hljs-built_in">map_anonymous</span>(<span class="hljs-number">1</span> &lt;&lt; <span class="hljs-number">16</span>);
+    <span class="hljs-keyword">if</span> (!m) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;mapped %zu bytes, zero-filled: %d\n&quot;</span>, m.<span class="hljs-built_in">get_deleter</span>().len, m[<span class="hljs-number">100</span>] == std::byte{<span class="hljs-number">0</span>});
+    std::<span class="hljs-built_in">memcpy</span>(m.<span class="hljs-built_in">get</span>(), <span class="hljs-string">&quot;mapped&quot;</span>, <span class="hljs-number">7</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">char</span>*&gt;(m.<span class="hljs-built_in">get</span>()));
+    m[<span class="hljs-number">65535</span>] = std::byte{<span class="hljs-number">42</span>};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;last byte %d\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(m[<span class="hljs-number">65535</span>]));
+
+    Mapping huge = <span class="hljs-built_in">map_anonymous</span>(<span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(<span class="hljs-number">1</span>) &lt;&lt; <span class="hljs-number">62</span>);   <span class="hljs-comment">// fails: too big</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;huge %s\n&quot;</span>, huge ? <span class="hljs-string">&quot;mapped&quot;</span> : <span class="hljs-string">&quot;failed&quot;</span>);
+    m.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;unmaps %d\n&quot;</span>, unmaps);
+}</code></pre>
+<pre class="out" data-out="ch12-k-mmap">mapped 65536 bytes, zero-filled: 1
+mapped
+last byte 42
+huge failed
+unmaps 1</pre>
+    <p><b>Complexity and pitfalls.</b> The mapping is lazy: pages are faulted in on first touch, so "allocating" 64 KiB costs almost nothing until written. Pitfalls: passing <code>MAP_FAILED</code> to the smart pointer (it is non-null, so <code>munmap((void*)-1, len)</code> would be called); losing the length (a stateless deleter cannot unmap); <code>MAP_ANON</code> vs <code>MAP_ANONYMOUS</code> spelling (Linux has both, macOS prefers <code>MAP_ANON</code>); the handle is 16 bytes because of the length.</p>
+    <p class="rating">Estimated rating: ~1500 · stateful deleter plus the MAP_FAILED sentinel trap</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch10-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><code>unique_ptr&lt;T, D&gt;</code>: deleter in the type, stored inline. Empty <code>D</code> (function object, captureless lambda) costs 0 bytes through EBO; a function pointer or captured state costs 8 or more.</li>
+<li>Prefer <code>struct Closer { void operator()(T*) const noexcept; };</code>. Function pointer deleters must be passed at every construction and cannot be default-constructed.</li>
+<li><code>shared_ptr&lt;T&gt;</code>: deleter type-erased into the control block, captured at construction with the real pointer type, so <code>shared_ptr&lt;void&gt;</code> and non-virtual bases still destroy correctly. Inspect with <code>std::get_deleter&lt;D&gt;</code>.</li>
+<li>Null: <code>unique_ptr</code> never calls the deleter on null; <code>shared_ptr</code> built with a deleter calls it even for <code>nullptr</code>. Check sentinels like <code>MAP_FAILED</code> and <code>-1</code> yourself.</li>
+<li>No deleter overloads for <code>make_unique</code>/<code>make_shared</code>; use the constructor, or <code>allocate_shared</code> to control the single allocation.</li>
+<li>Deleters must not throw (destructors are <code>noexcept</code>). Close explicitly with <code>fclose(f.release())</code> when you need the error.</li>
+<li>PIMPL with <code>unique_ptr&lt;Impl&gt;</code>: declare the destructor and moves in the header, define them <code>= default</code> in the .cpp. <code>shared_ptr</code> does not need this.</li>
+<li>Stateful deleters (pool, mmap length) add a lifetime rule: whatever they point to must outlive every handle. C++23 <code>std::out_ptr</code> adapts smart pointers to <code>T**</code> out parameters.</li>
+</ul>
+</section>

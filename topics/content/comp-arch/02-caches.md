@@ -19,7 +19,7 @@ DRAM is far slower than the processor, and fast memory has to be small. So a mod
 | DRAM | GB | around 100 ns |
 | SSD | TB | tens of microseconds and up |
 
-The C++ guide's chapter on [cache-friendly allocation](../../guide/#ch19) covers contiguous containers, hot/cold splitting, struct padding and allocation patterns. This chapter covers the hardware rules and the numericals behind them.
+The C++ guide's chapter on [cache-friendly allocation](../../guide/cpp/#ch17) covers contiguous containers, hot/cold splitting, struct padding and allocation patterns. This chapter covers the hardware rules and the numericals behind them.
 
 You can see the levels by chasing pointers through a random cycle. Each load depends on the one before, and random order defeats the prefetcher:
 
@@ -501,7 +501,7 @@ int main(void) {
 }
 ```
 ---
-**Answer.** Padding makes `A` 24 bytes and `B` 16. Just reordering the members reduces the lines touched by a third. Layout rules are covered in the [C++ guide](../../guide/#ch19).
+**Answer.** Padding makes `A` 24 bytes and `B` 16. Just reordering the members reduces the lines touched by a third. Layout rules are covered in the [C++ guide](../../guide/cpp/#ch17).
 :::
 
 :::drill bug

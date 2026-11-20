@@ -8,12 +8,14 @@ cd "$(dirname "$0")"
 python3 atlas/tools/build.py
 node langs/build.mjs
 node langs/build.mjs --root topics
+node langs/build.mjs --root guide
 python3 videos/tools/build.py
 
 rm -rf _site
 mkdir -p _site/mcq _site/atlas _site/videos
 cp index.html _site/
-cp -r shared guide ladder counter applications _site/
+cp -r shared ladder counter applications _site/
+cp -r guide/dist _site/guide
 mkdir -p _site/plan
 cp plan/index.html plan/app.js plan/style.css _site/plan/
 # plan/data.js names private projects, so it is gitignored; a local build serves it, the site reads it from the private repo.

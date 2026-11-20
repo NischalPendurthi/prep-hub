@@ -153,7 +153,7 @@ int main() {
 
 With data that fits in cache, the ratio usually approaches the lane count of 4. On data far larger than the caches it is often much less, since memory becomes the bottleneck.
 
-**Alignment.** `_mm_load_si128` requires a 16-byte aligned address and faults otherwise, while `_mm_loadu_si128` accepts any address. On recent x86 cores an unaligned load that stays within a cache line costs about the same as an aligned one, and crossing a line costs more. Get aligned memory with `alignas`, or with `aligned_alloc(64, size)` where `size` is a multiple of 64. The C++ guide's [chapter 19](../../guide/#ch19) covers the layout rules.
+**Alignment.** `_mm_load_si128` requires a 16-byte aligned address and faults otherwise, while `_mm_loadu_si128` accepts any address. On recent x86 cores an unaligned load that stays within a cache line costs about the same as an aligned one, and crossing a line costs more. Get aligned memory with `alignas`, or with `aligned_alloc(64, size)` where `size` is a multiple of 64. The C++ guide's [chapter 19](../../guide/cpp/#ch17) covers the layout rules.
 
 ## NUMA {#ch04-numa .th}
 

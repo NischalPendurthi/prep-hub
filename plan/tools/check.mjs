@@ -11,7 +11,8 @@ const ctx = { window: {} };
 vm.runInNewContext(read("plan/data.js"), ctx);
 const P = ctx.window.PLAN;
 
-const guideIds = new Set([...read("guide/index.html").matchAll(/id="(ch\d\d)"/g)].map((m) => m[1]));
+// old one-page guide anchors (#ch09) still work: guide/redirects.json sends them to guide/cpp/ or guide/os/
+const guideOld = JSON.parse(read("guide/redirects.json"));
 const atlasIds = new Set([...read("atlas/content/taxonomy.yaml").matchAll(/\{id: ([\w-]+),/g)].map((m) => m[1]));
 const mcq = new Set();
 for (const d of read("mcq/data/catalog.js").matchAll(/id: "(\w+)", prefix.*?subdomains: \[(.*?)\]/gs))
@@ -27,7 +28,8 @@ const chapter = (root, name, ch) =>
 
 function ok(href) {
   let m;
-  if ((m = href.match(/^\.\.\/guide\/(?:#(ch\d\d))?$/))) return !m[1] || guideIds.has(m[1]);
+  if ((m = href.match(/^\.\.\/guide\/(?:#(ch\d\d))?$/))) return !m[1] || m[1] in guideOld;
+  if ((m = href.match(/^\.\.\/guide\/(cpp|os)\/(?:#ch(\d\d)[\w-]*)?$/))) return !m[2] || chapter("guide", m[1], m[2]);
   if ((m = href.match(/^\.\.\/atlas\/#\/v\/([\w-]+)$/))) return atlasIds.has(m[1]);
   if (href === "../atlas/#/revise" || href === "../atlas/") return true;
   if (/^https:\/\/codeforces\.com\/[\w/?=&]*$/.test(href)) return true;

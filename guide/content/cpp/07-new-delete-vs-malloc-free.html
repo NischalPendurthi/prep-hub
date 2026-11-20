@@ -1,0 +1,1238 @@
+---
+title: new/delete vs malloc/free
+part: Part C · Memory management
+lede: A new-expression is two operations glued together: it gets raw memory from an allocation function, then runs a constructor in it. malloc does only the first half. This chapter takes both apart, from failure modes and array cookies to what glibc does under the hood, because interviewers use the topic to test whether you understand object lifetime and the heap at the same time.
+desc: Construction, operator new, new[] cookies, failure modes, mismatches
+hours: 3
+prereqs: [Ch 1](#ch01) (constructors, destructors, lifetime)
+---
+<section id="ch07-new-expression" data-roles="th"><div class="sec-head"><h2>What a new-expression actually does</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> <code>new T(args)</code> is a language construct, not a function. The compiler turns it into: call an <i>allocation function</i> named <code>operator new</code> to get <code>sizeof(T)</code> raw bytes, then run <code>T</code>'s constructor in those bytes, then hand you a typed <code>T*</code>. <code>delete p</code> is the mirror image: run <code>p-&gt;~T()</code>, then call <code>operator delete</code> to give the bytes back. <code>malloc</code> and <code>free</code> are plain library functions that only deal in bytes; they know nothing about types, constructors or destructors.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="A new-expression calls operator new and then the constructor; a delete-expression calls the destructor and then operator delete">
+<defs><marker id="ch07-c09a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="28" class="t-bold">new T(args)</text>
+<rect x="20" y="42" width="150" height="50" rx="6" class="d-acc"/>
+<text x="95" y="63" text-anchor="middle" class="t-mono t-small">operator new(sizeof(T))</text>
+<text x="95" y="80" text-anchor="middle" class="t-small t-muted">raw bytes, may throw</text>
+<line x1="170" y1="67" x2="215" y2="67" class="d-line" marker-end="url(#ch09-c09a)"/>
+<rect x="220" y="42" width="150" height="50" rx="6" class="d-box"/>
+<text x="295" y="63" text-anchor="middle" class="t-mono t-small">T::T(args)</text>
+<text x="295" y="80" text-anchor="middle" class="t-small t-muted">lifetime begins</text>
+<line x1="370" y1="67" x2="415" y2="67" class="d-line" marker-end="url(#ch09-c09a)"/>
+<rect x="420" y="42" width="120" height="50" rx="6" class="d-key"/>
+<text x="480" y="72" text-anchor="middle" class="t-mono t-small">T* p</text>
+<line x1="295" y1="92" x2="295" y2="128" class="d-line-trap d-dash" marker-end="url(#ch09-c09a)"/>
+<rect x="190" y="132" width="210" height="44" rx="6" class="d-trap"/>
+<text x="295" y="151" text-anchor="middle" class="t-small t-trap">constructor throws:</text>
+<text x="295" y="167" text-anchor="middle" class="t-mono t-small">operator delete(raw), rethrow</text>
+<text x="20" y="214" class="t-bold">delete p</text>
+<rect x="20" y="228" width="150" height="50" rx="6" class="d-box"/>
+<text x="95" y="250" text-anchor="middle" class="t-mono t-small">p-&gt;~T()</text>
+<text x="95" y="266" text-anchor="middle" class="t-small t-muted">lifetime ends</text>
+<line x1="170" y1="253" x2="215" y2="253" class="d-line" marker-end="url(#ch09-c09a)"/>
+<rect x="220" y="228" width="150" height="50" rx="6" class="d-acc"/>
+<text x="295" y="250" text-anchor="middle" class="t-mono t-small">operator delete(p)</text>
+<text x="295" y="266" text-anchor="middle" class="t-small t-muted">bytes returned</text>
+<rect x="560" y="42" width="140" height="50" rx="6" class="d-soft"/>
+<text x="630" y="63" text-anchor="middle" class="t-mono t-small">malloc(n)</text>
+<text x="630" y="80" text-anchor="middle" class="t-small t-muted">bytes only, void*</text>
+<rect x="560" y="228" width="140" height="50" rx="6" class="d-soft"/>
+<text x="630" y="250" text-anchor="middle" class="t-mono t-small">free(p)</text>
+<text x="630" y="266" text-anchor="middle" class="t-small t-muted">bytes only</text>
+<text x="630" y="150" text-anchor="middle" class="t-small t-muted">no constructor,</text>
+<text x="630" y="166" text-anchor="middle" class="t-small t-muted">no destructor</text>
+</svg></div><figcaption><b>A new-expression is allocation plus construction.</b> If the constructor throws, the compiler-generated code calls the matching <code>operator delete</code> on the raw bytes and lets the exception continue; the destructor never runs because the object never existed. malloc and free stop at the blue boxes.</figcaption></figure>
+
+<h3 id="ch07-terminology">"new operator" vs "operator new"</h3>
+<p>Interviewers like this pair of names. The <i>new operator</i> (the standard calls it a <i>new-expression</i>) is the thing you write: <code>new Widget(3)</code>. You cannot change what it does. <i><code>operator new</code></i> is the allocation function it calls. You can replace it globally or overload it per class, and you can call it directly: <code>void* raw = ::operator new(64);</code> gives you 64 bytes and constructs nothing. The same split exists for delete: the delete-expression always runs the destructor, then calls <code>operator delete</code>, which only frees.</p>
+
+<h3 id="ch07-ctor-throws">When the constructor throws</h3>
+<p>The language guarantees no leak if a constructor called from a new-expression throws: <code>[expr.new]</code> requires the implementation to call the deallocation function that matches the allocation function used. That is why every placement form of <code>operator new</code> you write should have a matching placement <code>operator delete</code>. If it does not, the compiler cannot free the memory when the constructor throws, and you leak silently. The program below traces both paths with a class-specific allocation function (class-specific functions are never elided, so the trace is reliable).</p>
+<pre data-run="ch09-trace" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Widget</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Widget</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span>
+        <span class="hljs-keyword">if</span> (i &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">invalid_argument</span>(<span class="hljs-string">&quot;negative id&quot;</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  Widget(%d)\n&quot;</span>, id);
+    }
+    ~<span class="hljs-built_in">Widget</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  ~Widget(%d)\n&quot;</span>, id); }
+
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  operator new(%zu)\n&quot;</span>, n);
+        <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n)) <span class="hljs-keyword">return</span> p;
+        <span class="hljs-keyword">throw</span> std::bad_alloc{};
+    }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  operator delete&quot;</span>);
+        std::<span class="hljs-built_in">free</span>(p);
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;new Widget(7):&quot;</span>);
+    Widget* w = <span class="hljs-keyword">new</span> <span class="hljs-built_in">Widget</span>(<span class="hljs-number">7</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;delete w:&quot;</span>);
+    <span class="hljs-keyword">delete</span> w;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;new Widget(-1):&quot;</span>);
+    <span class="hljs-keyword">try</span> {
+        Widget* bad = <span class="hljs-keyword">new</span> <span class="hljs-built_in">Widget</span>(<span class="hljs-number">-1</span>);
+        <span class="hljs-keyword">delete</span> bad;
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::invalid_argument&amp; e) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  caught: %s\n&quot;</span>, e.<span class="hljs-built_in">what</span>());
+    }
+}</code></pre>
+<pre class="out" data-out="ch09-trace">new Widget(7):
+  operator new(4)
+  Widget(7)
+delete w:
+  ~Widget(7)
+  operator delete
+new Widget(-1):
+  operator new(4)
+  operator delete
+  caught: negative id</pre>
+<p>Notice that the failed construction prints no destructor. A destructor runs only for an object whose constructor finished; the members and bases that <i>were</i> fully built are destroyed, and the storage is released.</p>
+
+<h3 id="ch07-malloc-model">What malloc gives you</h3>
+<p><code>void* malloc(std::size_t n)</code> returns a pointer to at least <code>n</code> bytes aligned for any fundamental type (at least <code>alignof(std::max_align_t)</code>: 16 on x86-64 and arm64 Linux; on Apple arm64 <code>max_align_t</code> is only 8, though macOS malloc still returns 16-byte aligned blocks), or a null pointer on failure. No object of class type exists in that memory until you create one, usually with placement new (<a href="#ch12">Ch 12</a>). Since C++20 (P0593, "implicit creation of objects") malloc does implicitly create objects of <i>implicit-lifetime types</i> such as <code>int</code>, arrays and aggregates without a user-provided destructor, which made the decades-old C idiom <code>int* a = (int*)malloc(10 * sizeof(int));</code> officially well-defined. For a type like <code>std::string</code> it is still undefined behaviour to use the memory without constructing an object first.</p>
+</section>
+
+<section id="ch07-failure" data-roles="th"><div class="sec-head"><h2>Failure behaviour: bad_alloc, nothrow and the new_handler</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> malloc reports failure by returning null. A plain new-expression never returns null: the global <code>operator new</code> either returns memory or throws <code>std::bad_alloc</code>. Before it gives up it calls a user-installable hook, the <i>new_handler</i>, in a loop.</p>
+
+<h3 id="ch07-new-loop">The operator new loop</h3>
+<p>The standard (<code>[new.delete.single]</code>) describes the default <code>operator new(std::size_t)</code> as this loop:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-keyword">if</span> (n == <span class="hljs-number">0</span>) n = <span class="hljs-number">1</span>;                       <span class="hljs-comment">// must return a unique non-null pointer</span>
+    <span class="hljs-keyword">for</span> (;;) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n)) <span class="hljs-keyword">return</span> p;
+        std::new_handler h = std::<span class="hljs-built_in">get_new_handler</span>();
+        <span class="hljs-keyword">if</span> (!h) <span class="hljs-keyword">throw</span> std::bad_alloc{};
+        <span class="hljs-built_in">h</span>();                                 <span class="hljs-comment">// then try again</span>
+    }
+}</code></pre>
+<p>A new_handler must do one of four things: make more memory available (for example release an emergency reserve), install a different handler, uninstall itself with <code>std::set_new_handler(nullptr)</code> so the next iteration throws, or not return at all (throw <code>bad_alloc</code> or call <code>std::abort</code>). A handler that returns without changing anything turns the loop into an infinite loop.</p>
+
+<h3 id="ch07-nothrow">nothrow new</h3>
+<p><code>new (std::nothrow) T</code> calls <code>operator new(std::size_t, const std::nothrow_t&amp;)</code>, which returns null instead of throwing. Two details catch people out. First, it only suppresses <i>allocation</i> failure: if <code>T</code>'s constructor throws, the exception still propagates. Second, since C++11 the default nothrow version is specified as calling the throwing version inside a try block, so it still runs the new_handler loop first. There is also <code>std::bad_array_new_length</code> (derived from <code>bad_alloc</code>), which <code>new T[n]</code> throws when <code>n</code> is negative or <code>n * sizeof(T)</code> overflows. GCC follows that rule; Clang passes <code>SIZE_MAX</code> to <code>operator new[]</code> instead, which then throws a plain <code>bad_alloc</code>, so always catch <code>bad_alloc</code>.</p>
+
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"On Linux, if <code>new</code> succeeded, the memory exists." Not necessarily. With the default overcommit policy (<code>vm.overcommit_memory = 0</code>) the kernel hands out virtual address space and only finds physical pages when you first touch them. A large <code>new</code> can succeed and the process can be killed later by the OOM killer while writing to the memory, with no exception anywhere. Mode 0 refuses only obviously impossible requests (more than RAM plus swap); mode 2 does strict accounting against <code>CommitLimit</code>, which is when <code>bad_alloc</code> becomes reliable. Checking for <code>bad_alloc</code> is still correct code; just do not promise the interviewer that it protects you from running out of RAM.</p></div>
+
+<h3 id="ch07-failure-demo">Seeing the failure modes</h3>
+<p>Asking for 2<sup>62</sup> bytes fails on any real machine, so the program below shows all three behaviours. The <code>volatile</code> sink stops the compiler from removing the allocations, which C++14 allows (see the tricky drills), and the <code>volatile</code> size stops Clang from rejecting the constant array bound at compile time ("array is too large").</p>
+<pre data-run="ch09-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">volatile</span> sink;
+<span class="hljs-type">static</span> <span class="hljs-keyword">volatile</span> std::<span class="hljs-type">size_t</span> huge_v = std::<span class="hljs-built_in">size_t</span>(<span class="hljs-number">1</span>) &lt;&lt; <span class="hljs-number">62</span>;  <span class="hljs-comment">// hides the constant from Clang</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> huge = huge_v;
+
+    <span class="hljs-type">char</span>* p = <span class="hljs-built_in">new</span> (std::nothrow) <span class="hljs-type">char</span>[huge];
+    sink = p;
+    std::<span class="hljs-built_in">puts</span>(p ? <span class="hljs-string">&quot;nothrow: got memory&quot;</span> : <span class="hljs-string">&quot;nothrow: null&quot;</span>);
+
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-type">char</span>* q = <span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[huge];
+        sink = q;
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) {
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;plain new: bad_alloc&quot;</span>);
+    }
+
+    std::<span class="hljs-type">size_t</span> n = SIZE_MAX / <span class="hljs-number">2</span>;           <span class="hljs-comment">// n * sizeof(int) overflows</span>
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-type">int</span>* r = <span class="hljs-keyword">new</span> <span class="hljs-type">int</span>[n];
+        sink = r;
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp; e) {     <span class="hljs-comment">// bad_array_new_length is a bad_alloc</span>
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;overflowing array size: caught a bad_alloc&quot;</span>);
+    }
+}</code></pre>
+<pre class="out" data-out="ch09-fail">nothrow: null
+plain new: bad_alloc
+overflowing array size: caught a bad_alloc</pre>
+<p>This program is not tagged for ASan on purpose: ASan treats a request that large as a bug in its own right and aborts unless you set <code>allocator_may_return_null=1</code>.</p>
+</section>
+
+<section id="ch07-type-safety" data-roles="th"><div class="sec-head"><h2>Type safety, sizes and the comparison table</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> new knows the type, so it computes the size, returns a correctly typed pointer and runs constructors. malloc knows only a byte count, so you must compute the size, cast the result and construct objects yourself. Everything else in the table follows from that.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-comment">// C style: three chances to get it wrong (size, cast, no construction)</span>
+Point* a = <span class="hljs-built_in">static_cast</span>&lt;Point*&gt;(std::<span class="hljs-built_in">malloc</span>(<span class="hljs-built_in">sizeof</span>(Point)));
+<span class="hljs-comment">// C++ style: size, type and construction come from the type</span>
+Point* b = <span class="hljs-keyword">new</span> Point{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>};</code></pre>
+<p>A classic C bug is <code>malloc(sizeof(p))</code> instead of <code>malloc(sizeof(*p))</code>, which allocates the size of a pointer. new cannot make that mistake. In C you do not cast malloc's result (the implicit conversion from <code>void*</code> hides a missing <code>#include</code> in old C); in C++ the cast is required because <code>void*</code> does not convert implicitly to <code>T*</code>.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>new / delete</th><th>malloc / free</th></tr></thead>
+<tbody>
+<tr><td>What it is</td><td>Language expression (calls <code>operator new</code>)</td><td>Library function</td></tr>
+<tr><td>Size</td><td>Computed from the type</td><td>You pass bytes</td></tr>
+<tr><td>Return type</td><td><code>T*</code></td><td><code>void*</code>, cast needed in C++</td></tr>
+<tr><td>Construction</td><td>Runs constructor / destructor</td><td>None (C++20: implicit-lifetime types only)</td></tr>
+<tr><td>Failure</td><td>Throws <code>std::bad_alloc</code> (nothrow form returns null)</td><td>Returns null</td></tr>
+<tr><td>Hook on failure</td><td><code>std::set_new_handler</code></td><td>None</td></tr>
+<tr><td>Arrays</td><td><code>new[]</code> / <code>delete[]</code>, may store a cookie</td><td>One block, you do the arithmetic</td></tr>
+<tr><td>Resize</td><td>No equivalent</td><td><code>realloc</code></td></tr>
+<tr><td>Customisable</td><td>Replace globally, overload per class, placement forms</td><td>Only by interposing the symbol (LD_PRELOAD)</td></tr>
+<tr><td>Over-aligned types</td><td>Automatic since C++17 (<code>align_val_t</code>)</td><td><code>aligned_alloc</code>, <code>posix_memalign</code></td></tr>
+<tr><td>Null argument</td><td><code>delete nullptr</code> is a no-op</td><td><code>free(NULL)</code> is a no-op</td></tr>
+<tr><td>Size 0</td><td>Unique non-null pointer</td><td>Null or a unique pointer (implementation-defined)</td></tr>
+</tbody></table></div>
+
+<div class="callout key"><p class="callout-title">Know this cold</p><p>new = <code>operator new</code> + constructor; delete = destructor + <code>operator delete</code>. new throws, malloc returns null. Pair every allocation with its own deallocation form: new/delete, new[]/delete[], malloc/free. Anything else is undefined behaviour even when it seems to work.</p></div>
+</section>
+
+<section id="ch07-arrays" data-roles="th"><div class="sec-head"><h2>new[], delete[] and the array cookie</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> <code>delete[] p</code> receives only a pointer, yet it must run the destructor on every element. So when the element type has a non-trivial destructor, <code>new T[n]</code> asks for a few extra bytes and stores <code>n</code> just before the first element. That hidden header is the <i>array cookie</i>.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="new T[3] allocates a cookie holding the element count before the elements and returns a pointer past the cookie">
+<defs><marker id="ch07-c09b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="60" y="80" width="120" height="56" class="d-trap"/>
+<text x="120" y="104" text-anchor="middle" class="t-mono t-small t-trap">cookie</text>
+<text x="120" y="122" text-anchor="middle" class="t-mono t-small">n = 3 (8 bytes)</text>
+<rect x="180" y="80" width="150" height="56" class="d-box"/>
+<text x="255" y="112" text-anchor="middle" class="t-mono t-small">T[0]</text>
+<rect x="330" y="80" width="150" height="56" class="d-box"/>
+<text x="405" y="112" text-anchor="middle" class="t-mono t-small">T[1]</text>
+<rect x="480" y="80" width="150" height="56" class="d-box"/>
+<text x="555" y="112" text-anchor="middle" class="t-mono t-small">T[2]</text>
+<line x1="60" y1="40" x2="60" y2="76" class="d-line" marker-end="url(#ch09-c09b)"/>
+<text x="64" y="32" class="t-small">operator new[](3·sizeof(T) + 8) returns here</text>
+<line x1="180" y1="180" x2="180" y2="140" class="d-line-acc" marker-end="url(#ch09-c09b)"/>
+<text x="186" y="196" class="t-small t-acc">new T[3] yields p here</text>
+<text x="186" y="214" class="t-small t-muted">delete[] p reads n at p − 8, runs ~T() three times (T[2], T[1], T[0]), frees p − 8</text>
+</svg></div><figcaption><b>The cookie sits in front of the elements.</b> Under the Itanium C++ ABI (Linux, x86-64 and generic arm64) the cookie is <code>max(sizeof(std::size_t), alignof(T))</code> bytes and exists only when <code>T</code> has a non-trivial destructor or when the <code>operator delete[]</code> that will be used takes a size parameter. Apple's arm64 ABI stores both element size and count (16 bytes). <code>delete p</code> without brackets frees <code>p</code> itself, which is not the address malloc returned.</figcaption></figure>
+
+<h3 id="ch07-cookie-rules">When there is a cookie</h3>
+<ul>
+<li><b>Trivially destructible element type</b> (<code>int</code>, a POD struct): no cookie. Nothing must run per element, and the allocator knows the block size anyway. This is why <code>int* p = new int[10]; delete p;</code> usually "works": it is still undefined behaviour.</li>
+<li><b>Non-trivial destructor</b>: cookie present. <code>delete p</code> on such an array runs one destructor and passes the wrong address to <code>operator delete</code>, which typically crashes the allocator or corrupts the heap.</li>
+<li><b>Sized array delete</b>: if the usual deallocation function for the class is <code>operator delete[](void*, std::size_t)</code>, the cookie is present even for a trivially destructible type, because the size passed to delete[] must be recomputed from the count. Give <code>struct Plain</code> below such a class-specific operator and GCC asks for 20 bytes instead of 12.</li>
+<li>The cookie is an ABI detail, not a language rule. MSVC does something similar. The language rule is only: use <code>delete[]</code> for <code>new[]</code>.</li>
+<li>Elements are destroyed in reverse order of construction. If the k-th constructor throws during <code>new T[n]</code>, the k already-built elements are destroyed in reverse order and the storage is released with <code>operator delete[]</code>.</li>
+</ul>
+<p>You can see the cookie by replacing <code>operator new[]</code> and printing the requested size:</p>
+<pre data-run="ch09-cookie" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-keyword">new</span>[](std::<span class="hljs-type">size_t</span> n) {
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;operator new[](%zu)\n&quot;</span>, n);
+    <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n)) <span class="hljs-keyword">return</span> p;
+    <span class="hljs-keyword">throw</span> std::bad_alloc{};
+}
+<span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-keyword">delete</span>[](<span class="hljs-type">void</span>* p) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">free</span>(p); }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Plain</span> { <span class="hljs-type">int</span> v; };                 <span class="hljs-comment">// trivial destructor</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Owner</span> { <span class="hljs-type">int</span> v; ~<span class="hljs-built_in">Owner</span>() {} };     <span class="hljs-comment">// user-provided destructor</span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">volatile</span> sink;              <span class="hljs-comment">// keeps the allocations alive</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Plain* a = <span class="hljs-keyword">new</span> Plain[<span class="hljs-number">3</span>]; sink = a; <span class="hljs-keyword">delete</span>[] a;
+    Owner* b = <span class="hljs-keyword">new</span> Owner[<span class="hljs-number">3</span>]; sink = b; <span class="hljs-keyword">delete</span>[] b;
+}</code></pre>
+<pre class="out" data-out="ch09-cookie" data-compiler="gcc">operator new[](12)
+operator new[](20)</pre>
+<p>The output shown is GCC's (Itanium ABI: 12 bytes of elements plus an 8-byte cookie). Clang on Linux prints the same. Clang on Apple arm64 prints 28 for the second line because Apple's ABI cookie is 16 bytes.</p>
+</section>
+
+<section id="ch07-mismatch" data-roles="th"><div class="sec-head"><h2>Mismatched allocation and deallocation</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Each allocation family owns its own bookkeeping. Handing a pointer to the wrong family is undefined behaviour (<code>[expr.delete]</code>: the operand of non-array delete must come from a non-array new-expression, and vice versa; C says free must receive a pointer from malloc, calloc, realloc or aligned_alloc).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Pair</th><th>Why it breaks</th><th>What usually happens</th></tr></thead>
+<tbody>
+<tr><td><code>new T</code> then <code>free</code></td><td>Destructor skipped; <code>operator new</code> may not be malloc (replaced, class-specific, aligned)</td><td>Leak of whatever the object owned; heap corruption if <code>operator new</code> is not malloc</td></tr>
+<tr><td><code>malloc</code> then <code>delete</code></td><td>Destructor runs on an object that never existed; <code>operator delete</code> may not be free</td><td>UB in the destructor; works by luck for <code>int</code></td></tr>
+<tr><td><code>new T[n]</code> then <code>delete</code></td><td>One destructor; wrong address freed when there is a cookie</td><td>Crash or heap corruption for non-trivial <code>T</code></td></tr>
+<tr><td><code>new T</code> then <code>delete[]</code></td><td>Reads a cookie that does not exist</td><td>Runs a garbage number of destructors</td></tr>
+<tr><td><code>new</code> of derived, <code>delete</code> via base without virtual destructor</td><td>Wrong destructor and wrong size (<a href="#ch02">Ch 2</a>)</td><td>Leaks, sized-delete mismatch</td></tr>
+</tbody></table></div>
+<p>On glibc, global <code>operator new</code> happens to call malloc, so <code>new int</code> followed by <code>free</code> appears to work. That is the most dangerous kind of UB: it passes tests and breaks the day someone links tcmalloc, adds a class-specific <code>operator new</code>, or compiles with ASan. On Linux, ASan reports <code>alloc-dealloc-mismatch</code> for the first four rows of the table; the last row shows up as <code>new-delete-type-mismatch</code> when sized deallocation is on. On macOS the check is off by default (<code>ASAN_OPTIONS=alloc_dealloc_mismatch=1</code> turns it on), which is why the drills in this chapter prove the array case with a type whose cookie makes the bug visible everywhere.</p>
+<div class="callout tip"><p class="callout-title">Tip</p><p>The real fix is to stop writing delete at all. <code>std::vector</code>, <code>std::unique_ptr&lt;T[]&gt;</code> and <code>std::make_unique</code> (<a href="#ch09">Ch 9</a>) pick the right deallocation form for you.</p></div>
+</section>
+
+<section id="ch07-realloc" data-roles="th"><div class="sec-head"><h2>realloc, and why C++ has no renew</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><code>realloc(p, n)</code> grows or shrinks a malloc block. If it can extend in place it returns <code>p</code>; otherwise it allocates a new block, copies the old bytes with the equivalent of <code>memcpy</code>, frees the old block and returns the new pointer. On failure it returns null and <b>leaves the old block alive</b>, so <code>p = realloc(p, n);</code> leaks <code>p</code> when it fails. Write <code>void* q = realloc(p, n); if (!q) { /* p is still valid */ } else p = q;</code>.</p>
+<p>C++ has no equivalent for objects because a bytewise copy is not a valid way to move most objects:</p>
+<ul>
+<li>An object may point into itself. libstdc++'s <code>std::string</code> holds a pointer to its own small buffer, so after a memcpy to a new address the copy points into freed memory.</li>
+<li>Other objects may hold pointers to it (an intrusive list node, an observer registration). Moving the bytes does not update them.</li>
+<li>Moving requires running move constructors and destructors, which can throw, so containers need <code>std::move_if_noexcept</code> to keep the strong guarantee (<a href="#ch18">Ch 18</a>).</li>
+</ul>
+<p>So <code>std::vector</code> grows by allocating a new block, move-constructing elements into it, destroying the old ones and freeing the old block. Libraries such as folly's <code>fbvector</code> use realloc for types they mark as relocatable. The standard has crept towards the missing pieces: C++23 added <code>std::allocator::allocate_at_least</code>, which tells you how much memory you really got. Trivial relocation is not in C++26. P2786 was voted into the C++26 working draft in February 2025 (Hagenberg), then removed again in November 2025 (Kona, P3920) because of unresolved design concerns; the competing P1144 was never adopted. The committee aims to return to the topic for C++29, so today "relocatable" is still a library-specific trait.</p>
+<p>One glibc detail worth knowing: when the block is large enough to have been served by <code>mmap</code>, realloc uses <code>mremap</code>, which moves page table entries instead of copying bytes. Growing a 1 GB buffer that way costs almost nothing.</p>
+<pre data-run="ch09-realloc" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span>* a = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>*&gt;(std::<span class="hljs-built_in">malloc</span>(<span class="hljs-number">4</span> * <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">int</span>)));
+    <span class="hljs-keyword">if</span> (!a) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">4</span>; ++i) a[i] = i * i;
+
+    <span class="hljs-type">int</span>* grown = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>*&gt;(std::<span class="hljs-built_in">realloc</span>(a, <span class="hljs-number">1000</span> * <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">int</span>)));
+    <span class="hljs-keyword">if</span> (!grown) { std::<span class="hljs-built_in">free</span>(a); <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>; }  <span class="hljs-comment">// on failure a is still ours</span>
+    a = grown;                               <span class="hljs-comment">// the old value of a is now invalid</span>
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">4</span>; i &lt; <span class="hljs-number">1000</span>; ++i) a[i] = i * i;
+
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d %d\n&quot;</span>, a[<span class="hljs-number">0</span>], a[<span class="hljs-number">3</span>], a[<span class="hljs-number">999</span>]);
+    std::<span class="hljs-built_in">free</span>(a);
+}</code></pre>
+<pre class="out" data-out="ch09-realloc">0 9 998001</pre>
+</section>
+
+<section id="ch07-overloading" data-roles="th"><div class="sec-head"><h2>Overloading operator new and operator delete</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> You cannot change what a new-expression does, but you choose which allocation function it calls. Name lookup for <code>new T</code> first looks in the scope of <code>T</code> (class-specific <code>operator new</code>), then at global scope. <code>::new T</code> skips the class and goes straight to the global one.</p>
+
+<h3 id="ch07-global-replacement">Replacing the global functions</h3>
+<p>The standard library defines the global allocation functions as <i>replaceable</i>: if your program defines <code>void* operator new(std::size_t)</code> at global scope with exactly that signature, the linker uses yours everywhere, including inside the standard library. The full set is: single and array, throwing and nothrow, with and without <code>std::align_val_t</code> (C++17), and sized delete (C++14). The defaults are defined in terms of each other: <code>operator new[]</code> calls <code>operator new</code>, sized delete calls unsized delete, and the nothrow forms call the throwing ones. Replacing the plain <code>operator new</code> and <code>operator delete</code> therefore catches most allocations, but replace the aligned pair as well if you track over-aligned types. Rules for a replacement:</p>
+<ul>
+<li>Return memory suitably aligned for any object of that size (at least <code>__STDCPP_DEFAULT_NEW_ALIGNMENT__</code>, 16 on mainstream 64-bit targets).</li>
+<li>Size 0 must return a unique non-null pointer. Failure must throw <code>bad_alloc</code> (or call the new_handler loop).</li>
+<li>Do not call anything that allocates through <code>operator new</code> from inside it (<code>std::cout</code>, <code>std::string</code>, <code>std::map</code>), or you recurse. Use <code>printf</code> or <code>write</code> and fixed-size storage.</li>
+<li>Do not put it in an inline function or a namespace; it must be a global, non-inline definition.</li>
+</ul>
+
+<h3 id="ch07-class-specific">Class-specific allocation</h3>
+<p>Declaring <code>static void* operator new(std::size_t)</code> in a class (the <code>static</code> is implicit even if you omit it) makes every <code>new T</code> use it. Typical uses: a free-list pool for a hot node type (<a href="#ch13">Ch 13</a>), tracking, or placing objects in shared memory. Two rules: it is inherited, so a derived class that is bigger gets the base's allocator with a larger <code>n</code> (check <code>n == sizeof(Base)</code> or forward to <code>::operator new</code>); and you should declare the matching <code>operator delete</code>, otherwise the global one frees memory your allocator handed out.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span></span>;           <span class="hljs-comment">// used by new Node</span>
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span>  <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-keyword">noexcept</span></span>;     <span class="hljs-comment">// used by delete and on ctor throw</span>
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, Arena&amp; a)</span></span>; <span class="hljs-comment">// placement form: new (arena) Node</span>
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span>  <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, Arena&amp; a)</span> <span class="hljs-keyword">noexcept</span></span>; <span class="hljs-comment">// called only if the ctor throws</span>
+};</code></pre>
+
+<h3 id="ch07-placement-forms">Placement forms, sized and destroying delete</h3>
+<p>Any <code>operator new</code> with extra parameters is a "placement" form, invoked as <code>new (args...) T</code>. The one in <code>&lt;new&gt;</code> that takes a <code>void*</code> and returns it unchanged is the famous placement new, which constructs an object at an address you provide; it gets its own chapter (<a href="#ch12">Ch 12</a>). Sized delete (C++14) gives <code>operator delete(void*, std::size_t)</code> the object size, so allocators with size classes skip a lookup; GCC enables it by default, and Clang does since version 19. Destroying delete (C++20), <code>void operator delete(T*, std::destroying_delete_t)</code>, receives the object <i>before</i> the destructor has run and becomes responsible for destroying it, which lets a class with a variable-length tail compute its real size.</p>
+</section>
+
+<section id="ch07-aligned-zero" data-roles="th"><div class="sec-head"><h2>Aligned new (C++17) and zero-size allocations</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch07-aligned-new">Over-aligned types</h3>
+<p>Before C++17, <code>new</code> on a type declared <code>alignas(64)</code> only guaranteed the default alignment (16), so cache-line aligned structures silently came out misaligned and SIMD code crashed. C++17 (P0035) added <code>operator new(std::size_t, std::align_val_t)</code>. When <code>alignof(T) &gt; __STDCPP_DEFAULT_NEW_ALIGNMENT__</code>, the new-expression calls the aligned form and the delete-expression calls the matching <code>operator delete(void*, std::align_val_t)</code>. You get this for free with <code>new</code>, <code>std::make_unique</code> and <code>std::vector</code>; with malloc you must call <code>aligned_alloc(alignment, size)</code> (size must be a multiple of the alignment in C11; C17 relaxed that) or <code>posix_memalign</code>.</p>
+<pre data-run="ch09-aligned" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">alignas</span>(<span class="hljs-number">64</span>) CacheLine { <span class="hljs-type">long</span> counter = <span class="hljs-number">0</span>; };
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">aligned64</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">void</span>* p)</span> </span>{
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(p) % <span class="hljs-number">64</span> == <span class="hljs-number">0</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;default new alignment: %zu\n&quot;</span>, std::<span class="hljs-built_in">size_t</span>(__STDCPP_DEFAULT_NEW_ALIGNMENT__));
+    <span class="hljs-keyword">auto</span>* a = <span class="hljs-keyword">new</span> CacheLine;
+    <span class="hljs-keyword">auto</span> b = std::<span class="hljs-built_in">make_unique</span>&lt;CacheLine&gt;();
+    <span class="hljs-function">std::vector&lt;CacheLine&gt; <span class="hljs-title">v</span><span class="hljs-params">(<span class="hljs-number">3</span>)</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;new: %d, make_unique: %d, vector: %d\n&quot;</span>,
+                <span class="hljs-built_in">aligned64</span>(a), <span class="hljs-built_in">aligned64</span>(b.<span class="hljs-built_in">get</span>()), <span class="hljs-built_in">aligned64</span>(v.<span class="hljs-built_in">data</span>()));
+    <span class="hljs-keyword">delete</span> a;   <span class="hljs-comment">// calls operator delete(void*, std::align_val_t)</span>
+}</code></pre>
+<pre class="out" data-out="ch09-aligned">default new alignment: 16
+new: 1, make_unique: 1, vector: 1</pre>
+
+<h3 id="ch07-zero-size">Zero-size allocations</h3>
+<ul>
+<li><code>operator new(0)</code> and <code>new T[0]</code> must return a non-null pointer distinct from every other live allocation. You may not dereference it, but you must delete it (<code>delete[]</code> for the array). Implementations treat the request as 1 byte or as the minimum chunk.</li>
+<li><code>malloc(0)</code> is implementation-defined: either null or a unique pointer that must be passed to free. glibc and macOS return a unique minimum-size chunk; code that treats a null return from <code>malloc(0)</code> as out of memory is not portable.</li>
+<li><code>realloc(p, 0)</code> is the nastiest: historically it freed <code>p</code> on some systems and returned a minimum block on others. C23 made it undefined behaviour. Do not use it.</li>
+<li>Why must C++ return unique pointers? Distinct objects must have distinct addresses, so two live allocations cannot compare equal.</li>
+</ul>
+</section>
+
+<section id="ch07-malloc-internals" data-roles="th"><div class="sec-head"><h2>What malloc does under the hood (glibc ptmalloc)</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> malloc is a user-space library that buys memory from the kernel in large pieces and sells it to you in small pieces. Each piece is a <i>chunk</i> with a small header. Freed chunks are kept in caches and bins for reuse, and only rarely go back to the kernel. Interviewers at systems and HFT firms expect you to sketch this.</p>
+
+<h3 id="ch07-from-kernel">Getting memory from the kernel</h3>
+<ul>
+<li><b>brk/sbrk</b> moves the end of the process's data segment (the "program break"). glibc's <i>main arena</i> grows its heap this way. Only the top of that heap can be given back, by moving the break down.</li>
+<li><b>mmap</b> maps fresh anonymous pages anywhere in the address space. Requests at or above <code>M_MMAP_THRESHOLD</code> (128 KiB by default) get their own mapping, which <code>free</code> returns to the kernel immediately with <code>munmap</code>. The threshold is dynamic: freeing an mmapped chunk raises it to that chunk's size, up to 32 MiB on 64-bit, so a program that repeatedly allocates 1 MiB buffers stops paying for mmap/munmap.</li>
+<li>Additional arenas (for other threads) get their memory from mmapped "heaps" of up to 64 MiB each.</li>
+</ul>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 320" role="img" aria-label="A glibc chunk has a prev_size and size header before the user pointer; a free chunk reuses user bytes for list pointers">
+<defs><marker id="ch07-c09c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="26" class="t-bold">Allocated chunk</text>
+<rect x="20" y="38" width="140" height="44" class="d-soft"/>
+<text x="90" y="58" text-anchor="middle" class="t-mono t-small">prev_size</text>
+<text x="90" y="74" text-anchor="middle" class="t-small t-muted">8 B (only if prev free)</text>
+<rect x="160" y="38" width="160" height="44" class="d-key"/>
+<text x="240" y="58" text-anchor="middle" class="t-mono t-small">size | A M P</text>
+<text x="240" y="74" text-anchor="middle" class="t-small t-muted">8 B, low 3 bits = flags</text>
+<rect x="320" y="38" width="300" height="44" class="d-box"/>
+<text x="470" y="64" text-anchor="middle" class="t-small">user data (your n bytes, rounded up)</text>
+<line x1="320" y1="112" x2="320" y2="86" class="d-line-acc" marker-end="url(#ch09-c09c)"/>
+<text x="326" y="126" class="t-small t-acc">malloc returns chunk + 16</text>
+<text x="20" y="168" class="t-bold">Free chunk (in a bin)</text>
+<rect x="20" y="180" width="140" height="44" class="d-soft"/>
+<text x="90" y="206" text-anchor="middle" class="t-mono t-small">prev_size</text>
+<rect x="160" y="180" width="160" height="44" class="d-key"/>
+<text x="240" y="206" text-anchor="middle" class="t-mono t-small">size | A M P</text>
+<rect x="320" y="180" width="100" height="44" class="d-acc"/>
+<text x="370" y="206" text-anchor="middle" class="t-mono t-small">fd</text>
+<rect x="420" y="180" width="100" height="44" class="d-acc"/>
+<text x="470" y="206" text-anchor="middle" class="t-mono t-small">bk</text>
+<rect x="520" y="180" width="100" height="44" class="d-box"/>
+<text x="570" y="206" text-anchor="middle" class="t-small t-muted">unused</text>
+<rect x="620" y="180" width="100" height="44" class="d-soft"/>
+<text x="670" y="200" text-anchor="middle" class="t-mono t-small">next.prev_size</text>
+<text x="670" y="215" text-anchor="middle" class="t-small t-muted">= this size</text>
+<text x="20" y="262" class="t-small">P = previous chunk in use · M = chunk came from mmap · A = not in the main arena</text>
+<text x="20" y="282" class="t-small">fd/bk link the chunk into a bin; the footer copy of the size lets free() find the previous chunk and merge (boundary tags)</text>
+<text x="20" y="302" class="t-small t-muted">64-bit: 16-byte alignment, minimum chunk 32 B, so malloc(1) uses 32 B and malloc_usable_size reports 24</text>
+</svg></div><figcaption><b>Every chunk carries its size just before your pointer.</b> That is how <code>free(p)</code> knows how much to release without being told. A freed chunk reuses its first user bytes for free-list pointers, which is why a use-after-free write can corrupt the allocator itself.</figcaption></figure>
+
+<h3 id="ch07-bins">Where a request is served from</h3>
+<ol>
+<li><b>tcache</b> (glibc 2.26+): a per-thread cache with 64 size-indexed singly linked lists, 7 chunks each by default, for chunks up to 1040 bytes (requests up to 1032). No lock, a handful of instructions. Most small malloc/free pairs never leave it. Since glibc 2.42 the tcache can also cache large blocks (up to 4 MiB) if you raise the <code>glibc.malloc.tcache_max</code> tunable; the default limit is unchanged.</li>
+<li><b>fastbins</b>: per-arena singly linked LIFO lists for small chunks (chunks up to 128 bytes by default, <code>M_MXFAST</code>, so requests up to 120 bytes). Freed chunks here are not coalesced right away.</li>
+<li><b>small bins</b> (62 exact-size doubly linked lists below 1024 bytes) and <b>large bins</b> (ranges, kept sorted by size, best fit). Freed chunks first go to the <b>unsorted bin</b>, a one-shot staging list that malloc sorts into bins while it searches.</li>
+<li><b>top chunk</b>: if no bin fits, malloc carves from the free space at the end of the heap and extends it with brk (main arena) when needed.</li>
+</ol>
+<p>Free does roughly the reverse: put the chunk in the tcache if there is room; otherwise coalesce it with free neighbours (using the P bit and boundary tag) and put it in the unsorted bin; if it borders the top chunk, merge into top, and if top grows beyond <code>M_TRIM_THRESHOLD</code> (128 KiB default) shrink the heap with brk. Why freed memory often does not lower RSS is a fragmentation question, covered in <a href="#ch08">Ch 8</a>.</p>
+
+<h3 id="ch07-arenas">Arenas and threads</h3>
+<p>One global lock would serialise every thread's malloc. ptmalloc keeps several <i>arenas</i>, each with its own lock and bins. A thread is attached to an arena at its first malloc and keeps using it: glibc creates a new arena for each new thread until there are <code>8 × number of cores</code> arenas on 64-bit (2 × cores on 32-bit), and after that threads share the existing ones. The cost is memory: each arena holds its own free chunks, so a program with many threads can use much more RSS than its live data. <code>MALLOC_ARENA_MAX=2</code> (or the tunable <code>glibc.malloc.arena_max</code>) is a common fix in production. jemalloc, tcmalloc and mimalloc take different approaches (<a href="#ch08">Ch 8</a>).</p>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>Small requests: tcache, then bins, then the top chunk, grown with brk. Large requests (128 KiB and up by default): a private mmap, returned with munmap on free. The size lives in a header just before the pointer. Several arenas reduce lock contention at the price of memory.</p></div>
+</section>
+
+<section id="ch07-leaks" data-roles="th"><div class="sec-head"><h2>Memory leaks and how to find them</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A leak is memory that is still allocated but that no live pointer can reach any more, so nobody can free it. In a long-running server, a leak of a few bytes per request becomes gigabytes. "Still reachable at exit" (a global cache never freed) is not the same thing, and tools report it separately.</p>
+<h3 id="ch07-leak-causes">Typical causes in C++</h3>
+<ul>
+<li>An early <code>return</code> or an exception between <code>new</code> and <code>delete</code>. RAII fixes this class of leak completely.</li>
+<li>Ownership confusion: <code>unique_ptr::release()</code> with the result ignored, a raw pointer stored in a container of raw pointers, or a C API that returns memory you must free.</li>
+<li><code>shared_ptr</code> cycles (<a href="#ch11">Ch 11</a>): every count stays above zero.</li>
+<li>A base class without a virtual destructor, so derived members are never destroyed.</li>
+<li>Logical leaks: a cache or map that only grows. No tool calls this a leak because it is reachable.</li>
+</ul>
+<h3 id="ch07-leak-tools">Tools</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Tool</th><th>How</th><th>Cost</th><th>Finds</th></tr></thead>
+<tbody>
+<tr><td>ASan + LeakSanitizer</td><td><code>-fsanitize=address -g</code>; LSan runs at exit (on by default on Linux; off by default on macOS, where <code>ASAN_OPTIONS=detect_leaks=1</code> enables it if your toolchain supports it)</td><td>About 2× time, 2 to 3× memory</td><td>Leaks with allocation stacks, plus use-after-free, double free, overflows, mismatches</td></tr>
+<tr><td>Valgrind memcheck</td><td><code>valgrind --leak-check=full ./a.out</code>, no rebuild</td><td>10 to 50× slower</td><td>"definitely lost", "indirectly lost", "possibly lost", "still reachable"; uninitialised reads</td></tr>
+<tr><td>heaptrack, massif</td><td>Record every allocation over time</td><td>Moderate</td><td>Who allocates the most, growth over time (logical leaks)</td></tr>
+<tr><td>Counting <code>operator new</code></td><td>Replace the global functions (coding drills below)</td><td>Tiny</td><td>Live count and bytes in tests</td></tr>
+</tbody></table></div>
+<pre><code class="language-bash hljs">g++ -std=c++20 -g -O1 -fsanitize=address leak.cpp -o leak &amp;&amp; ./leak
+<span class="hljs-comment"># ==1234==ERROR: LeakSanitizer: detected memory leaks</span>
+<span class="hljs-comment"># Direct leak of 40 byte(s) in 1 object(s) allocated from:</span>
+<span class="hljs-comment">#     #0 ... in operator new[](unsigned long)</span>
+<span class="hljs-comment">#     #1 ... in make_buffer() leak.cpp:5</span>
+
+valgrind --leak-check=full --show-leak-kinds=all ./leak_without_asan</code></pre>
+<p>"Indirectly lost" in valgrind means a block reachable only from another leaked block: fix the definitely lost one and the indirect ones usually disappear. Do not run ASan and valgrind on the same binary; they both intercept malloc.</p>
+</section>
+
+<section id="ch07-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What are the steps of <code>new T(args)</code> and of <code>delete p</code>, and what happens if <code>T</code>'s constructor throws?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> new: call <code>operator new(sizeof(T))</code> (class-specific if <code>T</code> declares one, else global), construct <code>T</code> in the storage, yield a <code>T*</code>. delete: call <code>p-&gt;~T()</code> (virtually if the destructor is virtual), then call <code>operator delete</code>. If the constructor throws, the matching <code>operator delete</code> releases the storage and the exception propagates; no destructor runs.</p>
+    <p><b>Why.</b> <code>[expr.new]</code> requires the matching deallocation on constructor failure, so <code>new</code> on its own never leaks. A common wrong answer is "the destructor cleans up": the destructor runs only for objects whose construction completed. Subobjects that were completed are destroyed by the normal unwinding rules.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How does <code>free(p)</code> know how many bytes to release when you never told it the size?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The allocator records the size itself. glibc stores it in an 8-byte header immediately before the pointer it returned (with flag bits in the low three bits). Size-class allocators such as jemalloc or tcmalloc look the size class up from the page the pointer lives in.</p>
+    <p><b>Why.</b> The C API predates sized deallocation, so the allocator must recover the size from the address. C++14 sized delete passes the size explicitly, which lets size-class allocators skip that lookup. "The OS tracks it" is the usual wrong answer: the kernel knows only about pages and mappings, not individual malloc blocks.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Can you release memory from <code>new</code> with <code>free()</code>? And if <code>free()</code> manages without a count, why does <code>delete[]</code> need to know how many elements there are?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No: memory from a new-expression must go back through the matching delete-expression, and anything else is undefined behaviour. <code>delete[]</code> needs the count because it must run one destructor per element; the allocator only knows the byte size of the block, which may be rounded up, so it cannot tell how many objects live there. That is why compilers store the count in an array cookie when the elements have non-trivial destructors.</p>
+    <p><b>Why.</b> <code>free</code> skips the destructor, and <code>operator new</code> need not be malloc at all (replaced, class-specific, aligned or tcmalloc-backed), so <code>free</code> may receive an address its heap never handed out. The common wrong answer is "yes, new calls malloc anyway": that is true of glibc's default, and it is exactly why the bug passes tests and then breaks when the allocator changes. For the count, the usual wrong answer is "delete[] asks the allocator for the block size": the block can be larger than <code>n * sizeof(T)</code>, so dividing would run destructors on objects that never existed.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What may a new_handler do, and what happens if it simply returns?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It must make progress: free some memory (for example an emergency reserve), install another handler, uninstall itself with <code>std::set_new_handler(nullptr)</code>, or not return (throw <code>std::bad_alloc</code>, or abort). If it returns having done none of these, <code>operator new</code> retries, fails, calls it again, forever.</p>
+    <p><b>Why.</b> The standard specifies <code>operator new</code> as a loop: try to allocate; on failure, if a handler is installed call it and retry, otherwise throw <code>bad_alloc</code>. The handler is process-wide and is consulted only by <code>operator new</code>, not by malloc.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why does C++ have no <code>renew</code> or object-aware <code>realloc</code>, and how does <code>std::vector</code> grow instead?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> realloc may move the block with a raw byte copy, and a byte copy is not a valid move for objects that point into themselves or are pointed to by others. vector allocates a new buffer, move-constructs (or copies, if the move constructor may throw) each element into it, destroys the old elements and frees the old buffer.</p>
+    <p><b>Why.</b> Object lifetime in C++ is tied to an address; moving means running constructors. libstdc++'s <code>std::string</code> with its internal SSO pointer is the standard example of a type that breaks under memcpy. The "just realloc the vector's buffer" answer is correct only for trivially copyable types, which is why some libraries special-case them.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When does malloc call brk and when does it call mmap?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> In glibc, requests at or above the mmap threshold (128 KiB by default, raised dynamically up to 32 MiB on 64-bit) get a private anonymous mmap that free returns with munmap. Smaller requests come from an arena; the main arena grows its heap with brk when the top chunk is too small, and other arenas use mmapped heaps.</p>
+    <p><b>Why.</b> mmap avoids fragmenting the main heap with big blocks and gives the memory back immediately on free, but each call is a system call plus page faults, so small requests are pooled. The dynamic threshold exists because a program that repeatedly allocates and frees 1 MiB buffers would otherwise pay mmap and munmap every time.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What do valgrind's "definitely lost", "indirectly lost" and "still reachable" mean, and which do you fix first?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Definitely lost: no pointer to the block exists at exit. Indirectly lost: the block is reachable only through a definitely lost block (the nodes of a leaked list). Still reachable: a live pointer exists (often a global), the program just never freed it. Fix definitely lost first; the indirect ones usually go with it.</p>
+    <p><b>Why.</b> Freeing the root of a leaked structure frees its children. "Still reachable" is often deliberate (singletons torn down by the OS), but it hides logical leaks such as caches that only grow, which you find with heap profilers rather than leak checkers. "Possibly lost" means only an interior pointer points into the block.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does <code>new (std::nothrow) Widget</code> guarantee that no exception escapes?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. It only turns allocation failure into a null result. If <code>Widget</code>'s constructor throws, the exception propagates as usual (after the storage is freed with the nothrow <code>operator delete</code>).</p>
+    <p><b>Why.</b> The <code>std::nothrow</code> tag selects the allocation function <code>operator new(std::size_t, const std::nothrow_t&amp;) noexcept</code>. It has nothing to do with construction. People also forget that the default nothrow version runs the new_handler loop before returning null, and that on an overcommitting Linux system it rarely returns null at all.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span><code>int* p = new int[10]; delete p;</code> runs without a crash on GCC and Clang. Is it correct?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No, it is undefined behaviour by <code>[expr.delete]</code>. It appears to work only because <code>int</code> is trivially destructible, so the Itanium ABI stores no cookie, and the global array and single <code>operator delete</code> both end in <code>free</code>.</p>
+    <p><b>Why.</b> Change <code>int</code> to a type with a destructor and the pointer passed to <code>operator delete</code> is 8 bytes past the start of the block, which crashes or corrupts the heap. ASan on Linux reports <code>alloc-dealloc-mismatch</code> even for <code>int</code>. "It's fine for built-in types" is the wrong answer interviewers listen for.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>You replace global <code>operator new</code> with a version that counts calls, then write <code>int* p = new int(5); std::printf("%d", *p); delete p;</code>. At <code>-O2</code> the counter says zero. Is the compiler allowed to do that?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes. Since C++14 (N3664, now <code>[expr.new]</code>) an implementation may omit or merge calls to <i>replaceable global</i> allocation functions made by new-expressions, even if your replacement has side effects. Clang and GCC both do it when the pointer does not escape.</p>
+    <p><b>Why.</b> The rule exists so that short-lived heap objects can live on the stack or in registers. It applies to new-expressions only: direct calls such as <code>::operator new(n)</code>, class-specific <code>operator new</code> and malloc are not covered by that permission (GCC still treats malloc as a builtin it can sometimes optimise). To make a counting test reliable, let the pointer escape, for example by storing it in a <code>volatile</code> global, as the programs in this chapter do.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is <code>int* a = static_cast&lt;int*&gt;(std::malloc(4 * sizeof(int))); a[0] = 1;</code> undefined behaviour in C++?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Not since C++20. P0593 says malloc, <code>operator new</code>, <code>memcpy</code> and a few others implicitly create objects of implicit-lifetime types (scalars, arrays, aggregates whose destructor is not user-provided, and classes with a trivial non-deleted destructor and at least one trivial eligible constructor) when that would give the program defined behaviour. Before C++20 it was technically UB, though every compiler accepted it.</p>
+    <p><b>Why.</b> The rule was applied retroactively as a defect report, so the answer for "C++17" is debated; say "formally UB before P0593, fine now". For <code>std::string</code> or anything with a non-trivial constructor, using malloc'd memory without placement new is still UB. Candidates often say "always UB" or "always fine"; both are wrong.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can you <code>delete</code> a pointer to const? Can you call <code>delete this</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Both are legal. <code>const Widget* p = new const Widget; delete p;</code> is fine: constness controls modification during the object's lifetime, not who may end it (a const local is destroyed at scope exit, too). <code>delete this</code> is legal if the object was created by a non-array new-expression and nothing touches the object (members, virtual calls, <code>this</code>) after the delete.</p>
+    <p><b>Why.</b> <code>[expr.delete]</code> accepts a pointer to cv-qualified type. <code>delete this</code> appears in intrusive reference counting (COM's <code>Release</code>). It is a bug for stack objects, members, arrays or objects from <code>make_shared</code>. The common wrong answer to the first part is "no, delete modifies the object".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What do <code>malloc(0)</code>, <code>new int[0]</code> and <code>::operator new(0)</code> return, and must you free them?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>malloc(0)</code> returns either null or a unique pointer (implementation-defined; glibc returns a minimum 32-byte chunk) and the non-null result must be freed. <code>new int[0]</code> and <code>::operator new(0)</code> must return unique non-null pointers that you must release with <code>delete[]</code> and <code>::operator delete</code> respectively. None may be dereferenced.</p>
+    <p><b>Why.</b> C++ requires distinct live allocations to have distinct addresses, so it cannot return null or a shared dummy. The trap is code that checks <code>if (!malloc(n)) out_of_memory();</code> with <code>n == 0</code>: on a platform that returns null for zero it reports a false out-of-memory. <code>realloc(p, 0)</code> is UB in C23.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch07-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The third element's constructor throws during <code>new Item[4]</code>. What does the program print?</p>
+<pre data-run="ch09-array-throw" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> built = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Item</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-built_in">Item</span>() : <span class="hljs-built_in">id</span>(built) {
+        <span class="hljs-keyword">if</span> (built == <span class="hljs-number">2</span>) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;boom&quot;</span>);
+        ++built;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;Item(%d) &quot;</span>, id);
+    }
+    ~<span class="hljs-built_in">Item</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;~Item(%d) &quot;</span>, id); }
+    <span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-keyword">new</span>[](std::<span class="hljs-type">size_t</span> n) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n)) <span class="hljs-keyword">return</span> p;
+        <span class="hljs-keyword">throw</span> std::bad_alloc{};
+    }
+    <span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-keyword">delete</span>[](<span class="hljs-type">void</span>* p) <span class="hljs-keyword">noexcept</span> {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;operator delete[] &quot;</span>);
+        std::<span class="hljs-built_in">free</span>(p);
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">try</span> {
+        Item* items = <span class="hljs-keyword">new</span> Item[<span class="hljs-number">4</span>];
+        <span class="hljs-keyword">delete</span>[] items;
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;caught %s\n&quot;</span>, e.<span class="hljs-built_in">what</span>());
+    }
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch09-array-throw">Item(0) Item(1) ~Item(1) ~Item(0) operator delete[] caught boom</pre>
+    <p><b>Answer.</b> Two items are built, the third throws, the two built items are destroyed in reverse order, the storage is released, and then the handler runs.</p>
+    <p><b>Why.</b> An array new-expression is exception-safe on its own: the implementation destroys the fully constructed elements in reverse order (<code>[expr.new]</code>, <code>[dcl.init]</code>) and calls the matching <code>operator delete[]</code>. Element 2 never gets a destructor because its constructor did not finish. A common wrong answer prints <code>~Item(2)</code> or destroys in forward order.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The new_handler counts calls and gives up after the third. What is printed?</p>
+<pre data-run="ch09-handler"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> calls = <span class="hljs-number">0</span>;
+<span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">volatile</span> sink;
+<span class="hljs-type">static</span> <span class="hljs-keyword">volatile</span> std::<span class="hljs-type">size_t</span> huge = std::<span class="hljs-built_in">size_t</span>(<span class="hljs-number">1</span>) &lt;&lt; <span class="hljs-number">62</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">handler</span><span class="hljs-params">()</span> </span>{
+    ++calls;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;handler call %d\n&quot;</span>, calls);
+    <span class="hljs-keyword">if</span> (calls == <span class="hljs-number">3</span>) std::<span class="hljs-built_in">set_new_handler</span>(<span class="hljs-literal">nullptr</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">set_new_handler</span>(handler);
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-type">char</span>* p = <span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[huge];
+        sink = p;
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;allocated&quot;</span>);
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;bad_alloc after %d handler calls\n&quot;</span>, calls);
+    }
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch09-handler">handler call 1
+handler call 2
+handler call 3
+bad_alloc after 3 handler calls</pre>
+    <p><b>Answer.</b> The handler runs three times; after the third it uninstalls itself, so the fourth allocation attempt finds no handler and throws.</p>
+    <p><b>Why.</b> This is the <code>operator new</code> loop from <code>[new.delete.single]</code>. Each failure calls the current handler and retries. If the handler never uninstalled itself and never freed anything, the program would loop forever, which is the main bug in hand-written handlers. (Not tagged for ASan: ASan aborts on impossible sizes by default.)</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This compiles cleanly and the destructor message even prints once. What is wrong?</p>
+<pre data-run="ch09-bug-array-delete" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Record</span> {
+    std::string name = <span class="hljs-string">&quot;row&quot;</span>;
+    ~<span class="hljs-built_in">Record</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;~Record&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Record* rows = <span class="hljs-keyword">new</span> Record[<span class="hljs-number">3</span>];
+    <span class="hljs-keyword">delete</span> rows;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>new[]</code> paired with plain <code>delete</code>. Use <code>delete[] rows;</code>, or better, <code>std::vector&lt;Record&gt; rows(3);</code>.</p>
+    <p><b>Why.</b> <code>Record</code> has a non-trivial destructor, so the block starts with an array cookie and <code>rows</code> points past it. Plain <code>delete</code> runs one destructor and passes <code>rows</code> itself to <code>operator delete</code>, an address malloc never returned. ASan reports "attempting free on address which was not malloc()-ed"; without ASan the result ranges from silence to a glibc abort ("free(): invalid pointer"). Output is not compared because the behaviour is undefined.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A cleanup path frees a node twice. Spot it.</p>
+<pre data-run="ch09-bug-double" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> { <span class="hljs-type">int</span> value; Node* next; };
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">destroy</span><span class="hljs-params">(Node* n)</span> </span>{
+    <span class="hljs-keyword">while</span> (n) {
+        Node* next = n-&gt;next;
+        <span class="hljs-keyword">delete</span> n;
+        n = next;
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Node* tail = <span class="hljs-keyword">new</span> Node{<span class="hljs-number">2</span>, <span class="hljs-literal">nullptr</span>};
+    Node* head = <span class="hljs-keyword">new</span> Node{<span class="hljs-number">1</span>, tail};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d\n&quot;</span>, head-&gt;value, head-&gt;next-&gt;value);
+    <span class="hljs-built_in">destroy</span>(head);
+    <span class="hljs-keyword">delete</span> tail;   <span class="hljs-comment">// &quot;just to be safe&quot;</span>
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>destroy(head)</code> already deleted <code>tail</code>; the extra <code>delete tail</code> is a double free. Remove it, and model the list with a single owner (for example <code>std::unique_ptr&lt;Node&gt; next</code> or a <code>std::forward_list</code>).</p>
+    <p><b>Why.</b> Deleting a pointer does not change other pointers to the same object, so <code>tail</code> still holds the old address. A double free can corrupt glibc's bins (the classic "tcache double free" exploit primitive); glibc detects some cases and aborts with "free(): double free detected in tcache 2". ASan reports "attempting double-free". Setting a pointer to null after delete only protects that one variable, not its copies.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The buffer grows with realloc. Where is the use-after-free?</p>
+<pre data-run="ch09-bug-realloc" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span>* data = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>*&gt;(std::<span class="hljs-built_in">malloc</span>(<span class="hljs-number">2</span> * <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">int</span>)));
+    <span class="hljs-keyword">if</span> (!data) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    data[<span class="hljs-number">0</span>] = <span class="hljs-number">10</span>;
+    data[<span class="hljs-number">1</span>] = <span class="hljs-number">20</span>;
+    <span class="hljs-type">int</span>* first = &amp;data[<span class="hljs-number">0</span>];
+
+    <span class="hljs-type">int</span>* bigger = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>*&gt;(std::<span class="hljs-built_in">realloc</span>(data, <span class="hljs-number">100000</span> * <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">int</span>)));
+    <span class="hljs-keyword">if</span> (!bigger) { std::<span class="hljs-built_in">free</span>(data); <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>; }
+    data = bigger;
+
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, *first);
+    std::<span class="hljs-built_in">free</span>(data);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>first</code> points into the old block. If realloc moved the data (here it must, from 8 bytes to 400 KB), the old block is freed and <code>*first</code> reads freed memory. Keep an index instead of a pointer, or recompute <code>first</code> after the realloc.</p>
+    <p><b>Why.</b> realloc may return a different address; every pointer and reference into the old block is invalid afterwards, exactly like iterators after <code>std::vector</code> reallocation. ASan always moves on realloc growth and reports heap-use-after-free. Without ASan the program may print 10 and look correct, which is why this bug survives code review.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A C library returns a malloc'd string and the C++ caller releases it. What is wrong, and why might ASan stay quiet on some machines?</p>
+<pre data-run="ch09-bug-free-delete" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+
+<span class="hljs-keyword">extern</span> <span class="hljs-string">&quot;C&quot;</span> <span class="hljs-function"><span class="hljs-type">char</span>* <span class="hljs-title">c_duplicate</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s)</span> </span>{   <span class="hljs-comment">// stands in for a C API such as strdup</span>
+    std::<span class="hljs-type">size_t</span> n = std::<span class="hljs-built_in">strlen</span>(s) + <span class="hljs-number">1</span>;
+    <span class="hljs-type">char</span>* p = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(std::<span class="hljs-built_in">malloc</span>(n));
+    <span class="hljs-keyword">if</span> (p) std::<span class="hljs-built_in">memcpy</span>(p, s, n);
+    <span class="hljs-keyword">return</span> p;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">char</span>* copy = <span class="hljs-built_in">c_duplicate</span>(<span class="hljs-string">&quot;hello&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, copy);
+    <span class="hljs-keyword">delete</span>[] copy;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Memory from malloc must go back with <code>free(copy)</code>. Better: wrap it at the boundary, <code>std::unique_ptr&lt;char, decltype(&amp;std::free)&gt; copy(c_duplicate("hello"), &amp;std::free);</code> (custom deleters are <a href="#ch10">Ch 10</a>).</p>
+    <p><b>Why.</b> <code>delete[]</code> must receive a pointer from <code>new[]</code>. With glibc the default <code>operator delete[]</code> ends in free, so it appears to work, until a replaced or class-specific allocator, a different heap (Windows DLLs each have their own CRT heap) or a cookie read gets involved. ASan on Linux reports <code>alloc-dealloc-mismatch (malloc vs operator delete [])</code>. On macOS that check is off by default (<code>alloc_dealloc_mismatch=0</code>), so this drill is marked UB without the sanitizer-must-fail flag.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Which allocation function does each expression call?</p>
+<pre data-run="ch09-lookup" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;Base::operator new(%zu)\n&quot;</span>, n);
+        <span class="hljs-keyword">return</span> ::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(n);
+    }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Base::operator delete&quot;</span>);
+        ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(p)</span></span>;
+    }
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Base</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-type">long</span> a = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Base { <span class="hljs-type">long</span> b = <span class="hljs-number">0</span>; <span class="hljs-type">long</span> c = <span class="hljs-number">0</span>; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Base* x = <span class="hljs-keyword">new</span> Derived;
+    <span class="hljs-keyword">delete</span> x;
+    Base* y = ::<span class="hljs-keyword">new</span> Base;
+    ::<span class="hljs-keyword">delete</span> y;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch09-lookup">Base::operator new(32)
+Base::operator delete</pre>
+    <p><b>Answer.</b> <code>new Derived</code> finds <code>Base::operator new</code> by inheritance and asks for <code>sizeof(Derived)</code> = 32 (vptr + three longs on a 64-bit target). <code>delete x</code> calls <code>Base::operator delete</code>, found through the virtual destructor. The <code>::new</code> and <code>::delete</code> forms skip the class functions and print nothing.</p>
+    <p><b>Why.</b> Lookup for the allocation function starts in the class scope of the allocated type, and class-specific functions are inherited. That is why a pool allocator written for <code>sizeof(Base)</code> must check <code>n</code>: here it would receive 32 instead of 16. The deallocation function is looked up in the scope of the dynamic type's destructor, so the virtual destructor matters for picking the right <code>operator delete</code> too.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Zero-size requests. What is printed?</p>
+<pre data-run="ch09-zero" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span>* a = <span class="hljs-keyword">new</span> <span class="hljs-type">int</span>[<span class="hljs-number">0</span>];
+    <span class="hljs-type">int</span>* b = <span class="hljs-keyword">new</span> <span class="hljs-type">int</span>[<span class="hljs-number">0</span>];
+    <span class="hljs-type">void</span>* c = ::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(<span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a non-null: %d\n&quot;</span>, a != <span class="hljs-literal">nullptr</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a != b: %d\n&quot;</span>, a != b);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;c non-null: %d\n&quot;</span>, c != <span class="hljs-literal">nullptr</span>);
+    <span class="hljs-keyword">delete</span>[] a;
+    <span class="hljs-keyword">delete</span>[] b;
+    ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(c)</span></span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch09-zero">a non-null: 1
+a != b: 1
+c non-null: 1</pre>
+    <p><b>Answer.</b> All non-null, and the two arrays have distinct addresses.</p>
+    <p><b>Why.</b> <code>[basic.stc.dynamic.allocation]</code>: a successful allocation of size zero returns a non-null pointer that differs from every other live allocation. You must still release each one. Compare <code>malloc(0)</code>, which may legally return null.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A string pool keeps raw pointers into a vector of strings. Where does it read freed memory?</p>
+<pre data-run="ch09-bug-dangling" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::string&gt; names;
+    names.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">1</span>);
+    names.<span class="hljs-built_in">push_back</span>(<span class="hljs-string">&quot;a fairly long string that lives on the heap&quot;</span>);
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* first = names[<span class="hljs-number">0</span>].<span class="hljs-built_in">c_str</span>();
+    names.<span class="hljs-built_in">push_back</span>(<span class="hljs-string">&quot;another long string that also lives on the heap&quot;</span>);
+    names.<span class="hljs-built_in">clear</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, first);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>names.clear()</code> destroys the strings, which frees the heap buffer that <code>first</code> points into; the <code>printf</code> reads freed memory. (The second <code>push_back</code> also reallocates the vector; for a long string the character buffer survives the move, but nothing guarantees that.)</p>
+    <p><b>Why.</b> <code>c_str()</code> is valid only while the string is alive and unmodified. Raw pointers do not extend lifetime. ASan reports heap-use-after-free at the <code>printf</code>. The usual wrong answer blames only the reallocation; the guaranteed bug is the destruction.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch07-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Counting allocator. Replace the global <code>operator new</code> and <code>operator delete</code> so that a test can ask how many allocations are live, how many bytes are live and what the peak was. Requirements: correct alignment (at least 16), size 0 handled, failure throws <code>bad_alloc</code>, no allocation through <code>operator new</code> inside the hooks, thread-safe counters.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Prefix every block with a 16-byte header that stores the requested size, so <code>operator delete</code> can subtract it without a lookup table. Use <code>std::atomic</code> counters and a compare-exchange loop for the peak. Hand the caller the address just past the header, which keeps malloc's 16-byte alignment. Use a <code>volatile</code> sink in the test so the compiler cannot elide the allocations.</p>
+<pre data-run="ch09-code-counting" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> stats {
+std::atomic&lt;std::<span class="hljs-type">size_t</span>&gt; live_blocks{<span class="hljs-number">0</span>}, live_bytes{<span class="hljs-number">0</span>}, peak_bytes{<span class="hljs-number">0</span>};
+}
+
+<span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kHeader = <span class="hljs-number">16</span>;   <span class="hljs-comment">// keeps 16-byte alignment</span>
+
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-type">void</span>* raw = std::<span class="hljs-built_in">malloc</span>(n + kHeader);
+    <span class="hljs-keyword">if</span> (!raw) <span class="hljs-keyword">throw</span> std::bad_alloc{};
+    *<span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>*&gt;(raw) = n;
+    stats::live_blocks.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+    std::<span class="hljs-type">size_t</span> now = stats::live_bytes.<span class="hljs-built_in">fetch_add</span>(n, std::memory_order_relaxed) + n;
+    std::<span class="hljs-type">size_t</span> peak = stats::peak_bytes.<span class="hljs-built_in">load</span>(std::memory_order_relaxed);
+    <span class="hljs-keyword">while</span> (now &gt; peak &amp;&amp; !stats::peak_bytes.<span class="hljs-built_in">compare_exchange_weak</span>(peak, now)) {}
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(raw) + kHeader;
+}
+
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-keyword">if</span> (!p) <span class="hljs-keyword">return</span>;
+    <span class="hljs-type">void</span>* raw = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(p) - kHeader;
+    std::<span class="hljs-type">size_t</span> n = *<span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>*&gt;(raw);
+    stats::live_blocks.<span class="hljs-built_in">fetch_sub</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+    stats::live_bytes.<span class="hljs-built_in">fetch_sub</span>(n, std::memory_order_relaxed);
+    std::<span class="hljs-built_in">free</span>(raw);
+}
+
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{ ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(p)</span></span>; }
+
+<span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">volatile</span> sink;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">report</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* label)</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%-14s blocks=%zu bytes=%zu\n&quot;</span>, label,
+                stats::live_blocks.<span class="hljs-built_in">load</span>(), stats::live_bytes.<span class="hljs-built_in">load</span>());
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-type">size_t</span> base_blocks = stats::live_blocks, base_bytes = stats::live_bytes;
+    stats::peak_bytes = base_bytes;
+    <span class="hljs-type">int</span>* one = <span class="hljs-keyword">new</span> <span class="hljs-built_in">int</span>(<span class="hljs-number">42</span>);
+    sink = one;
+    <span class="hljs-type">double</span>* arr = <span class="hljs-keyword">new</span> <span class="hljs-type">double</span>[<span class="hljs-number">10</span>];
+    sink = arr;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after 2 news: +%zu blocks, +%zu bytes\n&quot;</span>,
+                stats::live_blocks - base_blocks, stats::live_bytes - base_bytes);
+    <span class="hljs-keyword">delete</span> one;
+    <span class="hljs-keyword">delete</span>[] arr;
+    {
+        <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">v</span><span class="hljs-params">(<span class="hljs-number">1000</span>)</span></span>;
+        sink = v.<span class="hljs-built_in">data</span>();
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;back to base: %d\n&quot;</span>, stats::live_blocks == base_blocks &amp;&amp; stats::live_bytes == base_bytes);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;peak above base: %zu\n&quot;</span>, stats::peak_bytes - base_bytes);
+    (<span class="hljs-type">void</span>)report;
+}</code></pre>
+<pre class="out" data-out="ch09-code-counting">after 2 news: +2 blocks, +84 bytes
+back to base: 1
+peak above base: 4000</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per call plus malloc. The header costs 16 bytes per block. The counts are relative to a baseline because the runtime may allocate before <code>main</code> (iostream buffers, locale data). Pitfalls: forgetting that <code>operator new[]</code> and sized delete default to the replaced functions (fine here, but replace them too if you use a different scheme), forgetting the aligned overloads (<code>align_val_t</code> allocations bypass this header and would be freed through the default aligned delete, which is fine, but not counted), and calling anything that allocates inside the hooks.</p>
+    <p class="rating">Estimated rating: ~1500 · straightforward header trick, but alignment, elision and baseline details trip people up</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Leak detector with file and line. Provide a macro <code>TRACK_NEW</code> so that <code>TRACK_NEW Widget(3)</code> records the file and line, and a function <code>report_leaks()</code> that lists every tracked allocation not yet deleted. Constraint: the bookkeeping must not itself call <code>operator new</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Add a placement form <code>operator new(std::size_t, const char* file, int line)</code> and define <code>TRACK_NEW</code> as <code>new (__FILE__, __LINE__)</code>. Store each allocation in a fixed-size open table allocated with malloc semantics (a static array), protected by a mutex. Provide the matching placement <code>operator delete</code> so a throwing constructor does not leak a table entry, and a replaced plain <code>operator delete</code> that removes entries.</p>
+<pre data-run="ch09-code-leaks" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> leak {
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Entry</span> { <span class="hljs-type">void</span>* p; std::<span class="hljs-type">size_t</span> size; <span class="hljs-type">const</span> <span class="hljs-type">char</span>* file; <span class="hljs-type">int</span> line; };
+<span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> kMax = <span class="hljs-number">1024</span>;
+Entry table[kMax];
+std::mutex mu;
+
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">add</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span> n, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* file, <span class="hljs-type">int</span> line)</span> </span>{
+    <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">lock</span><span class="hljs-params">(mu)</span></span>;
+    <span class="hljs-keyword">for</span> (Entry&amp; e : table)
+        <span class="hljs-keyword">if</span> (!e.p) { e = {p, n, file, line}; <span class="hljs-keyword">return</span>; }
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">remove</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> </span>{
+    <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">lock</span><span class="hljs-params">(mu)</span></span>;
+    <span class="hljs-keyword">for</span> (Entry&amp; e : table)
+        <span class="hljs-keyword">if</span> (e.p == p) { e.p = <span class="hljs-literal">nullptr</span>; <span class="hljs-keyword">return</span>; }
+}
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">report</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">lock</span><span class="hljs-params">(mu)</span></span>;
+    <span class="hljs-type">int</span> count = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Entry&amp; e : table) {
+        <span class="hljs-keyword">if</span> (!e.p) <span class="hljs-keyword">continue</span>;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;leak: %zu bytes from line %d\n&quot;</span>, e.size, e.line);
+        ++count;
+    }
+    <span class="hljs-keyword">return</span> count;
+}
+}  <span class="hljs-comment">// namespace leak</span>
+
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* file, <span class="hljs-type">int</span> line)</span> </span>{
+    <span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n ? n : <span class="hljs-number">1</span>);
+    <span class="hljs-keyword">if</span> (!p) <span class="hljs-keyword">throw</span> std::bad_alloc{};
+    leak::<span class="hljs-built_in">add</span>(p, n, file, line);
+    <span class="hljs-keyword">return</span> p;
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, <span class="hljs-type">const</span> <span class="hljs-type">char</span>*, <span class="hljs-type">int</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{   <span class="hljs-comment">// used if the ctor throws</span>
+    leak::<span class="hljs-built_in">remove</span>(p);
+    std::<span class="hljs-built_in">free</span>(p);
+}
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n ? n : <span class="hljs-number">1</span>);
+    <span class="hljs-keyword">if</span> (!p) <span class="hljs-keyword">throw</span> std::bad_alloc{};
+    <span class="hljs-keyword">return</span> p;
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    leak::<span class="hljs-built_in">remove</span>(p);
+    std::<span class="hljs-built_in">free</span>(p);
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{ ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(p)</span></span>; }
+
+<span class="hljs-meta">#<span class="hljs-keyword">define</span> TRACK_NEW new (__FILE__, __LINE__)</span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Widget</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Widget</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span> <span class="hljs-keyword">if</span> (i &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">invalid_argument</span>(<span class="hljs-string">&quot;bad id&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Widget* kept = TRACK_NEW <span class="hljs-built_in">Widget</span>(<span class="hljs-number">1</span>);
+    Widget* freed = TRACK_NEW <span class="hljs-built_in">Widget</span>(<span class="hljs-number">2</span>);
+    <span class="hljs-keyword">delete</span> freed;
+    <span class="hljs-keyword">try</span> { Widget* bad = TRACK_NEW <span class="hljs-built_in">Widget</span>(<span class="hljs-number">-1</span>); <span class="hljs-keyword">delete</span> bad; } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp;) {}
+    <span class="hljs-type">int</span> n = leak::<span class="hljs-built_in">report</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d leak(s)\n&quot;</span>, n);
+    <span class="hljs-keyword">delete</span> kept;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d leak(s) after cleanup\n&quot;</span>, leak::<span class="hljs-built_in">report</span>());
+}</code></pre>
+<pre class="out" data-out="ch09-code-leaks">leak: 4 bytes from line 65
+1 leak(s)
+0 leak(s) after cleanup</pre>
+    <p><b>Complexity and pitfalls.</b> O(table size) per operation; a real tool uses a hash table keyed by address with its own malloc-backed storage. Pitfalls: <code>delete</code> on a tracked pointer goes through the <i>plain</i> <code>operator delete</code> (there is no placement delete-expression), so that one must remove the entry; the placement <code>operator delete</code> is called only when a constructor throws; <code>TRACK_NEW</code> breaks code that already uses placement syntax; arrays need <code>operator new[]</code> overloads too. The demo prints only the line; a real report prints <code>e.file</code> too.</p>
+    <p class="rating">Estimated rating: ~1700 · needs placement new/delete pairing and recursion-free bookkeeping</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Aligned allocation on top of malloc. Implement <code>void* aligned_malloc(std::size_t size, std::size_t align)</code> and <code>void aligned_free(void* p)</code> using only <code>std::malloc</code> and <code>std::free</code>. <code>align</code> is a power of two. This is a frequent phone-screen question.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Over-allocate by <code>align - 1 + sizeof(void*)</code> bytes. Skip past room for one pointer, round the address up to the next multiple of <code>align</code> with <code>(addr + align - 1) &amp; ~(align - 1)</code>, and store the original malloc pointer in the word just before the aligned address. <code>aligned_free</code> reads that word and frees it.</p>
+<pre data-run="ch09-code-aligned" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">is_pow2</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> x)</span> </span>{ <span class="hljs-keyword">return</span> x &amp;&amp; !(x &amp; (x - <span class="hljs-number">1</span>)); }
+
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">aligned_malloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> size, std::<span class="hljs-type">size_t</span> align)</span> </span>{
+    <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">is_pow2</span>(align)) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-keyword">if</span> (align &lt; <span class="hljs-built_in">alignof</span>(<span class="hljs-type">void</span>*)) align = <span class="hljs-built_in">alignof</span>(<span class="hljs-type">void</span>*);
+    std::<span class="hljs-type">size_t</span> extra = align - <span class="hljs-number">1</span> + <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*);
+    <span class="hljs-keyword">if</span> (size &gt; SIZE_MAX - extra) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;          <span class="hljs-comment">// overflow guard</span>
+    <span class="hljs-type">void</span>* raw = std::<span class="hljs-built_in">malloc</span>(size + extra);
+    <span class="hljs-keyword">if</span> (!raw) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+    std::<span class="hljs-type">uintptr_t</span> start = <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(raw) + <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*);
+    std::<span class="hljs-type">uintptr_t</span> aligned = (start + align - <span class="hljs-number">1</span>) &amp; ~(std::<span class="hljs-built_in">uintptr_t</span>(align) - <span class="hljs-number">1</span>);
+    <span class="hljs-type">void</span>* result = <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">void</span>*&gt;(aligned);
+    std::<span class="hljs-built_in">memcpy</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(result) - <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*), &amp;raw, <span class="hljs-keyword">sizeof</span> raw);
+    <span class="hljs-keyword">return</span> result;
+}
+
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">aligned_free</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> </span>{
+    <span class="hljs-keyword">if</span> (!p) <span class="hljs-keyword">return</span>;
+    <span class="hljs-type">void</span>* raw;
+    std::<span class="hljs-built_in">memcpy</span>(&amp;raw, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(p) - <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*), <span class="hljs-keyword">sizeof</span> raw);
+    std::<span class="hljs-built_in">free</span>(raw);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">bool</span> ok = <span class="hljs-literal">true</span>;
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> align : {<span class="hljs-number">8</span>, <span class="hljs-number">16</span>, <span class="hljs-number">64</span>, <span class="hljs-number">256</span>, <span class="hljs-number">4096</span>}) {
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> size : {<span class="hljs-number">1</span>, <span class="hljs-number">7</span>, <span class="hljs-number">100</span>, <span class="hljs-number">5000</span>}) {
+            <span class="hljs-type">void</span>* p = <span class="hljs-built_in">aligned_malloc</span>(size, align);
+            ok = ok &amp;&amp; p &amp;&amp; <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(p) % align == <span class="hljs-number">0</span>;
+            std::<span class="hljs-built_in">memset</span>(p, <span class="hljs-number">0xAB</span>, size);                     <span class="hljs-comment">// whole range is writable</span>
+            <span class="hljs-built_in">aligned_free</span>(p);
+        }
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;all aligned: %d\n&quot;</span>, ok);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;bad alignment gives null: %d\n&quot;</span>, <span class="hljs-built_in">aligned_malloc</span>(<span class="hljs-number">10</span>, <span class="hljs-number">24</span>) == <span class="hljs-literal">nullptr</span>);
+}</code></pre>
+<pre class="out" data-out="ch09-code-aligned">all aligned: 1
+bad alignment gives null: 1</pre>
+    <p><b>Complexity and pitfalls.</b> O(1), wasting at most <code>align - 1 + 8</code> bytes per block. Pitfalls: forgetting the room for the stored pointer (then the header can land before the malloc block), rounding with <code>%</code> on signed types, not guarding <code>size + extra</code> against overflow, and freeing the aligned pointer with plain <code>free</code>. In production use <code>std::aligned_alloc</code>, <code>posix_memalign</code> or aligned <code>new</code>; this exercise shows how they can be built.</p>
+    <p class="rating">Estimated rating: ~1400 · classic bit trick plus a stored back-pointer</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Emulate <code>new T[n]</code> and <code>delete[]</code>. Write <code>template&lt;class T&gt; T* new_array(std::size_t n)</code> that allocates raw memory with <code>::operator new</code>, stores the count in a cookie, default-constructs the elements with placement new, and destroys the ones already built in reverse order if a constructor throws. Write <code>delete_array(T*)</code> that reads the cookie, destroys in reverse order and frees.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> The cookie must keep the elements aligned, so its size is <code>max(sizeof(std::size_t), alignof(T))</code>, which is what the Itanium ABI does. Construct in a loop counting successes; on an exception, destroy <code>[0, built)</code> backwards, free and rethrow. <code>delete_array</code> steps back by the cookie size to find the count and the original block.</p>
+<pre data-run="ch09-code-cookie" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> cookie_size = std::<span class="hljs-built_in">max</span>(<span class="hljs-built_in">sizeof</span>(std::<span class="hljs-type">size_t</span>), <span class="hljs-built_in">alignof</span>(T));
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function">T* <span class="hljs-title">new_array</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-built_in">static_assert</span>(<span class="hljs-built_in">alignof</span>(T) &lt;= __STDCPP_DEFAULT_NEW_ALIGNMENT__, <span class="hljs-string">&quot;use aligned new for this&quot;</span>);
+    <span class="hljs-type">char</span>* raw = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(cookie_size&lt;T&gt; + n * <span class="hljs-built_in">sizeof</span>(T)));
+    ::<span class="hljs-keyword">new</span> (raw + cookie_size&lt;T&gt; - <span class="hljs-built_in">sizeof</span>(std::<span class="hljs-type">size_t</span>)) std::<span class="hljs-built_in">size_t</span>(n);
+    T* first = <span class="hljs-built_in">reinterpret_cast</span>&lt;T*&gt;(raw + cookie_size&lt;T&gt;);
+    std::<span class="hljs-type">size_t</span> built = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-keyword">for</span> (; built &lt; n; ++built) ::<span class="hljs-keyword">new</span> (first + built) <span class="hljs-built_in">T</span>();
+    } <span class="hljs-built_in">catch</span> (...) {
+        <span class="hljs-keyword">while</span> (built &gt; <span class="hljs-number">0</span>) first[--built].~<span class="hljs-built_in">T</span>();
+        ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(raw)</span></span>;
+        <span class="hljs-keyword">throw</span>;
+    }
+    <span class="hljs-keyword">return</span> first;
+}
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">delete_array</span><span class="hljs-params">(T* first)</span> </span>{
+    <span class="hljs-keyword">if</span> (!first) <span class="hljs-keyword">return</span>;
+    <span class="hljs-type">char</span>* raw = <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(first) - cookie_size&lt;T&gt;;
+    std::<span class="hljs-type">size_t</span> n = *<span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">size_t</span>*&gt;(raw + cookie_size&lt;T&gt; - <span class="hljs-built_in">sizeof</span>(std::<span class="hljs-type">size_t</span>));
+    <span class="hljs-keyword">while</span> (n &gt; <span class="hljs-number">0</span>) first[--n].~<span class="hljs-built_in">T</span>();
+    ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(raw)</span></span>;
+}
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> next_id = <span class="hljs-number">0</span>;
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> fail_at = <span class="hljs-number">-1</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Probe</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-built_in">Probe</span>() : <span class="hljs-built_in">id</span>(next_id++) {
+        <span class="hljs-keyword">if</span> (id == fail_at) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;ctor failed&quot;</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;+%d &quot;</span>, id);
+    }
+    ~<span class="hljs-built_in">Probe</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;-%d &quot;</span>, id); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Probe* a = <span class="hljs-built_in">new_array</span>&lt;Probe&gt;(<span class="hljs-number">3</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;| built\n&quot;</span>);
+    <span class="hljs-built_in">delete_array</span>(a);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;| deleted\n&quot;</span>);
+
+    next_id = <span class="hljs-number">0</span>;
+    fail_at = <span class="hljs-number">2</span>;
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-built_in">new_array</span>&lt;Probe&gt;(<span class="hljs-number">4</span>);
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;| %s\n&quot;</span>, e.<span class="hljs-built_in">what</span>());
+    }
+}</code></pre>
+<pre class="out" data-out="ch09-code-cookie">+0 +1 +2 | built
+-2 -1 -0 | deleted
++0 +1 -1 -0 | ctor failed</pre>
+    <p><b>Complexity and pitfalls.</b> O(n) construction and destruction. Pitfalls: a cookie smaller than <code>alignof(T)</code> misaligns every element; destroying in forward order; destroying the element whose constructor threw; leaking the block on exception; forgetting that a real implementation skips the cookie for trivially destructible types. Placing the count with placement new (instead of a cast and assignment) starts the lifetime of the <code>size_t</code> properly.</p>
+    <p class="rating">Estimated rating: ~1700 · placement new plus exception-safe partial construction and alignment arithmetic</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement the <code>operator new</code> loop with an emergency reserve. Write <code>void* allocate(std::size_t n)</code> that behaves like the standard <code>operator new</code> (retry, call the current new_handler, throw <code>bad_alloc</code> when there is none) on top of a pluggable low-level allocator. Then write a handler that releases a reserved block the first time memory runs out and uninstalls itself the second time. Test it with a low-level allocator that has a fixed budget.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Model the heap as a budget of bytes so failure is deterministic. <code>allocate</code> loops: try the low-level allocator; on failure read <code>std::get_new_handler()</code>, throw if null, otherwise call it and retry. The handler gives the reserve back to the budget once; on the next call it sets the handler to null so the loop throws.</p>
+<pre data-run="ch09-code-handler" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> heap {
+std::<span class="hljs-type">size_t</span> budget = <span class="hljs-number">1000</span>;                 <span class="hljs-comment">// bytes the fake heap can still hand out</span>
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">low_level</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-keyword">if</span> (n &gt; budget) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+    budget -= n;
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">malloc</span>(n);
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span> n)</span> </span>{ budget += n; std::<span class="hljs-built_in">free</span>(p); }
+}
+
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-keyword">if</span> (n == <span class="hljs-number">0</span>) n = <span class="hljs-number">1</span>;
+    <span class="hljs-keyword">for</span> (;;) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = heap::<span class="hljs-built_in">low_level</span>(n)) <span class="hljs-keyword">return</span> p;
+        std::new_handler h = std::<span class="hljs-built_in">get_new_handler</span>();
+        <span class="hljs-keyword">if</span> (!h) <span class="hljs-keyword">throw</span> std::bad_alloc{};
+        <span class="hljs-built_in">h</span>();
+    }
+}
+
+<span class="hljs-type">static</span> <span class="hljs-type">void</span>* reserve = <span class="hljs-literal">nullptr</span>;
+<span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kReserve = <span class="hljs-number">300</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">emergency_handler</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">if</span> (reserve) {
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;handler: releasing reserve&quot;</span>);
+        heap::<span class="hljs-built_in">release</span>(reserve, kReserve);
+        reserve = <span class="hljs-literal">nullptr</span>;
+    } <span class="hljs-keyword">else</span> {
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;handler: nothing left, giving up&quot;</span>);
+        std::<span class="hljs-built_in">set_new_handler</span>(<span class="hljs-literal">nullptr</span>);
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    reserve = <span class="hljs-built_in">allocate</span>(kReserve);                 <span class="hljs-comment">// budget 700 left</span>
+    std::<span class="hljs-built_in">set_new_handler</span>(emergency_handler);
+    <span class="hljs-type">void</span>* a = <span class="hljs-built_in">allocate</span>(<span class="hljs-number">600</span>);                      <span class="hljs-comment">// fits: 100 left</span>
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;a ok&quot;</span>);
+    <span class="hljs-type">void</span>* b = <span class="hljs-built_in">allocate</span>(<span class="hljs-number">350</span>);                      <span class="hljs-comment">// needs the reserve: 400 -&gt; 50</span>
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;b ok&quot;</span>);
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-built_in">allocate</span>(<span class="hljs-number">200</span>);
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;c ok&quot;</span>);
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) {
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;c: bad_alloc&quot;</span>);
+    }
+    heap::<span class="hljs-built_in">release</span>(a, <span class="hljs-number">600</span>);
+    heap::<span class="hljs-built_in">release</span>(b, <span class="hljs-number">350</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;budget restored: %zu\n&quot;</span>, heap::budget);
+}</code></pre>
+<pre class="out" data-out="ch09-code-handler">a ok
+handler: releasing reserve
+b ok
+handler: nothing left, giving up
+c: bad_alloc
+budget restored: 1000</pre>
+    <p><b>Complexity and pitfalls.</b> Each failure costs one handler call and one retry. The final line checks the bookkeeping: the reserve went back during the handler call and <code>a</code> and <code>b</code> go back at the end, so the fake heap is whole again. Pitfalls: a handler that returns without changing state loops forever; a handler that allocates through <code>operator new</code> re-enters the failing path; the handler is global state, so libraries should not install one behind the application's back. Real reserves are megabytes, used to log and shut down cleanly.</p>
+    <p class="rating">Estimated rating: ~1500 · requires knowing the standard loop exactly and designing a deterministic test</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>A class-specific free-list allocator. Give <code>struct Order</code> (40 bytes) a class-specific <code>operator new</code>/<code>operator delete</code> that recycles freed blocks through an intrusive singly linked free list and only falls back to <code>::operator new</code> when the list is empty. Derived classes of a different size must still work. Report how many blocks came from the system.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A freed block is at least as big as a pointer, so its first bytes can hold the next-free link. <code>operator new</code> pops from the list when <code>n == sizeof(Order)</code>, otherwise forwards to the global allocator (the inherited-size trap). <code>operator delete</code> takes the size (sized class-specific delete) so it can make the same decision on the way back. Pools in depth are <a href="#ch13">Ch 13</a>.</p>
+<pre data-run="ch09-code-freelist" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Order</span> {
+    <span class="hljs-type">long</span> id = <span class="hljs-number">0</span>;
+    <span class="hljs-type">double</span> price = <span class="hljs-number">0</span>, qty = <span class="hljs-number">0</span>;
+    <span class="hljs-type">long</span> side = <span class="hljs-number">0</span>, venue = <span class="hljs-number">0</span>;
+
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-keyword">if</span> (n != <span class="hljs-built_in">sizeof</span>(Order)) <span class="hljs-keyword">return</span> ::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(n);    <span class="hljs-comment">// a bigger derived class</span>
+        <span class="hljs-keyword">if</span> (free_list) {
+            FreeNode* head = free_list;
+            free_list = head-&gt;next;
+            <span class="hljs-keyword">return</span> head;
+        }
+        ++from_system;
+        <span class="hljs-keyword">return</span> ::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(n);
+    }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span> n)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-keyword">if</span> (!p) <span class="hljs-keyword">return</span>;
+        <span class="hljs-keyword">if</span> (n != <span class="hljs-built_in">sizeof</span>(Order)) { ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(p)</span></span>; <span class="hljs-keyword">return</span>; }
+        free_list = ::<span class="hljs-built_in">new</span> (p) FreeNode{free_list};
+    }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">release_all</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-keyword">while</span> (free_list) {
+            FreeNode* next = free_list-&gt;next;
+            ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(free_list)</span></span>;
+            free_list = next;
+        }
+    }
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Order</span>() = <span class="hljs-keyword">default</span>;
+
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">FreeNode</span> { FreeNode* next; };
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> FreeNode* free_list = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> from_system = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">BigOrder</span> : Order { <span class="hljs-type">char</span> note[<span class="hljs-number">64</span>] = {}; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Order*&gt; live;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> round = <span class="hljs-number">0</span>; round &lt; <span class="hljs-number">3</span>; ++round) {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100</span>; ++i) live.<span class="hljs-built_in">push_back</span>(<span class="hljs-keyword">new</span> Order);
+        <span class="hljs-keyword">for</span> (Order* o : live) <span class="hljs-keyword">delete</span> o;
+        live.<span class="hljs-built_in">clear</span>();
+    }
+    Order* big = <span class="hljs-keyword">new</span> BigOrder;      <span class="hljs-comment">// must not come from the 40-byte free list</span>
+    <span class="hljs-keyword">delete</span> big;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sizeof(Order) = %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(Order));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;blocks from system: %d\n&quot;</span>, Order::from_system);
+    Order::<span class="hljs-built_in">release_all</span>();
+}</code></pre>
+<pre class="out" data-out="ch09-code-freelist">sizeof(Order) = 48
+blocks from system: 100</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) allocate and free, 300 objects served from 100 system blocks. Note that <code>sizeof(Order)</code> is 48, not 40: the virtual destructor adds a vptr. That is exactly why the size check matters. Because the destructor is virtual, the sized <code>operator delete</code> receives the dynamic type's size, so <code>BigOrder</code> blocks go back to the global allocator. Pitfalls: not thread-safe (add a mutex or a thread-local list), never returns memory to the system until <code>release_all</code>, and a use-after-free on an <code>Order</code> now corrupts your free list instead of being caught by ASan.</p>
+    <p class="rating">Estimated rating: ~1600 · intrusive free list plus the inherited operator new size trap</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch07-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>new = operator new + constructor; delete = destructor + operator delete.</b> malloc/free only move bytes. If a constructor throws inside new, the matching operator delete frees the storage and no destructor runs.</li>
+<li><b>Failure:</b> new throws <code>std::bad_alloc</code> after looping through the new_handler; <code>new (std::nothrow)</code> returns null but does not stop constructor exceptions; malloc returns null. On Linux, overcommit means real exhaustion usually shows up as the OOM killer.</li>
+<li><b>Pair the families:</b> new/delete, new[]/delete[], malloc/free. Mixing them is UB; the array cookie (present for non-trivial destructors) is why <code>new[]</code> + <code>delete</code> crashes for class types.</li>
+<li><b>No renew:</b> objects cannot be moved by memcpy in general, so containers allocate, move and destroy. On realloc failure the old block survives; never write <code>p = realloc(p, n)</code>.</li>
+<li><b>Customise</b> by replacing the global functions (all forms default to plain new/delete) or with class-specific ones (inherited, so check the size). Always pair a placement new with a placement delete. C++17 aligned new handles <code>alignas</code> beyond 16 automatically.</li>
+<li><b>Zero size:</b> new returns a unique non-null pointer; malloc(0) is implementation-defined; realloc(p, 0) is UB in C23.</li>
+<li><b>glibc malloc:</b> an 8-byte size word just before your pointer (the chunk starts 16 bytes earlier), tcache then bins then top chunk; brk for the main heap, mmap at 128 KiB and above; per-thread arenas trade memory for less locking.</li>
+<li><b>Leaks:</b> RAII prevents most; find the rest with ASan/LSan (<code>-fsanitize=address</code>), valgrind memcheck, or heap profilers for growth that is still reachable.</li>
+</ul>
+</section>

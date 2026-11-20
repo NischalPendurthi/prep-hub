@@ -42,4 +42,4 @@ Answer each drill out loud or on paper before you open it, and treat a wrong ans
 
 ## What this guide assumes
 
-You know C or C++, pointers, threads and basic OS ideas such as virtual memory. Allocation patterns, struct layout and `alignas` are covered in the C++ guide's chapter on [cache-friendly allocation](../../guide/#ch19), and this guide links there instead of repeating it. Numbers such as "a memory access costs about 100 ns" are rough orders of magnitude for orientation. Real figures differ between processors, so quote them in an interview as approximate.
+You know C or C++, pointers, threads and basic OS ideas such as virtual memory. Allocation patterns, struct layout and `alignas` are covered in the C++ guide's chapter on [cache-friendly allocation](../../guide/cpp/#ch17), and this guide links there instead of repeating it. Numbers such as "a memory access costs about 100 ns" are rough orders of magnitude for orientation. Real figures differ between processors, so quote them in an interview as approximate.

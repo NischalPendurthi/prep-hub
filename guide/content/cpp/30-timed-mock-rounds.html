@@ -1,0 +1,919 @@
+---
+title: Timed mock rounds
+part: Part H · Review
+lede: Five interview rounds, each a fixed set of questions in the order a real interviewer would ask them: a warm-up concept, then tricky follow-ups, then code reading, then a problem to write. Work each round under its time limit before opening any answer, then mark yourself with the scoring line. Round 5 is pitched at HFT and low-latency systems interviews.
+desc: Mixed question sets under a timer, with an answer key
+hours: 5
+prereqs: chapters 1 to 25
+---
+<section id="ch30-how-to" data-roles="dr"><div class="sec-head"><h2>How to run a round</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+  <p>Set a timer, read every question first, and answer on paper or in a blank editor without compiling. Speak your answers aloud for the concept and tricky questions, because that is what an interviewer hears. For output questions, write the exact output. For bug questions, name the bug, say how you would prove it (which sanitizer or test) and give the fix. Leave the code problem for last and budget about a third of the round for it.</p>
+  <figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 170" role="img" aria-label="A 30-minute round splits into about 8 minutes of concepts, 12 minutes of code reading and 10 minutes of coding">
+    <text x="20" y="30" class="t-bold">30-minute round budget</text>
+    <rect x="20" y="48" width="96" height="44" class="d-acc"/><text x="68" y="68" text-anchor="middle" class="t-small t-bold">concept</text><text x="68" y="84" text-anchor="middle" class="t-small">~4 min</text>
+    <rect x="116" y="48" width="96" height="44" class="d-acc"/><text x="164" y="68" text-anchor="middle" class="t-small t-bold">tricky</text><text x="164" y="84" text-anchor="middle" class="t-small">~5 min</text>
+    <rect x="212" y="48" width="192" height="44" class="d-key"/><text x="308" y="68" text-anchor="middle" class="t-small t-bold">output + bug</text><text x="308" y="84" text-anchor="middle" class="t-small">~11 min</text>
+    <rect x="404" y="48" width="296" height="44" class="d-trap"/><text x="552" y="68" text-anchor="middle" class="t-small t-bold">code problem</text><text x="552" y="84" text-anchor="middle" class="t-small">~10 min (a third of the round)</text>
+    <line x1="20" y1="110" x2="700" y2="110" class="d-line"/>
+    <text x="20" y="128" class="t-small t-muted">0</text><text x="212" y="128" text-anchor="middle" class="t-small t-muted">9</text><text x="404" y="128" text-anchor="middle" class="t-small t-muted">20</text><text x="700" y="128" text-anchor="end" class="t-small t-muted">30 min</text>
+    <text x="20" y="156" class="t-small t-muted">If a question takes twice its budget, write down your best guess and move on. Unanswered questions score zero.</text>
+  </svg></div><figcaption><b>Spend time where the points are.</b> The code problem is worth the most, so protect its slot. Round 5 uses the same proportions over 45 minutes.</figcaption></figure>
+  <div class="callout key"><p class="callout-title">Know this cold</p><p>Scoring for rounds 1 to 4: concept questions 1 point, tricky, output and bug questions 2 points each, and the code problem 4 points (2 for a correct solution, 1 for stating the complexity, 1 for handling the edge cases listed in the answer). Give yourself half marks for an answer that is right but whose reason is wrong or missing, because interviewers mark the reason.</p></div>
+</section>
+
+<section id="ch30-round-1" data-roles="dr cd"><div class="sec-head"><h2>Round 1: generalist warm-up</h2><div class="sec-tools"><span class="role dr">Drills</span><span class="role cd">Coding</span></div></div>
+  <p><b>Time limit: 30 minutes. Scoring: 18 points</b> (2 concept × 1, 2 tricky × 2, 2 output × 2, 2 bug × 2, code 4). 15 or more is a strong pass, 11 to 14 a pass, and below 11 means revisiting <a href="#ch01">Ch 1</a>, <a href="../os/#ch01">OS guide ch 1</a> and <a href="../os/#ch05">OS guide ch 5</a>. This is the round a product company runs for a general C++ role.</p>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span><code>write(fd, buf, 4096)</code> on a regular file returned 4096. Is the data on disk? Walk through what happened, and say what <code>fsync</code> adds.</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Not necessarily. <code>write</code> is a system call: the CPU enters the kernel, which copies the bytes from your buffer into the <b>page cache</b> (kernel memory that caches file pages), marks those pages dirty and returns. Every other reader of the file sees the new data at once, because they read the same cached pages. The data reaches the device later, when writeback flushes dirty pages (by default once they are about 30 seconds old, <code>vm.dirty_expire_centisecs = 3000</code>, or earlier under memory pressure). A crash of the process loses nothing, while a power cut before writeback loses the write. <code>fsync(fd)</code> blocks until the file's data and metadata are on stable storage, including a flush of the device's cache. <code>fdatasync</code> skips metadata that is not needed to read the data back, and a newly created file also needs an <code>fsync</code> on its directory before its name is durable.</p>
+      <p><b>Why.</b> The interviewer is testing the gap between "the call returned" and "the effect is durable", the same gap as with <code>send</code>, which only copies into the socket buffer. Bonus points: <code>fwrite</code> and <code>std::ofstream</code> add a user-space buffer on top, so the data may not even have reached <code>write</code> yet (<code>fflush</code> moves it to the kernel, <code>fsync</code> to the disk). <code>O_DIRECT</code> bypasses the page cache and <code>O_DSYNC</code> makes each write durable. On Linux a failed <code>fsync</code> may drop the dirty pages and clear the error, so a retry can falsely succeed (PostgreSQL's 2018 "fsyncgate"): treat a failed <code>fsync</code> as fatal. Journals and order logs <code>fsync</code> before acknowledging.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>Besides "the connection is now open", what do the two sides learn or agree on during the TCP three-way handshake?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Each side picks a random initial sequence number (ISN) and learns the other's, since each SYN consumes one sequence number and must be acknowledged. The SYN and SYN-ACK also carry options that are only valid there: the maximum segment size (MSS, 1460 on Ethernet with IPv4), the window scale factor (so windows can exceed 64 KiB), SACK-permitted, and timestamps. Each side also advertises its initial receive window.</p>
+      <p><b>Why.</b> Random ISNs protect against segments from an old connection with the same 4-tuple and make blind injection attacks harder. Options that are missing from the SYN cannot be turned on later, which is why a middlebox that strips window scaling caps throughput for the whole connection. The handshake costs one RTT before any data, which is what TCP Fast Open and TLS 1.3 0-RTT try to shave off (<a href="../os/#ch05">OS guide ch 5</a>).</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A colleague sorts orders with <code>std::sort(v.begin(), v.end(), [](const Order&amp; a, const Order&amp; b) { return a.price &lt;= b.price; });</code>. It usually works, and occasionally crashes inside <code>std::sort</code> when many prices are equal. Why?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>&lt;=</code> is not a strict weak ordering, because <code>comp(a, a)</code> returns true. <code>std::sort</code> requires one ([alg.sorting]), and violating it is undefined behaviour. libstdc++'s introsort uses an "unguarded" insertion sort that relies on the comparator stopping at a sentinel element. With <code>&lt;=</code> and runs of equal keys, the inner loop walks past the beginning of the range and reads (and writes) memory outside the vector.</p>
+      <p><b>Why.</b> The requirement is irreflexive, transitive and with transitive equivalence. <code>&lt;</code> on prices satisfies it, <code>&lt;=</code> does not, and a comparator over floating-point values containing NaN does not either. Newer libstdc++ debug modes (<code>-D_GLIBCXX_DEBUG</code>) and libc++'s hardening mode detect some violations. Use <code>a.price &lt; b.price</code>, and if equal prices must keep arrival order, use <code>std::stable_sort</code> or compare <code>(price, seq)</code> pairs with <code>std::tie</code>.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A profile shows <code>malloc</code> on every call to <code>symbols.find("AAPL")</code>, where <code>symbols</code> is a <code>std::map&lt;std::string, int&gt;</code>. Why, and how do you remove it without changing the key type?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>map::find</code> takes a <code>const key_type&amp;</code>, so the string literal is converted to a temporary <code>std::string</code> on every call. "AAPL" fits in the small string buffer, so that allocation is free in practice, but longer keys (or <code>std::string_view</code> arguments) really allocate. Declare the map with a <b>transparent comparator</b>, <code>std::map&lt;std::string, int, std::less&lt;&gt;&gt;</code>, and <code>find</code> gains a template overload that compares the <code>const char*</code> or <code>string_view</code> with the stored keys directly.</p>
+      <p><b>Why.</b> <code>std::less&lt;&gt;</code> declares the member type <code>is_transparent</code>, which enables heterogeneous lookup (C++14 for ordered containers). Unordered containers support it since C++20, but they need both a transparent hash and a transparent equality. The wrong fix is to cache <code>std::string</code> keys at every call site, which only moves the allocation.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>A logging helper has three overloads. Which one does each call pick?</p>
+<pre data-run="ch26-overload"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">emit</span><span class="hljs-params">(<span class="hljs-type">bool</span>)</span> </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;bool&quot;</span>); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">emit</span><span class="hljs-params">(<span class="hljs-type">int</span>)</span> </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;int&quot;</span>); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">emit</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp;)</span> </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;string&quot;</span>); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">using</span> <span class="hljs-keyword">namespace</span> std::string_literals;
+    <span class="hljs-built_in">emit</span>(<span class="hljs-string">&quot;ready&quot;</span>);
+    <span class="hljs-built_in">emit</span>(std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;ready&quot;</span>));
+    <span class="hljs-built_in">emit</span>(<span class="hljs-string">&#x27;a&#x27;</span>);
+    <span class="hljs-built_in">emit</span>(<span class="hljs-string">&quot;ready&quot;</span>s);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-overload">bool
+string
+int
+string</pre>
+      <p><b>Why.</b> A string literal is a <code>const char[6]</code>, which decays to <code>const char*</code>. Converting a pointer to <code>bool</code> is a <b>standard</b> conversion, while reaching <code>const std::string&amp;</code> needs a <b>user-defined</b> conversion (the <code>std::string</code> constructor), and any standard conversion sequence beats a user-defined one ([over.ics.rank]). So <code>emit("ready")</code> logs a boolean. <code>'a'</code> is a <code>char</code>, and promotion to <code>int</code> beats the conversion to <code>bool</code>. With an actual <code>std::string</code> argument, or the <code>"ready"s</code> literal, the string overload is an exact match.</p>
+      <p>The same trap exists with <code>std::variant&lt;bool, std::string&gt; v = "x";</code>, which held the <code>bool</code> until C++20 changed the converting constructor (P0608). Fixes: add an <code>emit(const char*)</code> or <code>emit(std::string_view)</code> overload, or delete the dangerous one: <code>void emit(const char*) = delete;</code> forces callers to choose.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>Sizes and signed values meet. What are the four lines?</p>
+<pre data-run="ch26-unsigned"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;<span class="hljs-type">int</span>&gt; v;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a %d\n&quot;</span>, v.<span class="hljs-built_in">size</span>() - <span class="hljs-number">1</span> &gt; <span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;b %d\n&quot;</span>, <span class="hljs-number">-1</span> &lt; <span class="hljs-number">1u</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;c %d\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(v.<span class="hljs-built_in">size</span>()) - <span class="hljs-number">1</span> &lt; <span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;d %d\n&quot;</span>, std::<span class="hljs-built_in">ssize</span>(v) - <span class="hljs-number">1</span> &lt; <span class="hljs-number">0</span>);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-unsigned">a 1
+b 0
+c 1
+d 1</pre>
+      <p><b>Why.</b> <code>v.size()</code> is a <code>size_t</code>, and <code>0 - 1</code> in unsigned arithmetic wraps to <code>SIZE_MAX</code>, which is greater than 0. In <code>-1 &lt; 1u</code> the usual arithmetic conversions turn <code>-1</code> into <code>unsigned</code>, giving <code>UINT_MAX &lt; 1</code>, which is false. Converting to a signed type first gives the intuitive answer, and C++20's <code>std::ssize</code> returns a signed <code>ptrdiff_t</code> for exactly this purpose. The classic bug is <code>for (size_t i = v.size() - 1; i &gt;= 0; --i)</code>, which never terminates (and crashes on an empty vector). <code>-Wall -Wextra</code> warns about line b (<code>-Wsign-compare</code>). C++20's <code>std::cmp_less(-1, 1u)</code> compares mixed signs correctly.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>The fill sizes are right, but the total and the average come out wrong. What is the bug?</p>
+<pre data-run="ch26-accumulate"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;numeric&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;<span class="hljs-type">double</span>&gt; fills{<span class="hljs-number">0.5</span>, <span class="hljs-number">0.25</span>, <span class="hljs-number">0.75</span>, <span class="hljs-number">1.5</span>};
+    <span class="hljs-keyword">auto</span> total = std::<span class="hljs-built_in">accumulate</span>(fills.<span class="hljs-built_in">begin</span>(), fills.<span class="hljs-built_in">end</span>(), <span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;total=%g average=%g\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">double</span>&gt;(total),
+                <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">double</span>&gt;(total) / <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">double</span>&gt;(fills.<span class="hljs-built_in">size</span>()));
+    std::vector&lt;<span class="hljs-type">int</span>&gt; volumes{<span class="hljs-number">2&#x27;000&#x27;000&#x27;000</span>, <span class="hljs-number">2&#x27;000&#x27;000&#x27;000</span>};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;volume=%lld\n&quot;</span>, std::<span class="hljs-built_in">accumulate</span>(volumes.<span class="hljs-built_in">begin</span>(), volumes.<span class="hljs-built_in">end</span>(), <span class="hljs-number">0LL</span>));
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-accumulate">total=1 average=0.25
+volume=4000000000</pre>
+      <p><b>Answer.</b> <code>std::accumulate</code> keeps its running sum in the type of the initial value, and <code>0</code> is an <code>int</code>. Each step computes <code>acc = acc + x</code> in <code>double</code> and converts the result back to <code>int</code>, truncating: 0.5, 0.25 and 0.75 each truncate back to 0, and the last step gives 1. The true total is 3.</p>
+      <p><b>Fix.</b> Pass an initial value of the right type: <code>0.0</code>, or <code>0LL</code> for large integer sums as on the second line, where an <code>int</code> initial value would overflow, which is undefined behaviour. Compilers stay quiet because the narrowing happens inside a standard header. <code>std::reduce</code> has the same rule. C++23's <code>std::ranges::fold_left</code> computes in the type of <code>op(init, element)</code>, which would be <code>double</code> here.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>A helper returns a <code>string_view</code> to avoid copying the name. What is wrong?</p>
+<pre data-run="ch26-svlocal" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string_view <span class="hljs-title">venue_name</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{
+    std::string name = <span class="hljs-string">&quot;venue-&quot;</span> + std::<span class="hljs-built_in">to_string</span>(id) + <span class="hljs-string">&quot;-primary-matching-engine&quot;</span>;
+    <span class="hljs-keyword">return</span> name;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::string_view v = <span class="hljs-built_in">venue_name</span>(<span class="hljs-number">7</span>);
+    <span class="hljs-type">unsigned</span> sum = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">char</span> c : v) sum += <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(c);  <span class="hljs-comment">// reads the characters</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu chars, checksum %u\n&quot;</span>, v.<span class="hljs-built_in">size</span>(), sum);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The view points into the local <code>name</code>, which is destroyed when the function returns, so <code>main</code> reads freed heap memory. ASan reports <code>heap-use-after-free</code>. The implicit conversion from <code>std::string</code> to <code>std::string_view</code> makes this compile without a cast. Clang warns with <code>-Wreturn-stack-address</code>, because it knows that <code>string_view</code> borrows from <code>std::string</code>. GCC usually stays quiet.</p>
+      <p><b>Fix.</b> Return <code>std::string</code>. NRVO or a move makes that cheap, and there is nothing to save by returning a view of something the function itself owns. A <code>string_view</code> return is right only when the characters live elsewhere and outlive the call: a string literal, a member of a long-lived object, or a slice of the caller's input.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Implement an LRU cache of <code>int</code> keys and values with O(1) <code>get</code> and <code>put</code>.</p>
+    <p><code>LruCache(capacity)</code>; <code>std::optional&lt;int&gt; get(int key)</code> returns the value and marks the key most recently used; <code>put(int key, int value)</code> inserts or updates, and when the cache is full it evicts the least recently used key first. Capacity 0 stores nothing.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> Keep the entries in a <code>std::list</code> ordered from most to least recently used, and an <code>unordered_map</code> from key to list iterator. List iterators stay valid when other nodes are inserted, erased or moved, so the map never needs fixing up. A hit moves its node to the front with <code>splice</code>, which relinks the node without copying or allocating. Eviction removes the back node and its map entry.</p>
+<pre data-run="ch26-lru" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;list&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unordered_map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">LruCache</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">LruCache</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> capacity)</span> : cap_(capacity) {</span>}
+
+    <span class="hljs-function">std::optional&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">get</span><span class="hljs-params">(<span class="hljs-type">int</span> key)</span> </span>{
+        <span class="hljs-keyword">auto</span> it = index_.<span class="hljs-built_in">find</span>(key);
+        <span class="hljs-keyword">if</span> (it == index_.<span class="hljs-built_in">end</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        items_.<span class="hljs-built_in">splice</span>(items_.<span class="hljs-built_in">begin</span>(), items_, it-&gt;second);
+        <span class="hljs-keyword">return</span> it-&gt;second-&gt;second;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">put</span><span class="hljs-params">(<span class="hljs-type">int</span> key, <span class="hljs-type">int</span> value)</span> </span>{
+        <span class="hljs-keyword">if</span> (cap_ == <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span>;
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> it = index_.<span class="hljs-built_in">find</span>(key); it != index_.<span class="hljs-built_in">end</span>()) {
+            it-&gt;second-&gt;second = value;
+            items_.<span class="hljs-built_in">splice</span>(items_.<span class="hljs-built_in">begin</span>(), items_, it-&gt;second);
+            <span class="hljs-keyword">return</span>;
+        }
+        <span class="hljs-keyword">if</span> (items_.<span class="hljs-built_in">size</span>() == cap_) {
+            index_.<span class="hljs-built_in">erase</span>(items_.<span class="hljs-built_in">back</span>().first);
+            items_.<span class="hljs-built_in">pop_back</span>();
+        }
+        items_.<span class="hljs-built_in">emplace_front</span>(key, value);
+        index_[key] = items_.<span class="hljs-built_in">begin</span>();
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">using</span> Item = std::pair&lt;<span class="hljs-type">int</span>, <span class="hljs-type">int</span>&gt;;
+    std::<span class="hljs-type">size_t</span> cap_;
+    std::list&lt;Item&gt; items_;
+    std::unordered_map&lt;<span class="hljs-type">int</span>, std::list&lt;Item&gt;::iterator&gt; index_;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* label, std::optional&lt;<span class="hljs-type">int</span>&gt; v)</span> </span>{
+    <span class="hljs-keyword">if</span> (v) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s=%d &quot;</span>, label, *v);
+    <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s=miss &quot;</span>, label);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">LruCache <span class="hljs-title">c</span><span class="hljs-params">(<span class="hljs-number">2</span>)</span></span>;
+    c.<span class="hljs-built_in">put</span>(<span class="hljs-number">1</span>, <span class="hljs-number">10</span>);
+    c.<span class="hljs-built_in">put</span>(<span class="hljs-number">2</span>, <span class="hljs-number">20</span>);
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;get1&quot;</span>, c.<span class="hljs-built_in">get</span>(<span class="hljs-number">1</span>));
+    c.<span class="hljs-built_in">put</span>(<span class="hljs-number">3</span>, <span class="hljs-number">30</span>);           <span class="hljs-comment">// evicts 2, the least recently used</span>
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;get2&quot;</span>, c.<span class="hljs-built_in">get</span>(<span class="hljs-number">2</span>));
+    c.<span class="hljs-built_in">put</span>(<span class="hljs-number">1</span>, <span class="hljs-number">11</span>);           <span class="hljs-comment">// update moves 1 to the front</span>
+    c.<span class="hljs-built_in">put</span>(<span class="hljs-number">4</span>, <span class="hljs-number">40</span>);           <span class="hljs-comment">// evicts 3</span>
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;get1&quot;</span>, c.<span class="hljs-built_in">get</span>(<span class="hljs-number">1</span>));
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;get3&quot;</span>, c.<span class="hljs-built_in">get</span>(<span class="hljs-number">3</span>));
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;get4&quot;</span>, c.<span class="hljs-built_in">get</span>(<span class="hljs-number">4</span>));
+    <span class="hljs-function">LruCache <span class="hljs-title">none</span><span class="hljs-params">(<span class="hljs-number">0</span>)</span></span>;
+    none.<span class="hljs-built_in">put</span>(<span class="hljs-number">1</span>, <span class="hljs-number">1</span>);
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;zero&quot;</span>, none.<span class="hljs-built_in">get</span>(<span class="hljs-number">1</span>));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch26-lru">get1=10 get2=miss get1=11 get3=miss get4=40 zero=miss</pre>
+      <p><b>Complexity and pitfalls.</b> O(1) average per operation (hash lookup plus constant list relinking), O(capacity) memory. Pitfalls: storing list <i>indices</i> or using a <code>vector</code>, whose iterators are invalidated by erasure; forgetting to refresh recency on an update; erasing the map entry after <code>pop_back</code> (the key is gone by then, so read it first); and capacity 0. A thread-safe version needs a mutex even for <code>get</code>, because a hit modifies the list. For a hot cache, a node-based list allocates on every insert, so production versions use an intrusive list over a preallocated node pool.</p>
+      <p class="rating">Estimated rating: ~1500 · a standard design question, judged on iterator stability and the eviction order.</p>
+    </div></details>
+  </div>
+</section>
+
+<section id="ch30-round-2" data-roles="dr cd"><div class="sec-head"><h2>Round 2: systems team screen</h2><div class="sec-tools"><span class="role dr">Drills</span><span class="role cd">Coding</span></div></div>
+  <p><b>Time limit: 30 minutes. Scoring: 18 points</b> (2 concept × 1, 2 tricky × 2, 2 output × 2, 2 bug × 2, code 4). 15 or more is a strong pass. This round leans on the OS, process lifetime and locking, as a backend or infrastructure team would. Review material: <a href="../os/#ch01">OS guide ch 1</a>, <a href="../os/#ch03">OS guide ch 3</a> and <a href="../os/#ch05">OS guide ch 5</a>.</p>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>What is the difference between a minor and a major page fault? What happens the first time a program writes to a 1 GiB buffer it just got from <code>malloc</code>?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> A page fault happens when the CPU touches a virtual page with no valid mapping in the page table. A <b>minor</b> fault is resolved without I/O: the kernel allocates a zeroed page, or maps a page already in the page cache, or breaks a copy-on-write share. A <b>major</b> fault needs disk I/O, for example reading a page of a memory-mapped file or swapping a page back in, and costs milliseconds instead of about a microsecond. A large <code>malloc</code> is served by <code>mmap</code>, which only reserves address space. Each first write to a 4 KiB page then triggers a minor fault that allocates and zeroes one physical page, so the first pass over 1 GiB takes about 262000 faults.</p>
+      <p><b>Why.</b> This is why latency-sensitive programs "pre-fault" buffers at startup (touch every page, or use <code>MAP_POPULATE</code> and <code>mlock</code>), and why RSS grows only as memory is touched. Huge pages (2 MiB) cut the number of faults and TLB misses by a factor of 512. Linux overcommit means the <code>malloc</code> succeeds even when the memory might not exist, and the failure shows up later as the OOM killer.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>A 20 GiB in-memory risk server calls <code>fork()</code> so that the child can write a snapshot to disk, as Redis does. Why does <code>fork</code> return quickly, what does it still cost, and why can the parent's latency spike afterwards?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>fork</code> copies no data pages. It duplicates the page tables and marks every private writable page read-only in both processes, so the child sees a frozen snapshot through <b>copy-on-write</b>. What it does copy is the page tables themselves: with 4 KiB pages, 20 GiB is about 5.2 million entries, roughly 40 MiB of tables, and the parent is stopped while they are copied, on the order of 10 ms per GiB. Afterwards, the first write by either process to a shared page takes a page fault that copies that page, so a write-heavy parent sees latency spikes and its memory use can grow towards double.</p>
+      <p><b>Why.</b> With transparent huge pages each copy-on-write fault copies 2 MiB instead of 4 KiB, which is why Redis recommends disabling THP. With strict overcommit (<code>vm.overcommit_memory = 2</code>), <code>fork</code> of a large process can fail outright, because the kernel must reserve memory for a full copy. Only the calling thread exists in the child (<a href="../os/#ch01">OS guide ch 1</a>). To run another program, <code>posix_spawn</code> or <code>vfork</code> avoids copying page tables at all.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>Four threads each write <code>std::cout &lt;&lt; "id="ch30- &lt;&lt; id &lt;&lt; " px=" &lt;&lt; px &lt;&lt; '\n';</code>. Is this a data race? What does the log look like?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> It is not a data race: the standard guarantees that concurrent use of the standard stream objects does not cause a data race as long as they are synchronised with stdio (the default, <code>sync_with_stdio(true)</code>) ([iostream.objects.overview]). But each <code>&lt;&lt;</code> is a separate call, so pieces of different lines interleave: <code>id=1 px=id=2 px=10.5</code>.</p>
+      <p><b>Why.</b> Thread safety per call does not make a sequence of calls atomic. Fixes: format the whole line into a string first and write it with one call, or use C++20 <code>std::osyncstream(std::cout) &lt;&lt; ...</code>, which buffers the line and emits it atomically when the temporary is destroyed. After <code>std::ios::sync_with_stdio(false)</code> (a common speed trick) the guarantee is gone, and concurrent writes become a real data race. In a low-latency system, threads should push log records to a queue and one thread should do the I/O.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>The main thread detects a fatal configuration error and calls <code>std::exit(1)</code> while worker threads are still running. Occasionally the process crashes on the way out instead of exiting cleanly. Why?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>exit</code> runs the destructors of objects with static storage duration (and <code>atexit</code> handlers) <b>while the other threads keep running</b>. A worker that is still using a global logger, a global <code>std::map</code> or a static allocator pool can touch an object that has just been destroyed. The crash then happens in a worker, far from the <code>exit</code> call.</p>
+      <p><b>Why.</b> Process exit does not stop threads first: they are killed only when the process finally terminates after the destructors. Options: stop and join the workers before exiting (the clean answer), use <code>std::quick_exit</code> with <code>at_quick_exit</code> handlers, which skips static destructors, or <code>_exit</code>, which skips everything including stdio flushing. Returning from <code>main</code> behaves like <code>exit</code>, so the same crash appears if <code>main</code> returns with detached threads. A destroyed <code>std::thread</code> that is still joinable calls <code>std::terminate</code> instead, which at least fails loudly.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>A risk check looks up per-symbol limits. How many symbols does the map hold afterwards?</p>
+<pre data-run="ch26-mapindex"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::map&lt;std::string, <span class="hljs-type">int</span>&gt; limits{{<span class="hljs-string">&quot;AAPL&quot;</span>, <span class="hljs-number">500</span>}};
+    <span class="hljs-type">int</span> over = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s : {<span class="hljs-string">&quot;AAPL&quot;</span>, <span class="hljs-string">&quot;MSFT&quot;</span>, <span class="hljs-string">&quot;TSLA&quot;</span>})
+        <span class="hljs-keyword">if</span> (limits[s] &gt; <span class="hljs-number">100</span>) ++over;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;over=%d size=%zu MSFT=%d\n&quot;</span>, over, limits.<span class="hljs-built_in">size</span>(), limits[<span class="hljs-string">&quot;MSFT&quot;</span>]);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;has GOOG=%d size=%zu\n&quot;</span>, limits.<span class="hljs-built_in">contains</span>(<span class="hljs-string">&quot;GOOG&quot;</span>), limits.<span class="hljs-built_in">size</span>());
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-mapindex">over=1 size=3 MSFT=0
+has GOOG=0 size=3</pre>
+      <p><b>Why.</b> <code>operator[]</code> means "find or insert": for a missing key it inserts a value-initialised <code>int</code> (0) and returns a reference to it. So reading <code>limits["MSFT"]</code> silently adds MSFT and TSLA with a limit of 0. That is why <code>operator[]</code> is not available on a <code>const</code> map, and why it fails to compile for value types without a default constructor. Use <code>find</code>, <code>contains</code> (C++20) or <code>at</code> (throws <code>std::out_of_range</code>) to read. In a risk system this bug is worse than a crash, because a missing limit becomes a limit of zero (or, with a different check, no limit at all). With several threads, <code>operator[]</code> is also a write, so readers sharing a lock in read mode race.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>Globals, a function-local static and a static local in <code>main</code>. In what order are they built and destroyed?</p>
+<pre data-run="ch26-staticorder"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tracer</span> {
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* n;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Tracer</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s)</span> : n(s) {</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;+%s &quot;</span>, n); }
+    ~<span class="hljs-built_in">Tracer</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;-%s &quot;</span>, n); }
+};
+
+<span class="hljs-function">Tracer <span class="hljs-title">g1</span><span class="hljs-params">(<span class="hljs-string">&quot;g1&quot;</span>)</span></span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> Tracer&amp; <span class="hljs-title">logger</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function"><span class="hljs-type">static</span> Tracer <span class="hljs-title">t</span><span class="hljs-params">(<span class="hljs-string">&quot;logger&quot;</span>)</span></span>;
+    <span class="hljs-keyword">return</span> t;
+}
+
+<span class="hljs-function">Tracer <span class="hljs-title">g2</span><span class="hljs-params">(<span class="hljs-string">&quot;g2&quot;</span>)</span></span>;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;main &quot;</span>);
+    <span class="hljs-built_in">logger</span>();
+    <span class="hljs-function"><span class="hljs-type">static</span> Tracer <span class="hljs-title">local</span><span class="hljs-params">(<span class="hljs-string">&quot;local&quot;</span>)</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;end\n&quot;</span>);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-staticorder">+g1 +g2 main +logger +local end
+-local -logger -g2 -g1</pre>
+      <p><b>Why.</b> Globals in one translation unit are constructed before <code>main</code> in definition order, so <code>g1</code> then <code>g2</code>; defining <code>logger()</code> between them changes nothing, because a function-local static is built only when control first passes its declaration. Every object with static storage is destroyed after <code>main</code> returns in the <b>reverse order of the completion of their constructors</b> ([basic.start.term]), mixing globals and locals in one sequence. The trap: if <code>~g2</code> called <code>logger()</code> to log its own shutdown, it would use a destroyed object, because the logger was built after <code>g2</code> and is therefore destroyed before it. The usual fix for a logger used during shutdown is a deliberately leaked singleton: <code>static Tracer&amp; t = *new Tracer("logger");</code>.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>Remove all even order ids from a <code>std::list</code>. What is wrong?</p>
+<pre data-run="ch26-listerase" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;list&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::list&lt;<span class="hljs-type">int</span>&gt; orders{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">4</span>, <span class="hljs-number">5</span>, <span class="hljs-number">6</span>};
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> it = orders.<span class="hljs-built_in">begin</span>(); it != orders.<span class="hljs-built_in">end</span>(); ++it)
+        <span class="hljs-keyword">if</span> (*it % <span class="hljs-number">2</span> == <span class="hljs-number">0</span>) orders.<span class="hljs-built_in">erase</span>(it);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu\n&quot;</span>, orders.<span class="hljs-built_in">size</span>());
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>erase(it)</code> frees the node that <code>it</code> points to, and the loop then executes <code>++it</code>, which reads the freed node's <code>next</code> pointer. ASan reports <code>heap-use-after-free</code>. Without ASan it often appears to work, because the freed node's memory still holds the old links.</p>
+      <p><b>Fix.</b> Use the iterator that <code>erase</code> returns: <code>for (auto it = l.begin(); it != l.end();) it = (*it % 2 == 0) ? l.erase(it) : std::next(it);</code>. Better, use <code>orders.remove_if(pred)</code> or C++20 <code>std::erase_if(orders, pred)</code>, which work for every standard container. For a <code>list</code>, erasing invalidates only iterators to the erased node, unlike a <code>vector</code>, where every iterator after the erased element is invalidated.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>Each class locks its own mutex, and each method is correct on its own. The system hangs a few times a day. Find the cycle.</p>
+<pre data-run="ch26-lockcycle" data-mode="compile"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Risk</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Book</span> {
+    std::mutex m;
+    std::vector&lt;<span class="hljs-type">int</span>&gt; orders{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>};
+    Risk* risk = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">on_fill</span><span class="hljs-params">(<span class="hljs-type">int</span> qty)</span></span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">cancel_all</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m)</span></span>;
+        orders.<span class="hljs-built_in">clear</span>();
+    }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Risk</span> {
+    std::mutex m;
+    <span class="hljs-type">long</span> exposure = <span class="hljs-number">0</span>;
+    Book* book = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">update</span><span class="hljs-params">(<span class="hljs-type">int</span> qty)</span> </span>{
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m)</span></span>;
+        exposure += qty;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">breach</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m)</span></span>;
+        exposure = <span class="hljs-number">0</span>;
+        book-&gt;<span class="hljs-built_in">cancel_all</span>();
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">Book::on_fill</span><span class="hljs-params">(<span class="hljs-type">int</span> qty)</span> </span>{
+    <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m)</span></span>;
+    orders.<span class="hljs-built_in">push_back</span>(qty);
+    risk-&gt;<span class="hljs-built_in">update</span>(qty);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Book b;
+    Risk r;
+    b.risk = &amp;r;
+    r.book = &amp;b;
+    <span class="hljs-function">std::thread <span class="hljs-title">t1</span><span class="hljs-params">([&amp;] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) b.on_fill(<span class="hljs-number">1</span>); })</span></span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">t2</span><span class="hljs-params">([&amp;] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) r.breach(); })</span></span>;
+    t1.<span class="hljs-built_in">join</span>();
+    t2.<span class="hljs-built_in">join</span>();
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> A lock-order inversion. <code>on_fill</code> holds <code>Book::m</code> and then takes <code>Risk::m</code> inside <code>update</code>. <code>breach</code> holds <code>Risk::m</code> and then takes <code>Book::m</code> inside <code>cancel_all</code>. If thread 1 holds the book lock while thread 2 holds the risk lock, each waits for the other forever. The harness only compiles this program, because running it can hang.</p>
+      <p><b>Fix.</b> Never call into another component while holding your own lock. <code>on_fill</code> should update its orders under the lock, release it, then call <code>risk-&gt;update</code>. <code>breach</code> should reset exposure under its lock and call <code>cancel_all</code> after releasing it. When two locks really must be held together, take them in one step with <code>std::scoped_lock lock(book.m, risk.m);</code>, which uses a deadlock-avoidance algorithm. Tools: TSan reports "lock-order-inversion (potential deadlock)" from a single run, even when the hang does not happen, and so does Helgrind.</p>
+      <figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 220" role="img" aria-label="Lock order graph: on_fill takes Book then Risk, breach takes Risk then Book, forming a cycle">
+        <defs><marker id="ch30-c26a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+        <rect x="80" y="70" width="170" height="60" rx="10" class="d-acc"/><text x="165" y="98" text-anchor="middle" class="t-bold">Book::m</text><text x="165" y="116" text-anchor="middle" class="t-small t-muted">held by thread 1</text>
+        <rect x="470" y="70" width="170" height="60" rx="10" class="d-key"/><text x="555" y="98" text-anchor="middle" class="t-bold">Risk::m</text><text x="555" y="116" text-anchor="middle" class="t-small t-muted">held by thread 2</text>
+        <path d="M250,82 C330,40 390,40 468,82" class="d-line" fill="none" marker-end="url(#ch26-c26a)"/>
+        <text x="360" y="40" text-anchor="middle" class="t-small t-mono">on_fill → update</text>
+        <path d="M470,118 C390,170 330,170 252,118" class="d-line-trap" fill="none" marker-end="url(#ch26-c26a)"/>
+        <text x="360" y="178" text-anchor="middle" class="t-small t-mono t-trap">breach → cancel_all</text>
+        <text x="20" y="206" class="t-small t-muted">An edge A → B means "some thread acquires B while holding A". Any cycle in this graph is a possible deadlock.</text>
+      </svg></div><figcaption><b>Deadlock needs a cycle in the lock-order graph.</b> Each call chain is harmless alone. Together they form the cycle Book → Risk → Book, so two threads can each hold one lock and wait for the other.</figcaption></figure>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Write <code>Published&lt;T&gt;</code>: configuration that many reader threads read constantly and one writer occasionally replaces.</p>
+    <p><code>get()</code> returns a snapshot that stays valid and unchanged for as long as the reader holds it, even while a new version is published. <code>update(f)</code> applies <code>f</code> to a copy of the current version and publishes the result. Readers must never see a half-updated object, and the old version must be destroyed only when its last reader lets go.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> Store the current version as <code>std::shared_ptr&lt;const T&gt;</code>. A reader copies the pointer under a short lock, which bumps the reference count, and then uses the immutable snapshot without any lock. The writer copies the current version, modifies the copy outside the read lock, and swaps the pointer in under the lock. Readers holding the old snapshot keep it alive, and it is freed when the last one drops it. A second mutex serialises writers so that two concurrent updates cannot lose each other's changes.</p>
+<pre data-run="ch26-published" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Published</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Published</span><span class="hljs-params">(T initial)</span> : cur_(std::make_shared&lt;const T&gt;(std::move(initial))) {</span>}
+
+    <span class="hljs-function">std::shared_ptr&lt;<span class="hljs-type">const</span> T&gt; <span class="hljs-title">get</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+        <span class="hljs-keyword">return</span> cur_;
+    }
+
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">update</span><span class="hljs-params">(F f)</span> </span>{
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">w</span><span class="hljs-params">(writer_)</span></span>;
+        <span class="hljs-keyword">auto</span> next = std::<span class="hljs-built_in">make_shared</span>&lt;T&gt;(*<span class="hljs-built_in">get</span>());
+        <span class="hljs-built_in">f</span>(*next);
+        std::shared_ptr&lt;<span class="hljs-type">const</span> T&gt; old;
+        {
+            <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+            old = std::<span class="hljs-built_in">exchange</span>(cur_, std::<span class="hljs-built_in">move</span>(next));
+        }
+    }  <span class="hljs-comment">// old is released here, outside the read lock</span>
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">mutable</span> std::mutex m_;
+    std::mutex writer_;
+    std::shared_ptr&lt;<span class="hljs-type">const</span> T&gt; cur_;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Limits</span> {
+    <span class="hljs-type">int</span> max_qty;
+    <span class="hljs-type">long</span> max_notional;  <span class="hljs-comment">// invariant: max_notional == max_qty * 200</span>
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Published&lt;Limits&gt; <span class="hljs-title">cfg</span><span class="hljs-params">(Limits{<span class="hljs-number">100</span>, <span class="hljs-number">20000</span>})</span></span>;
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; violations{<span class="hljs-number">0</span>};
+    std::vector&lt;std::thread&gt; readers;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">4</span>; ++i)
+        readers.<span class="hljs-built_in">emplace_back</span>([&amp;] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> k = <span class="hljs-number">0</span>; k &lt; <span class="hljs-number">2000</span>; ++k) {
+                <span class="hljs-keyword">auto</span> snap = cfg.<span class="hljs-built_in">get</span>();
+                <span class="hljs-keyword">if</span> (snap-&gt;max_notional != snap-&gt;max_qty * <span class="hljs-number">200L</span>) ++violations;
+            }
+        });
+    <span class="hljs-function">std::thread <span class="hljs-title">writer</span><span class="hljs-params">([&amp;] {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> k = <span class="hljs-number">0</span>; k &lt; <span class="hljs-number">1000</span>; ++k)
+            cfg.update([](Limits&amp; l) {
+                l.max_qty += <span class="hljs-number">1</span>;
+                l.max_notional = l.max_qty * <span class="hljs-number">200L</span>;
+            });
+    })</span></span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : readers) t.<span class="hljs-built_in">join</span>();
+    writer.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;violations=%d max_qty=%d\n&quot;</span>, violations.<span class="hljs-built_in">load</span>(), cfg.<span class="hljs-built_in">get</span>()-&gt;max_qty);
+}</code></pre>
+<pre class="out" data-out="ch26-published">violations=0 max_qty=1100</pre>
+      <p><b>Complexity and pitfalls.</b> A read is one short critical section plus two atomic count updates. An update copies <code>T</code>. Pitfalls: returning <code>const T&amp;</code> instead of a <code>shared_ptr</code> (the object may be replaced and freed while in use), modifying the published object in place (readers see half an update), destroying the old version while holding the read lock (its destructor might be slow), and writers without their own lock (two read-modify-write updates race and one is lost). C++20 <code>std::atomic&lt;std::shared_ptr&lt;const T&gt;&gt;</code> removes the read mutex where the library supports it, and production systems use RCU or hazard pointers to make reads free of shared writes altogether.</p>
+      <p class="rating">Estimated rating: ~1600 · a short design whose correctness rests on immutability and on shared_ptr lifetime.</p>
+    </div></details>
+  </div>
+</section>
+
+<section id="ch30-round-3" data-roles="dr cd"><div class="sec-head"><h2>Round 3: memory and move semantics</h2><div class="sec-tools"><span class="role dr">Drills</span><span class="role cd">Coding</span></div></div>
+  <p><b>Time limit: 30 minutes. Scoring: 18 points</b> (2 concept × 1, 2 tricky × 2, 2 output × 2, 2 bug × 2, code 4). 15 or more is a strong pass. This is the round a C++ library or engine team runs to check ownership reasoning. Review material: <a href="#ch09">Ch 9</a>, <a href="#ch18">Ch 18</a> and <a href="#ch20">Ch 20</a>.</p>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>Why does <code>std::optional&lt;int&amp;&gt;</code> not compile in C++23, and what do people use instead?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The C++17 <code>optional</code> forbids reference types because assignment would be ambiguous: <code>opt = x;</code> could either rebind the optional to refer to <code>x</code> or assign through to the referred object, and the two choices behave differently depending on whether the optional was engaged. The committee left it out rather than pick. The usual replacements are a plain <code>T*</code> (null means empty, and the pointer is non-owning by convention) or <code>std::optional&lt;std::reference_wrapper&lt;T&gt;&gt;</code>.</p>
+      <p><b>Why.</b> A function like <code>find_order(id)</code> that may return "no order" is exactly where people reach for it. Returning <code>T*</code> is clear and cheap. C++26 adds <code>std::optional&lt;T&amp;&gt;</code> (P2988, voted into the working draft in June 2025) with rebinding assignment, matching what Boost has done for years. Never return <code>std::optional&lt;T&gt;</code> by value when the caller needs to modify the original, since that silently copies.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>Name three reasons why <code>std::vector&lt;T&gt;</code> growth might copy every element instead of moving it.</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> First, the move constructor is not <code>noexcept</code> while a copy constructor exists, so <code>move_if_noexcept</code> picks the copy to keep the strong guarantee. Second, <code>T</code> has no move constructor at all, typically because a user-declared destructor or copy operation suppressed the implicit one. Third, the move constructor exists but copies anyway, for example because a member is <code>const</code> or because it was written as <code>m(o.m)</code> instead of <code>m(std::move(o.m))</code>.</p>
+      <p><b>Why.</b> All three compile silently. A fourth, rarer cause is a member whose own move is not <code>noexcept</code>: a defaulted move constructor is <code>noexcept</code> only if every member's move is, so one such member (some older <code>std::function</code> or third-party types) makes the whole class copy. Check with <code>static_assert(std::is_nothrow_move_constructible_v&lt;T&gt;)</code> next to the class.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A task queue is <code>std::queue&lt;std::function&lt;void()&gt;&gt;</code>. Pushing <code>[conn = std::move(conn)] { conn-&gt;flush(); }</code>, where <code>conn</code> is a <code>std::unique_ptr</code>, fails to compile. Why, and what are the fixes?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>std::function</code> requires its target to be copy constructible, because <code>std::function</code> itself is copyable and must be able to copy whatever it holds. A lambda that captures a <code>unique_ptr</code> by move is move-only, so it cannot be stored.</p>
+      <p><b>Why.</b> Fixes: use C++23 <code>std::move_only_function&lt;void()&gt;</code>, which drops the copy requirement (and adds const and noexcept qualifiers in its signature); write a small type-erased move-only callable yourself; or convert the resource to <code>std::shared_ptr</code> so the lambda becomes copyable, at the cost of an atomic count and shared ownership you did not want. Do not "fix" it by capturing a raw pointer and releasing the <code>unique_ptr</code>, which leaks if the task is never run.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>To avoid reallocations, code calls <code>v.reserve(1000);</code> on an empty <code>std::vector&lt;double&gt;</code> and then fills it with <code>for (int i = 0; i &lt; 1000; ++i) v[i] = price(i);</code>. It runs, and the values read back correctly. Is it correct?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> No, it is undefined behaviour. <code>reserve</code> changes the capacity only. The size is still 0, so no elements exist, and <code>operator[]</code> with an index not less than <code>size()</code> is undefined. It appears to work because the memory is allocated and <code>double</code> needs no construction. Then <code>v.size()</code> is still 0, so any loop over the vector, any copy and any <code>push_back</code> ignores or overwrites the "stored" values.</p>
+      <p><b>Why.</b> Use <code>resize(1000)</code> (or the size constructor) and then assign, or keep <code>reserve</code> and use <code>push_back</code>/<code>emplace_back</code>. For a class type the bug is worse, because assignment then runs on objects that were never constructed. Hardened library modes catch it at run time: <code>-D_GLIBCXX_ASSERTIONS</code> for libstdc++ and <code>-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_FAST</code> for libc++ both turn an out-of-range <code>operator[]</code> into an abort, which is cheap enough to leave on in many production builds. <code>v.at(i)</code> throws <code>std::out_of_range</code> instead.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>Count the copies and moves for brace initialisation and for <code>emplace_back</code>.</p>
+<pre data-run="ch26-initlist"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tracked</span> {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> copies = <span class="hljs-number">0</span>, moves = <span class="hljs-number">0</span>;
+    std::string s;
+    <span class="hljs-built_in">Tracked</span>(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* p) : <span class="hljs-built_in">s</span>(p) {}
+    <span class="hljs-built_in">Tracked</span>(<span class="hljs-type">const</span> Tracked&amp; o) : <span class="hljs-built_in">s</span>(o.s) { ++copies; }
+    <span class="hljs-built_in">Tracked</span>(Tracked&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">s</span>(std::<span class="hljs-built_in">move</span>(o.s)) { ++moves; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Tracked&gt; a{<span class="hljs-string">&quot;x&quot;</span>, <span class="hljs-string">&quot;y&quot;</span>, <span class="hljs-string">&quot;z&quot;</span>};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;braces: copies=%d moves=%d\n&quot;</span>, Tracked::copies, Tracked::moves);
+    Tracked::copies = Tracked::moves = <span class="hljs-number">0</span>;
+    std::vector&lt;Tracked&gt; b;
+    b.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">3</span>);
+    b.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-string">&quot;x&quot;</span>);
+    b.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-string">&quot;y&quot;</span>);
+    b.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-string">&quot;z&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;emplace: copies=%d moves=%d\n&quot;</span>, Tracked::copies, Tracked::moves);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-initlist">braces: copies=3 moves=0
+emplace: copies=0 moves=0</pre>
+      <p><b>Why.</b> A braced list first builds a hidden <code>const Tracked[3]</code> array (three converting constructions), and <code>std::initializer_list</code> gives only <code>const</code> access to it. The vector cannot move from <code>const</code> elements, so it copies all three. <code>emplace_back</code> constructs each element in place from the <code>const char*</code>, and <code>reserve</code> prevents any relocation. Consequences: <code>std::vector&lt;std::unique_ptr&lt;int&gt;&gt; v{std::make_unique&lt;int&gt;(1)};</code> does not compile, and initialising a vector of large strings from a braced list allocates every string twice. C++26 does not change this, so for move-only or expensive types use <code>reserve</code> plus <code>emplace_back</code>.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>A stateful callback counts its calls. It is copied into a <code>std::function</code>, which is then copied and moved. What prints?</p>
+<pre data-run="ch26-function" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> counter = [n = <span class="hljs-number">0</span>]() <span class="hljs-keyword">mutable</span> { <span class="hljs-keyword">return</span> ++n; };
+    std::function&lt;<span class="hljs-type">int</span>()&gt; f = counter;
+    <span class="hljs-built_in">f</span>();
+    <span class="hljs-built_in">f</span>();
+    <span class="hljs-type">int</span> from_f = <span class="hljs-built_in">f</span>();
+    <span class="hljs-type">int</span> from_counter = <span class="hljs-built_in">counter</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;f=%d counter=%d\n&quot;</span>, from_f, from_counter);
+    std::function&lt;<span class="hljs-type">int</span>()&gt; g = f;
+    std::function&lt;<span class="hljs-type">int</span>()&gt; h = std::<span class="hljs-built_in">move</span>(f);
+    <span class="hljs-type">int</span> from_g = <span class="hljs-built_in">g</span>();
+    <span class="hljs-type">int</span> from_h = <span class="hljs-built_in">h</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;g=%d h=%d\n&quot;</span>, from_g, from_h);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-function">f=3 counter=1
+g=4 h=4</pre>
+      <p><b>Why.</b> <code>std::function</code> stores its own copy of the callable, so the <code>mutable</code> lambda's counter <code>n</code> is duplicated: three calls through <code>f</code> leave the original <code>counter</code> untouched, and its first call returns 1. Copying <code>f</code> copies the state (so <code>g</code> continues from 3), and moving <code>f</code> transfers it (so <code>h</code> also continues from 3). A moved-from <code>std::function</code> is valid but unspecified. Both libraries leave it empty, so calling it would throw <code>std::bad_function_call</code>, but code must not rely on either outcome.</p>
+      <p>To share one state, capture a pointer or a <code>shared_ptr</code>, or store <code>std::ref(counter)</code>, which puts a <code>reference_wrapper</code> inside the <code>std::function</code>. The same copying hides in <code>std::thread</code>, which copies its callable, and in algorithms such as <code>std::for_each</code>, which take function objects by value. The common wrong answer is "f=3 counter=3".</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>A move-only packet buffer. The program prints <code>1500</code> and then dies. Why?</p>
+<pre data-run="ch26-movenull" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Packet</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Packet</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> : size_(n), data_(new char[n]) {</span> std::<span class="hljs-built_in">memset</span>(data_, <span class="hljs-number">0</span>, n); }
+    <span class="hljs-built_in">Packet</span>(Packet&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">size_</span>(o.size_), <span class="hljs-built_in">data_</span>(o.data_) {}
+    <span class="hljs-built_in">Packet</span>(<span class="hljs-type">const</span> Packet&amp;) = <span class="hljs-keyword">delete</span>;
+    Packet&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Packet&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">Packet</span>() { <span class="hljs-keyword">delete</span>[] data_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">size_t</span> size_;
+    <span class="hljs-type">char</span>* data_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Packet&gt; q;
+    q.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">Packet</span>(<span class="hljs-number">1500</span>));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu\n&quot;</span>, q[<span class="hljs-number">0</span>].<span class="hljs-built_in">size</span>());
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The move constructor copies the pointer but does not clear it in the source. The temporary <code>Packet(1500)</code> is destroyed at the end of the <code>push_back</code> statement and frees the buffer, so the element in the vector holds a dangling pointer, and its destructor frees the same buffer again at the end of <code>main</code>. ASan reports <code>attempting double-free</code>.</p>
+      <p><b>Fix.</b> Leave the source empty: <code>data_(std::exchange(o.data_, nullptr))</code> and <code>size_(std::exchange(o.size_, 0))</code>. A move must leave the source in a state its destructor can handle. Better still, hold the buffer as <code>std::unique_ptr&lt;char[]&gt;</code> and let the compiler generate the moves (rule of zero). This bug hides in tests that never destroy the moved-from object before the program ends, and it is a favourite because the code looks complete.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>A recorder starts its background thread in the constructor. TSan reports a race in a program with no visible sharing. Where?</p>
+<pre data-run="ch26-ctorthread" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Recorder</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Recorder</span>() : <span class="hljs-built_in">worker_</span>([<span class="hljs-keyword">this</span>] { samples_.<span class="hljs-built_in">push_back</span>(<span class="hljs-number">42</span>); }) {}
+    ~<span class="hljs-built_in">Recorder</span>() { worker_.<span class="hljs-built_in">join</span>(); }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">count</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> samples_.<span class="hljs-built_in">size</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    std::thread worker_;
+    std::vector&lt;<span class="hljs-type">int</span>&gt; samples_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">static</span> Recorder r;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu\n&quot;</span>, r.<span class="hljs-built_in">count</span>());
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Members are initialised in declaration order, and <code>worker_</code> is declared before <code>samples_</code>. The thread starts while <code>samples_</code> has not been constructed yet, so the new thread's <code>push_back</code> races with the main thread's construction of the vector, which may also overwrite the element the thread just added. <code>count()</code> then races with the thread too, since nothing waits for it. TSan reports the race on the vector's members.</p>
+      <p><b>Fix.</b> Declare the thread <b>last</b> so every member it uses exists before it starts, and treat starting a thread as the final step of construction. Here the object is also published to the thread before its constructor finishes, so if the class had derived classes or virtual functions, the thread could see a half-built object. Reading results requires synchronisation as well: join (or wait on a condition) before calling <code>count()</code>. With <code>std::jthread</code> declared last, the destructor also gets the order right: it stops and joins the thread before the other members are destroyed.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Write a string interner that maps symbol names to dense ids and back, with views that never dangle.</p>
+    <p><code>std::uint32_t intern(std::string_view s)</code> returns the existing id for a known string or assigns the next id. <code>std::string_view name(id)</code> returns the stored text, and every view or id handed out must stay valid for the interner's lifetime, however many strings are added later. Lookups of known strings must not allocate.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> Store each string once in a <code>std::deque&lt;std::string&gt;</code>: pushing at the end of a deque never moves existing elements, so references to them stay valid. The hash map is keyed by <code>std::string_view</code>s that point at those stored strings, so a lookup with the caller's <code>string_view</code> hashes the characters without building a <code>std::string</code>. A vector of views gives O(1) id-to-name.</p>
+<pre data-run="ch26-interner" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;deque&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unordered_map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Interner</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::<span class="hljs-type">uint32_t</span> <span class="hljs-title">intern</span><span class="hljs-params">(std::string_view s)</span> </span>{
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> it = ids_.<span class="hljs-built_in">find</span>(s); it != ids_.<span class="hljs-built_in">end</span>()) <span class="hljs-keyword">return</span> it-&gt;second;
+        <span class="hljs-type">const</span> std::string&amp; stored = store_.<span class="hljs-built_in">emplace_back</span>(s);
+        <span class="hljs-keyword">auto</span> id = <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">uint32_t</span>&gt;(views_.<span class="hljs-built_in">size</span>());
+        views_.<span class="hljs-built_in">push_back</span>(stored);
+        ids_.<span class="hljs-built_in">emplace</span>(views_.<span class="hljs-built_in">back</span>(), id);
+        <span class="hljs-keyword">return</span> id;
+    }
+    <span class="hljs-function">std::string_view <span class="hljs-title">name</span><span class="hljs-params">(std::<span class="hljs-type">uint32_t</span> id)</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> views_.<span class="hljs-built_in">at</span>(id); }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> views_.<span class="hljs-built_in">size</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    std::deque&lt;std::string&gt; store_;  <span class="hljs-comment">// never relocates existing strings</span>
+    std::vector&lt;std::string_view&gt; views_;
+    std::unordered_map&lt;std::string_view, std::<span class="hljs-type">uint32_t</span>&gt; ids_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Interner in;
+    std::<span class="hljs-type">uint32_t</span> a = in.<span class="hljs-built_in">intern</span>(<span class="hljs-string">&quot;AAPL&quot;</span>);
+    std::<span class="hljs-type">uint32_t</span> m = in.<span class="hljs-built_in">intern</span>(<span class="hljs-string">&quot;MSFT&quot;</span>);
+    std::string key = <span class="hljs-string">&quot;AAPL&quot;</span>;
+    std::<span class="hljs-type">uint32_t</span> again = in.<span class="hljs-built_in">intern</span>(key);
+    std::string_view early = in.<span class="hljs-built_in">name</span>(m);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">10000</span>; ++i) in.<span class="hljs-built_in">intern</span>(<span class="hljs-string">&quot;SYM&quot;</span> + std::<span class="hljs-built_in">to_string</span>(i));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;AAPL=%u MSFT=%u again=%u size=%zu\n&quot;</span>, a, m, again, in.<span class="hljs-built_in">size</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;early view=%.*s name0=%.*s\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(early.<span class="hljs-built_in">size</span>()), early.<span class="hljs-built_in">data</span>(),
+                <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(in.<span class="hljs-built_in">name</span>(<span class="hljs-number">0</span>).<span class="hljs-built_in">size</span>()), in.<span class="hljs-built_in">name</span>(<span class="hljs-number">0</span>).<span class="hljs-built_in">data</span>());
+}</code></pre>
+<pre class="out" data-out="ch26-interner">AAPL=0 MSFT=1 again=0 size=10002
+early view=MSFT name0=AAPL</pre>
+      <p><b>Complexity and pitfalls.</b> O(length) per intern (one hash), O(1) per <code>name</code>. The tempting <code>std::vector&lt;std::string&gt;</code> store is the trap: on growth it moves the strings, and a short string's characters live inside the <code>std::string</code> object (SSO), so every <code>string_view</code> to it dangles. Long strings would survive by accident, which makes the bug data-dependent. Keying the map by <code>std::string</code> would work but costs a second copy of every name, and lookups with a <code>string_view</code> would need C++20 heterogeneous lookup (a transparent hash and equality). An arena of characters with views into it is the faster production layout (<a href="#ch15">Ch 15</a>).</p>
+      <p class="rating">Estimated rating: ~1500 · short code, judged on reference stability and on not allocating for lookups.</p>
+    </div></details>
+  </div>
+</section>
+
+<section id="ch30-round-5" data-roles="dr cd"><div class="sec-head"><h2>Round 5: the hard round (HFT and low-latency systems)</h2><div class="sec-tools"><span class="role dr">Drills</span><span class="role cd">Coding</span></div></div>
+  <p><b>Time limit: 45 minutes. Scoring: 22 points</b> (2 concept × 1, 3 tricky × 2, 2 output × 2, 2 bug × 2, code 6: 3 for a correct solution, 1 for the memory orders explained, 1 for the cache layout, 1 for complexity and edge cases). 18 or more is the bar for a trading-firm onsite, and 14 to 17 is a pass for most systems roles. Interviewers here push every answer one level deeper, so practise the "why" sentences aloud. Review material: <a href="../os/#ch02">OS guide ch 2</a>, <a href="#ch17">Ch 17</a> and <a href="#ch29">Ch 29</a>.</p>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>Why do trading systems pin their hot threads to dedicated cores, and what else must be configured for the pinning to remove jitter?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Pinning (<code>pthread_setaffinity_np</code> or <code>taskset</code>) stops the scheduler from migrating a thread, which would cost it its warm L1/L2 caches and TLB, and lets a busy-polling thread own a core without being preempted. For that to work, the core must also be kept free of other work: remove it from the general scheduler (<code>isolcpus</code> or cpusets), stop the periodic timer tick on it (<code>nohz_full</code>), move device interrupts elsewhere (<code>/proc/irq/*/smp_affinity</code>), move kernel threads and RCU callbacks off it (<code>rcu_nocbs</code>), and disable deep C-states and frequency scaling so the core never sleeps or slows down.</p>
+      <p><b>Why.</b> Each of these is a source of microsecond-scale interruptions that pinning alone does not prevent: a timer interrupt, a network IRQ, a kernel worker or a wake-up from a deep sleep state. Also keep the hot threads on the NIC's NUMA node and avoid putting two hot threads on hyperthread siblings, which share a core's execution units and L1 cache. The cost is cores that sit spinning at 100%, which is accepted in exchange for predictable latency.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>What does kernel-bypass networking (for example Solarflare Onload, ef_vi or DPDK) remove from the receive path of a UDP packet?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> In the normal path, the NIC writes the packet into a kernel ring buffer and raises an interrupt (or the kernel polls it via NAPI), the kernel's network stack processes it (IP, UDP, socket lookup), queues it on the socket, wakes the waiting thread, and <code>recvfrom</code> copies it into user memory across a system call. Kernel bypass maps the NIC's receive rings directly into the process, and a dedicated thread busy-polls them. That removes the interrupt, the context switch and wake-up, the system call and the copy, and the kernel stack itself.</p>
+      <p><b>Why.</b> The kernel path costs several microseconds with significant jitter, while bypass brings the wire-to-application time down to around a microsecond or less. The costs: a core spinning at 100%, a user-space network stack (Onload keeps the sockets API, ef_vi and DPDK give raw frames), and losing kernel tools such as <code>tcpdump</code> on that traffic. It is usually combined with core isolation (<code>isolcpus</code>, <code>nohz_full</code>), IRQ affinity and huge pages.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A seqlock protects a 64-byte quote: the writer increments a sequence counter to odd, writes the fields, and increments it back to even. A reader copies the fields and retries if the counter was odd or changed. Why can the reader see a torn quote, why is that acceptable, and what is the C++ memory-model problem?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The reader takes no lock, so it can copy some fields from the old quote and some from the new one while the writer is in the middle of an update. That is acceptable because it then sees a changed sequence number and discards the copy, so a torn value is never <i>used</i>. The memory-model problem is that the reader's plain reads of the fields race with the writer's plain writes, which is a data race and therefore undefined behaviour in C++, even though the result is thrown away.</p>
+      <p><b>Why.</b> Correct C++ versions make every payload field a <code>std::atomic</code> accessed with <code>memory_order_relaxed</code> (or copy it with relaxed atomic word loads), and they order the accesses with fences: the reader does an acquire load of the sequence, reads the payload, then <code>atomic_thread_fence(memory_order_acquire)</code> before re-reading the sequence. The writer does a release fence after making the counter odd and a release store to make it even. Without the fences, the CPU or compiler may move payload reads outside the two sequence reads. Seqlocks suit one writer and many readers of small data that changes often, because readers never write to shared memory and so never bounce the cache line. The writer can starve readers if it updates continuously.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>What machine code does <code>x.store(1)</code> (default <code>seq_cst</code>) on a <code>std::atomic&lt;int&gt;</code> compile to on x86-64 and on ARM64? And <code>x.load()</code>?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> On x86-64 a <code>seq_cst</code> store is an <code>xchg</code> (a locked instruction that acts as a full barrier), or a <code>mov</code> followed by <code>mfence</code>. A <code>seq_cst</code> load is a plain <code>mov</code>. On ARM64 the store is <code>stlr</code> (store-release) and the load is <code>ldar</code> (load-acquire), and that pair alone gives sequential consistency.</p>
+      <p><b>Why.</b> x86 is TSO: the only reordering it allows is a later load passing an earlier store sitting in the store buffer, so the store side must drain the buffer, and that is the expensive operation: very roughly 10 to 30 cycles uncontended depending on the core, and far more when the line is contended. Release stores and acquire loads are plain <code>mov</code>s on x86, which is why <code>memory_order_release</code> on a publish flag is free there while <code>seq_cst</code> is not. ARM's <code>stlr</code>/<code>ldar</code> were designed to implement exactly the C++ model, so <code>seq_cst</code> costs little more than release/acquire there. Relaxed operations are plain loads and stores on both. A <code>fetch_add</code> is <code>lock xadd</code> on x86 whatever the order, and <code>ldaddal</code> (with LSE atomics) or an <code>ldaxr</code>/<code>stlxr</code> loop on ARM64.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>You need nanosecond timestamps for every packet. How expensive is <code>clock_gettime(CLOCK_MONOTONIC)</code> on Linux, why is it not a real system call, and when would you read the TSC directly?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Typically some tens of nanoseconds (often quoted as 15 to 30 ns on a modern x86 server) when the kernel's clocksource is the TSC. glibc implements it in the <b>vDSO</b>, a small shared library the kernel maps into every process together with a data page holding the current clock parameters. The call reads the TSC with <code>rdtsc</code> and converts it using that data, with no switch into the kernel. If the clocksource is <code>hpet</code> or <code>acpi_pm</code> (some virtual machines, or after the kernel has marked the TSC unstable), the vDSO falls back to a real system call. A real system call costs roughly 100 ns or more, plus mitigations for speculative-execution attacks. Reading the TSC directly (<code>__rdtsc()</code>, or <code>rdtscp</code> to stop it executing early) costs a few nanoseconds (some tens of cycles) and gives raw tick counts that you convert to time later, off the hot path.</p>
+      <p><b>Why.</b> Raw TSC is safe on modern CPUs with an invariant TSC (constant rate across frequency changes and synchronised across cores), which you should check in <code>/proc/cpuinfo</code> (<code>constant_tsc</code>, <code>nonstop_tsc</code>). <code>rdtsc</code> is not serialising, so measuring a short region needs <code>rdtscp</code> or fences. Never measure latency with <code>CLOCK_REALTIME</code>/<code>system_clock</code>, which NTP can step backwards. For wire timestamps, NICs offer hardware timestamping (<code>SO_TIMESTAMPING</code>), which is more accurate than anything done in software after the fact.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>A price-level bitmap marks which of 64 ticks have resting liquidity. What do the bit operations print?</p>
+<pre data-run="ch26-bits"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;bit&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-type">uint64_t</span> levels = <span class="hljs-number">0</span>;  <span class="hljs-comment">// bit i set: there is liquidity at tick i</span>
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> tick : {<span class="hljs-number">3</span>, <span class="hljs-number">17</span>, <span class="hljs-number">40</span>}) levels |= std::<span class="hljs-type">uint64_t</span>{<span class="hljs-number">1</span>} &lt;&lt; tick;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;lowest=%d highest=%d count=%d\n&quot;</span>, std::<span class="hljs-built_in">countr_zero</span>(levels),
+                <span class="hljs-number">63</span> - std::<span class="hljs-built_in">countl_zero</span>(levels), std::<span class="hljs-built_in">popcount</span>(levels));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ceil=%u single=%d ctz0=%d\n&quot;</span>, std::<span class="hljs-built_in">bit_ceil</span>(<span class="hljs-number">1000u</span>), std::<span class="hljs-built_in">has_single_bit</span>(<span class="hljs-number">1024u</span>),
+                std::<span class="hljs-built_in">countr_zero</span>(std::<span class="hljs-type">uint64_t</span>{<span class="hljs-number">0</span>}));
+    levels &amp;= levels - <span class="hljs-number">1</span>;  <span class="hljs-comment">// clear the lowest set bit</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after pop lowest=%d\n&quot;</span>, std::<span class="hljs-built_in">countr_zero</span>(levels));
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-bits">lowest=3 highest=40 count=3
+ceil=1024 single=1 ctz0=64
+after pop lowest=17</pre>
+      <p><b>Why.</b> <code>std::countr_zero</code> counts trailing zero bits, which is the index of the lowest set bit, and <code>63 - std::countl_zero</code> is the index of the highest. <code>std::popcount</code> counts set bits. <code>std::bit_ceil</code> rounds up to a power of two (ring buffer sizes) and <code>std::has_single_bit</code> tests for one. <code>x &amp;= x - 1</code> clears the lowest set bit, so the next level appears. The C++20 <code>&lt;bit&gt;</code> functions are defined for zero (<code>countr_zero(0)</code> is the bit width, 64), unlike <code>__builtin_ctz(0)</code>, which is undefined because x86's <code>bsf</code> leaves its result undefined for a zero input. The wrong answer for the second number is <code>countl_zero(levels)</code> itself, which is 23.</p>
+      <p>Each call compiles to one or two instructions (<code>tzcnt</code>, <code>lzcnt</code> and <code>popcnt</code> on x86-64 with BMI, <code>rbit</code> plus <code>clz</code> on ARM64). One word covers 64 price levels, and a summary word over 64 words covers 4096 levels with two lookups, which is how some order books find the best bid or ask without scanning.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>Byte arithmetic in a feed parser. What are the four lines?</p>
+<pre data-run="ch26-promote"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-type">uint8_t</span> a = <span class="hljs-number">200</span>, b = <span class="hljs-number">100</span>;
+    <span class="hljs-keyword">auto</span> sum = a + b;
+    std::<span class="hljs-type">uint8_t</span> wrapped = a + b;
+    std::<span class="hljs-type">uint8_t</span> flags = <span class="hljs-number">0x0F</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sum=%d size=%zu\n&quot;</span>, sum, <span class="hljs-built_in">sizeof</span>(sum));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;wrapped=%d\n&quot;</span>, wrapped);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;~flags==0xF0: %d\n&quot;</span>, ~flags == <span class="hljs-number">0xF0</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;uint8(~flags)==0xF0: %d\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">uint8_t</span>&gt;(~flags) == <span class="hljs-number">0xF0</span>);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-promote">sum=300 size=4
+wrapped=44
+~flags==0xF0: 0
+uint8(~flags)==0xF0: 1</pre>
+      <p><b>Why.</b> Integer promotion converts operands narrower than <code>int</code> to <code>int</code> before any arithmetic ([conv.prom]). <code>a + b</code> is an <code>int</code> with value 300, so <code>auto</code> deduces <code>int</code>. Storing it into a <code>uint8_t</code> reduces it modulo 256, giving 44. <code>~flags</code> flips all 32 bits of the promoted <code>int</code>, giving <code>0xFFFFFFF0</code> (-16), which is not <code>0xF0</code>. The dangerous relative: <code>std::uint16_t x = 0xFFFF; x * x</code> promotes both operands to <i>signed</i> <code>int</code>, and 65535 · 65535 overflows it, which is undefined behaviour although every type in the source is unsigned. Write <code>1u * x * x</code> or cast to <code>std::uint32_t</code> first. Checksums and bitmask parsing in feed handlers are where this shows up.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>A single-producer single-consumer ring uses atomic indices, all <code>relaxed</code> "because there is only one writer per index". The sums usually match. What is wrong?</p>
+<pre data-run="ch26-spscrelaxed" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">constexpr</span> <span class="hljs-type">unsigned</span> N = <span class="hljs-number">1024</span>;
+<span class="hljs-type">static</span> <span class="hljs-type">long</span> data[N];
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">unsigned</span>&gt; head{<span class="hljs-number">0</span>}, tail{<span class="hljs-number">0</span>};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> items = <span class="hljs-number">20000</span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">producer</span><span class="hljs-params">([] {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">1</span>; i &lt;= items; ++i) {
+            <span class="hljs-type">unsigned</span> h = head.load(std::memory_order_relaxed);
+            <span class="hljs-keyword">while</span> (h - tail.load(std::memory_order_relaxed) == N) {}
+            data[h % N] = i;
+            head.store(h + <span class="hljs-number">1</span>, std::memory_order_relaxed);
+        }
+    })</span></span>;
+    <span class="hljs-type">long</span> <span class="hljs-type">long</span> sum = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; items; ++i) {
+        <span class="hljs-type">unsigned</span> t = tail.<span class="hljs-built_in">load</span>(std::memory_order_relaxed);
+        <span class="hljs-keyword">while</span> (head.<span class="hljs-built_in">load</span>(std::memory_order_relaxed) == t) {}
+        sum += data[t % N];
+        tail.<span class="hljs-built_in">store</span>(t + <span class="hljs-number">1</span>, std::memory_order_relaxed);
+    }
+    producer.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%lld\n&quot;</span>, sum);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The index stores do not publish the data. A relaxed store of <code>head</code> creates no happens-before edge, so the consumer may see the new <code>head</code> and still read the old contents of <code>data[h % N]</code>, and the plain accesses to <code>data</code> are a data race (TSan reports it). The same problem runs the other way: a relaxed <code>tail</code> store lets the producer overwrite a slot the consumer is still reading. On x86 the hardware happens not to reorder these particular stores, so the sums match there unless the compiler reorders them, while ARM really can.</p>
+      <p><b>Fix.</b> The producer's <code>head.store</code> must be <code>release</code> and the consumer's <code>head.load</code> in the wait loop <code>acquire</code>, and symmetrically <code>tail.store</code> release with the producer's <code>tail.load</code> acquire. Each side's load of its <i>own</i> index can stay relaxed, since only that thread writes it. "One writer per variable" removes the need for read-modify-write operations, not the need for ordering. The coding question below builds the full version.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>A latency monitor timestamps orders with <code>std::chrono::high_resolution_clock</code>. Once a day it reports negative latencies. The program prints each clock's <code>is_steady</code>. Explain the output and the bug.</p>
+<pre data-run="ch26-clocks"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">C</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* name)</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s steady=%d\n&quot;</span>, name, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(C::is_steady));
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">show</span>&lt;std::chrono::system_clock&gt;(<span class="hljs-string">&quot;system_clock&quot;</span>);
+    <span class="hljs-built_in">show</span>&lt;std::chrono::steady_clock&gt;(<span class="hljs-string">&quot;steady_clock&quot;</span>);
+    <span class="hljs-built_in">show</span>&lt;std::chrono::high_resolution_clock&gt;(<span class="hljs-string">&quot;high_resolution_clock&quot;</span>);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch26-clocks" data-compiler="gcc">system_clock steady=0
+steady_clock steady=1
+high_resolution_clock steady=0</pre>
+      <p><b>Answer.</b> This output is for GCC with libstdc++, where <code>high_resolution_clock</code> is an alias of <code>system_clock</code>: wall-clock time, which NTP or an operator can step backwards (or forwards). A latency computed across such a step comes out negative or hugely positive. With Clang and libc++ the third line prints <code>steady=1</code>, because libc++ aliases it to <code>steady_clock</code>, so the same code is correct on one toolchain and broken on the other.</p>
+      <p><b>Why.</b> The standard only says <code>high_resolution_clock</code> has the shortest tick period available, and it may be an alias of either clock. On Linux both <code>system_clock</code> and <code>steady_clock</code> already tick in nanoseconds, so it buys nothing. Measure intervals with <code>steady_clock</code> (<code>CLOCK_MONOTONIC</code>) or a raw TSC, use <code>system_clock</code> only for timestamps that must match wall time (logs, exchange reports), and record both if you need both. Adding <code>static_assert(Clock::is_steady)</code> next to latency code turns this into a compile error.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Implement a lock-free single-producer single-consumer ring buffer, <code>SpscRing&lt;T, N&gt;</code>.</p>
+    <p><code>bool push(const T&amp;)</code> returns false when full and <code>bool pop(T&amp;)</code> returns false when empty. Exactly one thread calls <code>push</code> and exactly one other thread calls <code>pop</code>. <code>N</code> is a power of two. Use the weakest correct memory orders, avoid false sharing between the producer's and the consumer's data, and keep the shared cache-line traffic per operation as low as possible. Explain each memory order.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> Use two monotonically increasing indices, <code>head</code> (written only by the producer) and <code>tail</code> (written only by the consumer), and map them to slots with <code>&amp; (N - 1)</code>, so "full" is <code>head - tail == N</code> with no wasted slot and unsigned wraparound is harmless. The producer writes the slot and then publishes it with a <b>release</b> store of <code>head</code>, and the consumer's <b>acquire</b> load of <code>head</code> makes the slot contents visible. The same pairing on <code>tail</code> tells the producer that a slot has been fully read and may be reused. Each side also keeps a private cached copy of the other side's index and reloads it only when the cache says full or empty, which removes most cross-core cache-line transfers.</p>
+<pre data-run="ch26-spsc" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, std::<span class="hljs-type">size_t</span> N&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">SpscRing</span> {
+    <span class="hljs-built_in">static_assert</span>(N &gt;= <span class="hljs-number">2</span> &amp;&amp; (N &amp; (N - <span class="hljs-number">1</span>)) == <span class="hljs-number">0</span>, <span class="hljs-string">&quot;N must be a power of two&quot;</span>);
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">push</span><span class="hljs-params">(<span class="hljs-type">const</span> T&amp; v)</span> </span>{
+        <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> h = head_.<span class="hljs-built_in">load</span>(std::memory_order_relaxed);  <span class="hljs-comment">// only we write head_</span>
+        <span class="hljs-keyword">if</span> (h - tail_cache_ == N) {
+            tail_cache_ = tail_.<span class="hljs-built_in">load</span>(std::memory_order_acquire);       <span class="hljs-comment">// slot reads are done</span>
+            <span class="hljs-keyword">if</span> (h - tail_cache_ == N) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        }
+        buf_[h &amp; (N - <span class="hljs-number">1</span>)] = v;
+        head_.<span class="hljs-built_in">store</span>(h + <span class="hljs-number">1</span>, std::memory_order_release);                 <span class="hljs-comment">// publish the slot</span>
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">pop</span><span class="hljs-params">(T&amp; out)</span> </span>{
+        <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> t = tail_.<span class="hljs-built_in">load</span>(std::memory_order_relaxed);  <span class="hljs-comment">// only we write tail_</span>
+        <span class="hljs-keyword">if</span> (t == head_cache_) {
+            head_cache_ = head_.<span class="hljs-built_in">load</span>(std::memory_order_acquire);       <span class="hljs-comment">// see the slot contents</span>
+            <span class="hljs-keyword">if</span> (t == head_cache_) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        }
+        out = buf_[t &amp; (N - <span class="hljs-number">1</span>)];
+        tail_.<span class="hljs-built_in">store</span>(t + <span class="hljs-number">1</span>, std::memory_order_release);                 <span class="hljs-comment">// hand the slot back</span>
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">64</span>) std::atomic&lt;std::<span class="hljs-type">size_t</span>&gt; head_{<span class="hljs-number">0</span>};  <span class="hljs-comment">// producer line</span>
+    std::<span class="hljs-type">size_t</span> tail_cache_ = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">64</span>) std::atomic&lt;std::<span class="hljs-type">size_t</span>&gt; tail_{<span class="hljs-number">0</span>};  <span class="hljs-comment">// consumer line</span>
+    std::<span class="hljs-type">size_t</span> head_cache_ = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">64</span>) std::array&lt;T, N&gt; buf_{};
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">constexpr</span> <span class="hljs-type">long</span> items = <span class="hljs-number">100000</span>;
+    <span class="hljs-keyword">auto</span> ring = std::make_unique&lt;SpscRing&lt;<span class="hljs-type">long</span>, <span class="hljs-number">1024</span>&gt;&gt;();
+    <span class="hljs-function">std::thread <span class="hljs-title">producer</span><span class="hljs-params">([&amp;] {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">long</span> i = <span class="hljs-number">1</span>; i &lt;= items; ++i)
+            <span class="hljs-keyword">while</span> (!ring-&gt;push(i)) {}
+    })</span></span>;
+    <span class="hljs-type">long</span> <span class="hljs-type">long</span> sum = <span class="hljs-number">0</span>;
+    <span class="hljs-type">long</span> expected = <span class="hljs-number">1</span>;
+    <span class="hljs-type">bool</span> in_order = <span class="hljs-literal">true</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">long</span> got = <span class="hljs-number">0</span>; got &lt; items;) {
+        <span class="hljs-type">long</span> v;
+        <span class="hljs-keyword">if</span> (!ring-&gt;<span class="hljs-built_in">pop</span>(v)) <span class="hljs-keyword">continue</span>;
+        in_order = in_order &amp;&amp; v == expected++;
+        sum += v;
+        ++got;
+    }
+    producer.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;received=%ld sum=%lld in_order=%d\n&quot;</span>, items, sum, in_order);
+}</code></pre>
+<pre class="out" data-out="ch26-spsc">received=100000 sum=5000050000 in_order=1</pre>
+      <figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="SPSC ring: producer line holds head and tail cache, consumer line holds tail and head cache, slots between tail and head are full">
+        <defs><marker id="ch30-c26b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+        <rect x="20" y="24" width="300" height="40" class="d-acc"/><text x="170" y="42" text-anchor="middle" class="t-small t-bold">cache line 0: producer</text><text x="170" y="57" text-anchor="middle" class="t-small t-mono">head_ · tail_cache_</text>
+        <rect x="400" y="24" width="300" height="40" class="d-key"/><text x="550" y="42" text-anchor="middle" class="t-small t-bold">cache line 1: consumer</text><text x="550" y="57" text-anchor="middle" class="t-small t-mono">tail_ · head_cache_</text>
+        <rect x="60" y="110" width="75" height="40" class="d-soft"/>
+        <rect x="135" y="110" width="75" height="40" class="d-key"/><text x="172" y="135" text-anchor="middle" class="t-small t-mono">5</text>
+        <rect x="210" y="110" width="75" height="40" class="d-key"/><text x="247" y="135" text-anchor="middle" class="t-small t-mono">6</text>
+        <rect x="285" y="110" width="75" height="40" class="d-key"/><text x="322" y="135" text-anchor="middle" class="t-small t-mono">7</text>
+        <rect x="360" y="110" width="75" height="40" class="d-soft"/>
+        <rect x="435" y="110" width="75" height="40" class="d-soft"/>
+        <rect x="510" y="110" width="75" height="40" class="d-soft"/>
+        <rect x="585" y="110" width="75" height="40" class="d-soft"/>
+        <text x="60" y="102" class="t-small t-muted">buf_ (N = 8 shown)</text>
+        <line x1="172" y1="190" x2="172" y2="154" class="d-line-key" marker-end="url(#ch26-c26b)"/><text x="172" y="206" text-anchor="middle" class="t-small t-key">tail: next pop</text>
+        <line x1="397" y1="190" x2="397" y2="154" class="d-line-acc" marker-end="url(#ch26-c26b)"/><text x="397" y="206" text-anchor="middle" class="t-small t-acc">head: next push</text>
+        <text x="20" y="224" class="t-small t-muted">Full slots are [tail, head). push writes a slot, then release-stores head; pop acquire-loads head, reads, then release-stores tail.</text>
+      </svg></div><figcaption><b>Each side owns one cache line.</b> The producer writes only line 0 and the slots, the consumer writes only line 1. The other side's index is read only when the private cached copy says the ring looks full or empty, so in steady state each operation touches no shared line except the slot itself.</figcaption></figure>
+      <p><b>Complexity and pitfalls.</b> O(1) per operation and wait-free for each side (a failed push or pop returns at once). Pitfalls: relaxed publication (the previous bug), using <code>%</code> with a non-power-of-two <code>N</code> together with free-running indices (correct only if <code>N</code> divides the index range, so a power of two), leaving one slot empty to tell full from empty (wasteful when indices are free-running), putting <code>head_</code> and <code>tail_</code> on one cache line, and calling <code>push</code> from two threads (two producers need a CAS on <code>head</code>, which is a different, MPSC design). A 64-byte-aligned object on the heap needs C++17 aligned <code>new</code>, which <code>make_unique</code> uses. Real HFT queues also pad <code>T</code> to a cache line or batch the index stores, and some replace the index check with a per-slot sequence number so the consumer reads only the slot's own line.</p>
+      <p class="rating">Estimated rating: ~1900 · short code, but every memory order and the cache layout must be justified under questioning.</p>
+    </div></details>
+  </div>
+</section>

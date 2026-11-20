@@ -1,0 +1,1477 @@
+---
+title: Arena allocation
+part: Part C · Memory management
+lede: An arena hands out memory by moving a pointer forward and frees everything at once by moving it back. It is the fastest allocator there is, and it works whenever a group of objects shares one lifetime: a request, a frame, a parse. This chapter covers the bump pointer and its alignment arithmetic, the lifetime discipline arenas demand, destructors, `std::pmr::monotonic_buffer_resource`, growing and scratch arenas, and the bugs that come with them.
+desc: Bump pointers, bulk free, monotonic_buffer_resource, lifetimes
+hours: 4
+prereqs: [Ch 12](#ch12), [Ch 13](#ch13)
+---
+<section id="ch15-bump" data-roles="th"><div class="sec-head"><h2>Bump-pointer arenas</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> An arena (also called a region, a linear allocator or a bump allocator) owns one large buffer and an offset into it. Everything before the offset is in use, everything after is free. To allocate <code>n</code> bytes, round the offset up to the required alignment, return that address, and add <code>n</code>. There is no per-object bookkeeping and no way to free one object: the whole arena is freed, or reset, at once.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 210" role="img" aria-label="A bump-pointer arena: used region, alignment padding, the bump pointer and the free tail">
+<defs><marker id="ch15-c17a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="30" y="30" class="t-small t-muted">one buffer, capacity 256 bytes</text>
+<rect x="30" y="60" width="90" height="50" class="d-acc"/><text x="75" y="82" text-anchor="middle" class="t-small">Token</text><text x="75" y="98" text-anchor="middle" class="t-mono t-small t-muted">0..23</text>
+<rect x="120" y="60" width="30" height="50" class="d-trap"/><text x="135" y="90" text-anchor="middle" class="t-mono t-small">pad</text>
+<rect x="150" y="60" width="120" height="50" class="d-acc"/><text x="210" y="82" text-anchor="middle" class="t-small">Node (align 16)</text><text x="210" y="98" text-anchor="middle" class="t-mono t-small t-muted">32..63</text>
+<rect x="270" y="60" width="60" height="50" class="d-acc"/><text x="300" y="82" text-anchor="middle" class="t-small">name</text><text x="300" y="98" text-anchor="middle" class="t-mono t-small t-muted">64..76</text>
+<rect x="330" y="60" width="360" height="50" class="d-soft"/><text x="510" y="90" text-anchor="middle" class="t-small">free</text>
+<line x1="330" y1="40" x2="330" y2="128" class="d-line-key"/>
+<text x="330" y="148" text-anchor="middle" class="t-mono t-small t-key">offset = 77</text>
+<path d="M330,170 L420,170" class="d-line-key" marker-end="url(#ch17-c17a)"/>
+<text x="430" y="174" class="t-small">allocate(n, a): offset = round_up(offset, a) + n</text>
+<text x="30" y="196" class="t-small t-muted">reset(): offset = 0. Every object is gone at once; no per-object free exists.</text>
+<text x="30" y="128" class="t-small t-trap">8 bytes of padding so the Node starts at a multiple of 16</text>
+</svg></div><figcaption><b>Allocation is pointer arithmetic.</b> The only state is the buffer and an offset. Padding appears where a request needs stricter alignment than the current offset provides.</figcaption></figure>
+
+<pre data-run="ch17-bump" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    std::byte* base_;
+    std::<span class="hljs-type">size_t</span> cap_, offset_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Arena</span>(std::byte* buf, std::<span class="hljs-type">size_t</span> cap) : <span class="hljs-built_in">base_</span>(buf), <span class="hljs-built_in">cap_</span>(cap) {}
+
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> align)</span> </span>{
+        <span class="hljs-keyword">auto</span> addr = <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(base_) + offset_;
+        <span class="hljs-keyword">auto</span> aligned = (addr + align - <span class="hljs-number">1</span>) &amp; ~(std::<span class="hljs-type">uintptr_t</span>{align} - <span class="hljs-number">1</span>);   <span class="hljs-comment">// align must be a power of two</span>
+        std::<span class="hljs-type">size_t</span> start = aligned - <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(base_);
+        <span class="hljs-keyword">if</span> (start + n &gt; cap_) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        offset_ = start + n;
+        <span class="hljs-keyword">return</span> base_ + start;
+    }
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... A&gt; <span class="hljs-function">T* <span class="hljs-title">create</span><span class="hljs-params">(A&amp;&amp;... a)</span> </span>{
+        <span class="hljs-built_in">static_assert</span>(std::is_trivially_destructible_v&lt;T&gt;, <span class="hljs-string">&quot;the arena never runs destructors&quot;</span>);
+        <span class="hljs-keyword">return</span> ::<span class="hljs-built_in">new</span> (<span class="hljs-built_in">allocate</span>(<span class="hljs-built_in">sizeof</span>(T), <span class="hljs-built_in">alignof</span>(T))) T{<span class="hljs-built_in">static_cast</span>&lt;A&amp;&amp;&gt;(a)...};
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{ offset_ = <span class="hljs-number">0</span>; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">used</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> offset_; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Token</span> { <span class="hljs-type">int</span> kind; <span class="hljs-type">int</span> line; <span class="hljs-type">char</span> text[<span class="hljs-number">16</span>]; };          <span class="hljs-comment">// 24 bytes, align 4</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">alignas</span>(<span class="hljs-number">16</span>) Node { Node* lhs; Node* rhs; <span class="hljs-type">int</span> op; };    <span class="hljs-comment">// 32 bytes, align 16</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">16</span>) std::byte buffer[<span class="hljs-number">256</span>];
+    <span class="hljs-function">Arena <span class="hljs-title">arena</span><span class="hljs-params">(buffer, <span class="hljs-keyword">sizeof</span> buffer)</span></span>;
+    arena.<span class="hljs-built_in">create</span>&lt;Token&gt;(<span class="hljs-number">1</span>, <span class="hljs-number">10</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after Token: %zu\n&quot;</span>, arena.<span class="hljs-built_in">used</span>());
+    Node* n = arena.<span class="hljs-built_in">create</span>&lt;Node&gt;(<span class="hljs-literal">nullptr</span>, <span class="hljs-literal">nullptr</span>, <span class="hljs-string">&#x27;+&#x27;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;Node at offset %td, after Node: %zu\n&quot;</span>, <span class="hljs-built_in">reinterpret_cast</span>&lt;std::byte*&gt;(n) - buffer, arena.<span class="hljs-built_in">used</span>());
+    arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-number">13</span>, <span class="hljs-number">1</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after 13 chars: %zu\n&quot;</span>, arena.<span class="hljs-built_in">used</span>());
+    arena.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after reset: %zu\n&quot;</span>, arena.<span class="hljs-built_in">used</span>());
+}</code></pre>
+<pre class="out" data-out="ch17-bump">after Token: 24
+Node at offset 32, after Node: 64
+after 13 chars: 77
+after reset: 0</pre>
+<p>Why this is fast: an allocation is an add, a mask, a compare and a store, all in registers, and the next allocation lands right after the previous one, so consecutive objects share cache lines and pages. There is no header before each object, so a 13-byte string costs 13 bytes, not 32.</p>
+</section>
+
+<section id="ch15-align" data-roles="th"><div class="sec-head"><h2>Alignment rounding arithmetic</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>For a power-of-two alignment <code>a</code>, the next multiple of <code>a</code> at or above <code>x</code> is</p>
+<p class="formula"><code>round_up(x, a) = (x + a - 1) &amp; ~(a - 1)</code></p>
+<p>Adding <code>a - 1</code> pushes <code>x</code> past the next boundary unless it is already on one, and the mask clears the low bits. For <code>x = 24</code>, <code>a = 16</code>: <code>24 + 15 = 39 = 0b100111</code>, masked with <code>~0b1111</code> gives <code>32</code>. For <code>x = 32</code> it gives <code>32</code> again. The padding is <code>round_up(x, a) - x</code>, which is at most <code>a - 1</code>.</p>
+<ul>
+  <li><b>Align the address, not the offset.</b> Rounding the offset only works if the buffer's base is itself aligned to the strictest alignment you serve. A <code>char buf[1024]</code> on the stack, or a sub-range of another buffer, may start at an odd address. The arena above adds the base before rounding, which is always correct. The reading section has the bug where it does not.</li>
+  <li><b>Check the alignment is a power of two</b> (<code>std::has_single_bit(a)</code>). The mask trick gives garbage for 12 or 24. All alignments the language produces (<code>alignof</code>) are powers of two.</li>
+  <li><b>Check for overflow</b> before adding: <code>start + n &gt; cap</code> can wrap for a huge <code>n</code>. A robust check is <code>n &gt; cap - start</code> after verifying <code>start &lt;= cap</code>.</li>
+  <li><b><code>std::align(alignment, size, ptr, space)</code></b> in <code>&lt;memory&gt;</code> does the same job: it adjusts <code>ptr</code> and <code>space</code> and returns null if the request does not fit.</li>
+</ul>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>Be ready to derive <code>(x + a - 1) &amp; ~(a - 1)</code> on a whiteboard, explain why it needs a power of two, and compute a few cases. Interviewers at trading firms often ask for it directly, then ask what goes wrong if the arena's base buffer is not aligned.</p></div>
+</section>
+
+<section id="ch15-bulk-free" data-roles="th"><div class="sec-head"><h2>Bulk free, reset, and why individual free is a no-op</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>An arena has no record of where one object ends and the next begins, and no free list. That is exactly why it is fast, and it means freeing a single object cannot be done in general: the hole in the middle could not be found again. So an arena's <code>deallocate</code> does nothing, and memory comes back only in bulk:</p>
+<ul>
+  <li><b>Reset</b> sets the offset back to zero. The buffer is kept and reused, so a per-frame or per-request arena reaches a steady state with no allocation at all.</li>
+  <li><b>Destroying the arena</b> returns its buffers to wherever they came from.</li>
+  <li><b>Rewinding to a mark</b> frees everything allocated after the mark (see <a href="#ch15-scratch">scratch arenas</a>).</li>
+</ul>
+<p>One optimisation is common: if the object being freed is the <em>last</em> one allocated, the arena can move the offset back by its size (an "undo last" free). It helps temporaries that are freed in reverse order of allocation, such as a buffer allocated and released inside one function. It does not help <code>std::vector</code> growth, because the vector allocates its new buffer before it frees the old one, so the old one is never on top. <code>std::pmr::monotonic_buffer_resource</code> does not do this; its <code>deallocate</code> is specified to have no effect.</p>
+<p>The cost model follows: allocation is O(1), free is free, reset is O(1) (or O(number of chained blocks) if extra blocks are released). Memory use is the <b>sum of everything allocated since the last reset</b>, live or dead. An arena is the wrong tool when objects die at different times and the total over the arena's life is much bigger than what is live at any moment.</p>
+</section>
+
+<section id="ch15-lifetimes" data-roles="th"><div class="sec-head"><h2>The lifetime discipline</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>An arena is safe when one rule holds: <b>every object in the arena dies at or before the reset, and nothing outside the arena keeps a pointer into it past that point.</b> Arena-friendly designs make that rule structural by tying each arena to a unit of work.</p>
+<ul>
+  <li><b>Per-request arenas.</b> A server creates (or takes from a pool) an arena when a request arrives, puts the parsed request, temporary strings and the response in it, and resets it when the response is sent. Apache's APR pools and nginx's <code>ngx_pool_t</code> work like this. Nothing in the request may be stored in a cache that outlives it, unless it is copied out.</li>
+  <li><b>Per-frame arenas.</b> A game allocates the frame's temporary data (visible object lists, draw commands, particle updates) from a frame arena and resets it at the start of the next frame. With <b>double buffering</b>, two arenas alternate, so data from the previous frame (for example for the renderer running one frame behind) stays valid for one extra frame.</li>
+  <li><b>Per-parse arenas.</b> A parser allocates tokens and the AST in one arena; the AST lives until compilation finishes, then the whole tree is dropped in one step instead of walking it to delete each node.</li>
+</ul>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 200" role="img" aria-label="Per-frame arenas: double buffering keeps the previous frame's data alive for one more frame">
+<line x1="40" y1="40" x2="700" y2="40" class="d-grid"/>
+<text x="40" y="30" class="t-small t-muted">time →</text>
+<text x="100" y="58" text-anchor="middle" class="t-small t-bold">frame 1</text>
+<text x="260" y="58" text-anchor="middle" class="t-small t-bold">frame 2</text>
+<text x="420" y="58" text-anchor="middle" class="t-small t-bold">frame 3</text>
+<text x="580" y="58" text-anchor="middle" class="t-small t-bold">frame 4</text>
+<text x="20" y="96" class="t-mono t-small">A</text>
+<text x="20" y="146" class="t-mono t-small">B</text>
+<rect x="40" y="76" width="140" height="32" rx="4" class="d-acc"/><text x="110" y="96" text-anchor="middle" class="t-small">game writes</text>
+<rect x="200" y="76" width="140" height="32" rx="4" class="d-soft"/><text x="270" y="96" text-anchor="middle" class="t-small">renderer reads</text>
+<rect x="360" y="76" width="140" height="32" rx="4" class="d-acc"/><text x="430" y="96" text-anchor="middle" class="t-small">reset, game writes</text>
+<rect x="520" y="76" width="140" height="32" rx="4" class="d-soft"/><text x="590" y="96" text-anchor="middle" class="t-small">renderer reads</text>
+<rect x="200" y="126" width="140" height="32" rx="4" class="d-acc"/><text x="270" y="146" text-anchor="middle" class="t-small">game writes</text>
+<rect x="360" y="126" width="140" height="32" rx="4" class="d-soft"/><text x="430" y="146" text-anchor="middle" class="t-small">renderer reads</text>
+<rect x="520" y="126" width="140" height="32" rx="4" class="d-acc"/><text x="590" y="146" text-anchor="middle" class="t-small">reset, game writes</text>
+<text x="40" y="186" class="t-small t-trap">A pointer into arena A taken in frame 1 is valid through frame 2 and dangles from frame 3.</text>
+</svg></div><figcaption><b>Two frame arenas alternate.</b> Each one is reset only after the consumer one frame behind has finished with it, so the lifetime rule is "valid for two frames" and is enforced by the schedule, not by bookkeeping.</figcaption></figure>
+
+<h3 id="ch15-compilers">Compilers and parsers as typical users</h3>
+<p>Compilers are the textbook arena users. An abstract syntax tree has millions of small nodes (expressions, declarations, types) that are created during parsing, linked by raw pointers in every direction, and all freed when the translation unit is done. Per-node <code>delete</code> would need a tree walk and an ownership structure for a graph that is not a tree. Clang allocates its AST from <code>ASTContext</code>, which uses LLVM's <code>BumpPtrAllocator</code>, and many AST node destructors are never run. Protocol Buffers offers <code>google::protobuf::Arena</code> for messages parsed per request. JSON parsers such as simdjson's DOM and RapidJSON's <code>MemoryPoolAllocator</code> use arenas for the same reason: the parse result is one unit with one lifetime.</p>
+</section>
+
+<section id="ch15-destructors" data-roles="th"><div class="sec-head"><h2>Destructors in an arena</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Resetting an arena reuses its bytes without running any destructor. Two policies keep that sound.</p>
+<h3 id="ch15-trivial-only">Policy 1: trivially destructible types only</h3>
+<p>Restrict the arena to types where skipping the destructor changes nothing: <code>static_assert(std::is_trivially_destructible_v&lt;T&gt;)</code> in <code>create</code>, as in the arena above. AST nodes and tokens are designed this way on purpose: they hold raw pointers into the same arena and string views of the source, never owning containers. The standard allows reusing storage without calling a destructor ([basic.life]/5), and for a trivially destructible type there is nothing to call anyway.</p>
+<h3 id="ch15-dtor-list">Policy 2: a destructor list</h3>
+<p>To allow types like <code>std::string</code>, the arena keeps a singly linked list of "finalisers": for every non-trivially-destructible object it allocates a small record (a pointer to the object, a function pointer that destroys it, and the link) from the arena itself. Reset walks the list and calls each destructor, newest first, then rewinds. Trivially destructible types skip the record, so they still cost nothing.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Finalizer</span> { <span class="hljs-built_in">void</span> (*destroy)(<span class="hljs-type">void</span>*); <span class="hljs-type">void</span>* object; Finalizer* next; };
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... A&gt;
+<span class="hljs-function">T* <span class="hljs-title">create</span><span class="hljs-params">(A&amp;&amp;... args)</span> </span>{
+    <span class="hljs-type">void</span>* mem = <span class="hljs-built_in">allocate</span>(<span class="hljs-built_in">sizeof</span>(T), <span class="hljs-built_in">alignof</span>(T));
+    T* obj = ::<span class="hljs-built_in">new</span> (mem) <span class="hljs-built_in">T</span>(std::forward&lt;A&gt;(args)...);
+    <span class="hljs-function"><span class="hljs-keyword">if</span> <span class="hljs-title">constexpr</span> <span class="hljs-params">(!std::is_trivially_destructible_v&lt;T&gt;)</span> </span>{
+        <span class="hljs-keyword">auto</span>* f = ::<span class="hljs-built_in">new</span> (<span class="hljs-built_in">allocate</span>(<span class="hljs-built_in">sizeof</span>(Finalizer), <span class="hljs-built_in">alignof</span>(Finalizer)))
+            Finalizer{[](<span class="hljs-type">void</span>* p) { <span class="hljs-built_in">static_cast</span>&lt;T*&gt;(p)-&gt;~<span class="hljs-built_in">T</span>(); }, obj, finalizers_};
+        finalizers_ = f;                               <span class="hljs-comment">// reset() runs them newest first</span>
+    }
+    <span class="hljs-keyword">return</span> obj;
+}</code></pre>
+<p>Order matters in that code: the object is constructed before its finaliser record exists, so if the constructor throws, no record points at a half-built object (the arena bytes are simply wasted until reset). If allocating the record throws, the object is already constructed and must be destroyed before rethrowing; the coding section avoids the problem by reserving the record first. Protobuf's arena and LLVM's <code>SpecificBumpPtrAllocator&lt;T&gt;</code> (which destroys all objects of one type on reset) are real versions of this idea.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>An arena-allocated <code>std::vector&lt;int&gt;</code> or <code>std::string</code> with the default allocator puts only its 24 or 32-byte header in the arena. Its elements are on the global heap, and if the destructor never runs, that heap memory leaks on every reset. Either run destructors (a finaliser list), or give the container an allocator that also uses the arena (a <code>std::pmr</code> container on the arena's memory resource), so its elements vanish with the arena and skipping the destructor is harmless.</p></div>
+</section>
+
+<section id="ch15-monotonic" data-roles="th"><div class="sec-head"><h2>std::pmr::monotonic_buffer_resource</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The standard library's arena is <code>std::pmr::monotonic_buffer_resource</code> (C++17, <code>&lt;memory_resource&gt;</code>). It is a <code>memory_resource</code> (<a href="#ch13">Ch 13</a>), so any pmr container can use it.</p>
+<ul>
+  <li><b>Construction.</b> <code>monotonic_buffer_resource(void* buffer, size_t size, memory_resource* upstream)</code> starts by bumping through <code>buffer</code> (often a stack array). Other constructors take only an initial size hint, or nothing. The upstream defaults to <code>get_default_resource()</code> at construction.</li>
+  <li><b>Growth.</b> When the current buffer is full, it asks the upstream for a new one, each larger than the last by an implementation-defined geometric factor (libstdc++ multiplies by 1.5; libc++ doubles). The initial buffer is never freed by it, because it does not own it.</li>
+  <li><b><code>deallocate</code> has no effect.</b> Memory only grows until <code>release()</code> or the destructor, which return every upstream buffer. After <code>release()</code>, the resource starts over from the initial buffer.</li>
+  <li><b>Not thread safe</b>, not copyable, and it must outlive every container using it.</li>
+  <li><b>Pair it with <code>null_memory_resource()</code></b> as upstream to guarantee that a hot path never touches the heap: if the stack buffer is too small, you get <code>std::bad_alloc</code> in testing instead of a silent heap allocation in production.</li>
+  <li><b>Stack it under a pool.</b> <code>unsynchronized_pool_resource pool(&amp;monotonic)</code> reuses freed blocks within the request while the monotonic resource supplies chunks and frees everything at the end.</li>
+</ul>
+<pre data-run="ch17-mono" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory_resource&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">CountingResource</span> : <span class="hljs-keyword">public</span> std::pmr::memory_resource {
+    std::pmr::memory_resource* up_ = std::pmr::<span class="hljs-built_in">new_delete_resource</span>();
+<span class="hljs-keyword">public</span>:
+    std::<span class="hljs-type">size_t</span> calls = <span class="hljs-number">0</span>, live = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">do_allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> <span class="hljs-keyword">override</span> </span>{ ++calls; live += n; <span class="hljs-keyword">return</span> up_-&gt;<span class="hljs-built_in">allocate</span>(n, a); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">do_deallocate</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> <span class="hljs-keyword">override</span> </span>{ live -= n; up_-&gt;<span class="hljs-built_in">deallocate</span>(p, n, a); }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">do_is_equal</span><span class="hljs-params">(<span class="hljs-type">const</span> memory_resource&amp; o)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-keyword">this</span> == &amp;o; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) std::array&lt;std::byte, 2048&gt; stack_buf;
+    <span class="hljs-keyword">auto</span> inside = [&amp;](<span class="hljs-type">const</span> <span class="hljs-type">void</span>* p) {
+        std::less&lt;<span class="hljs-type">const</span> <span class="hljs-type">void</span>*&gt; lt;
+        <span class="hljs-keyword">return</span> !<span class="hljs-built_in">lt</span>(p, stack_buf.<span class="hljs-built_in">data</span>()) &amp;&amp; <span class="hljs-built_in">lt</span>(p, stack_buf.<span class="hljs-built_in">data</span>() + stack_buf.<span class="hljs-built_in">size</span>());
+    };
+
+    {   <span class="hljs-comment">// 1. a stack buffer with no heap fallback</span>
+        std::<span class="hljs-function">pmr::monotonic_buffer_resource <span class="hljs-title">arena</span><span class="hljs-params">(stack_buf.data(), stack_buf.size(), std::pmr::null_memory_resource())</span></span>;
+        std::<span class="hljs-function">pmr::vector&lt;std::pmr::string&gt; <span class="hljs-title">words</span><span class="hljs-params">(&amp;arena)</span></span>;
+        words.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">4</span>);
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* w : {<span class="hljs-string">&quot;bid&quot;</span>, <span class="hljs-string">&quot;ask&quot;</span>, <span class="hljs-string">&quot;a symbol name long enough to need its own buffer&quot;</span>, <span class="hljs-string">&quot;fill&quot;</span>}) words.<span class="hljs-built_in">emplace_back</span>(w);
+        <span class="hljs-type">bool</span> all_inside = <span class="hljs-literal">true</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; w : words) all_inside = all_inside &amp;&amp; <span class="hljs-built_in">inside</span>(w.<span class="hljs-built_in">data</span>());
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;all strings in the stack buffer: %s\n&quot;</span>, all_inside ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+        <span class="hljs-keyword">try</span> {
+            arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-number">4096</span>);
+        } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) {
+            std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;over the stack buffer: bad_alloc&quot;</span>);
+        }
+    }
+    {   <span class="hljs-comment">// 2. a small initial buffer with a counting upstream</span>
+        CountingResource upstream;
+        std::<span class="hljs-function">pmr::monotonic_buffer_resource <span class="hljs-title">arena</span><span class="hljs-params">(stack_buf.data(), <span class="hljs-number">256</span>, &amp;upstream)</span></span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100</span>; ++i) {
+            <span class="hljs-type">void</span>* p = arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-number">64</span>);
+            arena.<span class="hljs-built_in">deallocate</span>(p, <span class="hljs-number">64</span>);                 <span class="hljs-comment">// no effect</span>
+        }
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;went upstream: %s, bytes held upstream &gt;= 6400: %s\n&quot;</span>,
+                    upstream.calls &gt; <span class="hljs-number">0</span> ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>, upstream.live &gt;= <span class="hljs-number">6400</span> - <span class="hljs-number">256</span> ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+        arena.<span class="hljs-built_in">release</span>();
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after release: %zu bytes held upstream\n&quot;</span>, upstream.live);
+    }
+}</code></pre>
+<pre class="out" data-out="ch17-mono">all strings in the stack buffer: yes
+over the stack buffer: bad_alloc
+went upstream: yes, bytes held upstream &gt;= 6400: yes
+after release: 0 bytes held upstream</pre>
+<p>The second block shows the defining behaviour: 100 allocate/deallocate pairs of 64 bytes consumed about 6.4 KB, because nothing freed was reused. A pool resource would have needed one block.</p>
+</section>
+
+<section id="ch15-growing" data-roles="th"><div class="sec-head"><h2>Growing arenas with chained blocks</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A fixed buffer is ideal when the maximum size is known. Otherwise the arena grows by allocating a new <b>block</b> when the current one is full and linking it to the previous ones, so destruction can free them all. Each new block is usually twice the size of the last, so the number of blocks stays logarithmic in the total size.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 220" role="img" aria-label="A growing arena chains blocks of doubling size and gives oversized requests their own block">
+<defs><marker id="ch15-c17b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="20" y="20" width="120" height="74" rx="5" class="d-box"/>
+<text x="80" y="40" text-anchor="middle" class="t-small t-bold">Arena</text>
+<text x="80" y="58" text-anchor="middle" class="t-mono t-small">head, ptr, end</text>
+<text x="80" y="76" text-anchor="middle" class="t-mono t-small">next_size</text>
+<rect x="180" y="30" width="90" height="40" class="d-acc"/><text x="225" y="54" text-anchor="middle" class="t-small">4 KiB full</text>
+<rect x="300" y="30" width="150" height="40" class="d-acc"/><text x="375" y="54" text-anchor="middle" class="t-small">8 KiB full</text>
+<rect x="480" y="30" width="110" height="40" class="d-acc"/><rect x="590" y="30" width="110" height="40" class="d-soft"/>
+<text x="535" y="54" text-anchor="middle" class="t-small">16 KiB: used</text><text x="645" y="54" text-anchor="middle" class="t-small">free</text>
+<line x1="590" y1="22" x2="590" y2="80" class="d-line-key"/>
+<text x="590" y="96" text-anchor="middle" class="t-mono t-small t-key">ptr</text>
+<text x="700" y="96" text-anchor="end" class="t-mono t-small t-muted">end</text>
+<path d="M480,50 L452,50" class="d-line d-dash" marker-end="url(#ch17-c17b)"/>
+<path d="M300,50 L272,50" class="d-line d-dash" marker-end="url(#ch17-c17b)"/>
+<path d="M140,40 C320,0 520,0 560,28" class="d-line" marker-end="url(#ch17-c17b)"/>
+<text x="350" y="14" class="t-small t-muted">head = newest block (links point to older blocks)</text>
+<rect x="180" y="130" width="260" height="40" class="d-trap"/>
+<text x="310" y="154" text-anchor="middle" class="t-small">dedicated block: one 100 KiB request</text>
+<path d="M140,80 C160,120 160,150 176,150" class="d-line" marker-end="url(#ch17-c17b)"/>
+<text x="460" y="146" class="t-small">Requests bigger than half a block get their own</text>
+<text x="460" y="162" class="t-small">block, so they do not waste the current one.</text>
+<text x="20" y="206" class="t-small t-muted">reset(): free every block except the largest (or the first), set ptr to its start. Pointers into freed blocks now dangle.</text>
+</svg></div><figcaption><b>Chained blocks.</b> Each block is twice the previous one, the newest is current, and oversized requests get a dedicated block. Reset keeps one block so the next cycle starts without an allocation.</figcaption></figure>
+
+<p>Design decisions in a growing arena:</p>
+<ul>
+  <li><b>Where the block header lives.</b> Putting <code>{next, size}</code> at the start of each block costs 16 bytes per block and no separate allocation. The usable region starts after the header.</li>
+  <li><b>Oversized requests.</b> If a request is larger than the next block size, allocate a block of exactly that size (plus header). Some arenas put such blocks behind the current block in the chain so the current block keeps serving small requests.</li>
+  <li><b>What reset keeps.</b> Freeing everything returns memory but makes the next cycle allocate again. Keeping the largest block means the steady state needs one block and no allocation. LLVM's <code>BumpPtrAllocator::Reset</code> keeps the first slab and frees the rest.</li>
+  <li><b>Wasted tail.</b> When a request does not fit, the rest of the current block is abandoned. With doubling blocks this waste is bounded by the request size, and it is part of the trade.</li>
+</ul>
+</section>
+
+<section id="ch15-scratch" data-roles="th"><div class="sec-head"><h2>Scratch arenas and save/restore marks</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A <b>mark</b> is a saved position in the arena: the current block and offset. Rewinding to the mark frees everything allocated since, in O(1), without touching what was allocated before. This turns an arena into a stack-like allocator for temporary work:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Mark</span> { std::<span class="hljs-type">size_t</span> offset; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ScratchScope</span> {                 <span class="hljs-comment">// RAII: rewinds on every exit path</span>
+    Arena&amp; arena_;
+    Arena::Mark mark_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ScratchScope</span><span class="hljs-params">(Arena&amp; a)</span> : arena_(a), mark_(a.mark()) {</span>}
+    ~<span class="hljs-built_in">ScratchScope</span>() { arena_.<span class="hljs-built_in">rewind</span>(mark_); }
+    <span class="hljs-built_in">ScratchScope</span>(<span class="hljs-type">const</span> ScratchScope&amp;) = <span class="hljs-keyword">delete</span>;
+    ScratchScope&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> ScratchScope&amp;) = <span class="hljs-keyword">delete</span>;
+};
+
+<span class="hljs-function">std::string_view <span class="hljs-title">longest_word</span><span class="hljs-params">(Arena&amp; scratch, std::string_view text)</span> </span>{
+    <span class="hljs-function">ScratchScope <span class="hljs-title">scope</span><span class="hljs-params">(scratch)</span></span>;               <span class="hljs-comment">// temporaries below vanish at return</span>
+    <span class="hljs-keyword">auto</span>* words = <span class="hljs-built_in">split_into</span>(scratch, text);   <span class="hljs-comment">// arena-allocated array of views</span>
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">pick_longest</span>(words);                <span class="hljs-comment">// fine: the view points into text, not the arena</span>
+}</code></pre>
+<p>Rules that come with marks:</p>
+<ul>
+  <li><b>Marks nest like a stack.</b> Rewinding to an outer mark invalidates inner marks. Rewinding to an inner mark after the outer one was restored is a bug (it moves the offset forward over freed memory).</li>
+  <li><b>Nothing allocated inside the scope may escape it.</b> Returning a pointer to scratch memory from inside a <code>ScratchScope</code> is a dangling pointer the moment the scope ends. Results must be copied to a longer-lived arena or into the caller's memory.</li>
+  <li><b>Two scratch arenas</b> solve the "result and temporaries in the same arena" problem: a function takes a persistent arena for its result and uses a separate scratch arena for its temporaries. Game engines and some compilers keep a pair of thread-local scratch arenas and pass the "other" one to callees so that callers' and callees' scratch data never collide.</li>
+  <li>In a growing arena, the mark must record the <b>block</b> as well as the offset, and rewinding frees blocks allocated after the mark (or keeps them for reuse).</li>
+</ul>
+</section>
+
+<section id="ch15-compare" data-roles="th"><div class="sec-head"><h2>Arena vs pool vs malloc</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<div class="table-wrap"><table>
+<thead><tr><th>Key facts</th><th>Arena (bump)</th><th>Pool (free list)</th><th>malloc / new</th></tr></thead>
+<tbody>
+<tr><td>Sizes served</td><td>Any size, any alignment</td><td>One size (or a few classes)</td><td>Any</td></tr>
+<tr><td>Allocate</td><td>Bump a pointer: a few instructions</td><td>Pop a list: a few instructions</td><td>Fast path 10 to 30 ns, slow paths much longer</td></tr>
+<tr><td>Free one object</td><td>Not possible (no-op)</td><td>O(1) push</td><td>O(1) typical</td></tr>
+<tr><td>Free everything</td><td>O(1) reset</td><td>Walk or destroy the pool</td><td>One <code>free</code> per object</td></tr>
+<tr><td>Per-object overhead</td><td>Alignment padding only</td><td>Rounding to the block size</td><td>Header or size-class rounding</td></tr>
+<tr><td>Memory reuse</td><td>Only after reset or rewind</td><td>Immediately, per block</td><td>Immediately</td></tr>
+<tr><td>Destructors</td><td>Not run unless a finaliser list exists</td><td>Run by the user before freeing</td><td>Run by <code>delete</code></td></tr>
+<tr><td>Fits when</td><td>Objects share one lifetime (request, frame, parse)</td><td>Many same-size objects with individual lifetimes</td><td>General use, unknown lifetimes</td></tr>
+<tr><td>Fails when</td><td>Lifetimes differ, so dead objects pile up</td><td>Sizes vary widely</td><td>Hot paths needing predictable latency</td></tr>
+<tr><td>Standard version</td><td><code>monotonic_buffer_resource</code></td><td><code>(un)synchronized_pool_resource</code></td><td><code>new_delete_resource</code></td></tr>
+</tbody></table></div>
+
+<h3 id="ch15-arena-bench">Measured</h3>
+<p>The benchmark builds a chain of 100,000 32-byte nodes (an AST-like workload), walks it, and drops it, with malloc per node and free per node, with a pre-sized bump arena and one reset, and with a default-constructed <code>monotonic_buffer_resource</code> and one <code>release()</code>.</p>
+<pre data-run="ch17-bench" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory_resource&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> { Node* left; Node* right; <span class="hljs-type">long</span> key; <span class="hljs-type">long</span> pad; };   <span class="hljs-comment">// 32 bytes, like an AST node</span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    std::byte* buf_;
+    std::<span class="hljs-type">size_t</span> cap_, used_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Arena</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> cap)</span> : buf_(static_cast&lt;std::byte*&gt;(::operator new(cap))), cap_(cap) {</span>}
+    ~<span class="hljs-built_in">Arena</span>() { ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(buf_)</span></span>; }
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> </span>{
+        std::<span class="hljs-type">size_t</span> p = (used_ + a - <span class="hljs-number">1</span>) &amp; ~(a - <span class="hljs-number">1</span>);
+        <span class="hljs-keyword">if</span> (p + n &gt; cap_) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        used_ = p + n;
+        <span class="hljs-keyword">return</span> buf_ + p;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> </span>{ used_ = <span class="hljs-number">0</span>; }
+};
+
+<span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> kNodes = <span class="hljs-number">100000</span>, kReps = <span class="hljs-number">7</span>;
+
+<span class="hljs-comment">// Build a chain of nodes (each points to the previous), sum the keys, then drop everything.</span>
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">Alloc</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">FreeAll</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">double</span> <span class="hljs-title">build</span><span class="hljs-params">(Alloc alloc, FreeAll free_all, <span class="hljs-type">long</span>&amp; sink)</span> </span>{
+    <span class="hljs-keyword">auto</span> t0 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+    Node* prev = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; kNodes; ++i) prev = ::<span class="hljs-built_in">new</span> (<span class="hljs-built_in">alloc</span>()) Node{prev, <span class="hljs-literal">nullptr</span>, i, <span class="hljs-number">0</span>};
+    <span class="hljs-keyword">for</span> (Node* n = prev; n; n = n-&gt;left) sink += n-&gt;key;
+    <span class="hljs-built_in">free_all</span>(prev);
+    <span class="hljs-keyword">auto</span> t1 = std::chrono::steady_clock::<span class="hljs-built_in">now</span>();
+    <span class="hljs-keyword">return</span> std::chrono::<span class="hljs-built_in">duration</span>&lt;<span class="hljs-type">double</span>, std::nano&gt;(t1 - t0).<span class="hljs-built_in">count</span>() / kNodes;
+}
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">double</span> <span class="hljs-title">median_of</span><span class="hljs-params">(F f)</span> </span>{
+    std::vector&lt;<span class="hljs-type">double</span>&gt; v;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> r = <span class="hljs-number">0</span>; r &lt; kReps; ++r) v.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">f</span>());
+    std::<span class="hljs-built_in">sort</span>(v.<span class="hljs-built_in">begin</span>(), v.<span class="hljs-built_in">end</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;    min %.2f  max %.2f ns/node\n&quot;</span>, v.<span class="hljs-built_in">front</span>(), v.<span class="hljs-built_in">back</span>());
+    <span class="hljs-keyword">return</span> v[v.<span class="hljs-built_in">size</span>() / <span class="hljs-number">2</span>];
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">long</span> sink = <span class="hljs-number">0</span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;malloc per node, free each:&quot;</span>);
+    <span class="hljs-type">double</span> m = <span class="hljs-built_in">median_of</span>([&amp;] {
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">build</span>([] { <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">malloc</span>(<span class="hljs-built_in">sizeof</span>(Node)); },
+                     [](Node* n) { <span class="hljs-keyword">while</span> (n) { Node* l = n-&gt;left; std::<span class="hljs-built_in">free</span>(n); n = l; } }, sink);
+    });
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;bump arena, one reset:&quot;</span>);
+    <span class="hljs-function">Arena <span class="hljs-title">arena</span><span class="hljs-params">(kNodes * <span class="hljs-keyword">sizeof</span>(Node))</span></span>;
+    <span class="hljs-type">double</span> a = <span class="hljs-built_in">median_of</span>([&amp;] {
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">build</span>([&amp;] { <span class="hljs-keyword">return</span> arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-built_in">sizeof</span>(Node), <span class="hljs-built_in">alignof</span>(Node)); }, [&amp;](Node*) { arena.<span class="hljs-built_in">reset</span>(); }, sink);
+    });
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;pmr::monotonic_buffer_resource, one release:&quot;</span>);
+    std::pmr::monotonic_buffer_resource mono;
+    <span class="hljs-type">double</span> p = <span class="hljs-built_in">median_of</span>([&amp;] {
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">build</span>([&amp;] { <span class="hljs-keyword">return</span> mono.<span class="hljs-built_in">allocate</span>(<span class="hljs-built_in">sizeof</span>(Node), <span class="hljs-built_in">alignof</span>(Node)); }, [&amp;](Node*) { mono.<span class="hljs-built_in">release</span>(); }, sink);
+    });
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;median ns/node: malloc %.2f, arena %.2f, monotonic %.2f\n&quot;</span>, m, a, p);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;speed-up vs malloc: arena %.1fx, monotonic %.1fx (sink %ld)\n&quot;</span>, m / a, m / p, sink &amp; <span class="hljs-number">1</span>);
+}</code></pre>
+<p>Representative results on an Apple M1 (macOS, <code>-O2</code>, median of 7 repetitions, two runs each). The program is tagged <code>ub</code> because its output is timing.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Allocator</th><th>GCC 16 + libstdc++</th><th>Clang 22 + libc++</th></tr></thead>
+<tbody>
+<tr><td><code>malloc</code> + <code>free</code> per node</td><td>32.2 ns/node (1.0×)</td><td>32.4 ns/node (1.0×)</td></tr>
+<tr><td>Pre-sized bump arena, one reset</td><td>2.9 ns/node (about 11× faster)</td><td>3.4 ns/node (about 9.5× faster)</td></tr>
+<tr><td><code>monotonic_buffer_resource</code>, one release</td><td>7.1 ns/node (about 4.6× faster)</td><td>8.1 ns/node (4.0 to 5.2× faster)</td></tr>
+</tbody></table></div>
+<p>The arena's advantage is bigger here than a pool's was in <a href="#ch13">Ch 13</a> (about 4×), because the arena also deletes the 100,000 <code>free</code> calls and its nodes are contiguous, so the walk streams through memory. The monotonic resource pays for a virtual call per allocation and for re-acquiring its growing buffers from the heap after every <code>release()</code>; giving it an initial buffer of the right size would close most of the gap. Individual runs varied by up to 2× (the max column), so trust medians, not single runs.</p>
+</section>
+
+<section id="ch15-pitfalls" data-roles="th"><div class="sec-head"><h2>Pitfalls</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch15-dangling">Dangling pointers after reset</h3>
+<p>After a reset, every pointer into the arena dangles, but the memory is usually still mapped and owned by the arena, so reads return plausible stale data or a newer object's data. ASan does not see it (the buffer is one live allocation), unless the arena poisons its memory on reset with <code>ASAN_POISON_MEMORY_REGION</code> and unpoisons on allocation. Arenas that free extra blocks on reset turn some of these bugs into detectable heap-use-after-free; the reading section shows both cases.</p>
+<h3 id="ch15-unbounded">Unbounded growth</h3>
+<p>An arena that is never reset is a memory leak with good performance. Typical causes: a per-connection arena on a WebSocket or database connection that lives for hours; a loop that reallocates a growing <code>pmr::vector</code> in a monotonic resource (each regrowth abandons the old buffer, so the arena holds about twice the final size); a "temporary" scratch arena used by a long-running background task. Cap arena size in debug builds and log the high-water mark.</p>
+<h3 id="ch15-mixing">Mixing arena objects with long-lived ones</h3>
+<p>The lifetime rule breaks the moment a long-lived structure points into the arena: a global cache storing a <code>std::string_view</code> of an arena string, a long-lived object holding an arena-allocated child, a callback registered with a pointer to per-request data. The opposite direction also bites: an arena object that owns heap memory (a <code>std::vector</code> with the default allocator) leaks it at reset. Keep a clear boundary: arena objects point only into the same arena or to longer-lived data, and anything that must survive is copied out.</p>
+<h3 id="ch15-align-bugs">Alignment bugs</h3>
+<p>Rounding the offset instead of the address with an unaligned base, a non-power-of-two alignment fed to the mask formula, ignoring <code>alignof(T)</code> for over-aligned types (<code>alignas(64)</code> cache-line-aligned structs, SIMD types), and assuming the arena's buffer from <code>operator new</code> is more than <code>__STDCPP_DEFAULT_NEW_ALIGNMENT__</code>-aligned. x86 tolerates most misaligned scalar accesses, so these bugs often appear only on ARM or with SIMD and under UBSan's alignment check.</p>
+<h3 id="ch15-arena-threads">Threads</h3>
+<p>A bump pointer is a shared mutable offset, so a shared arena needs a lock or an atomic <code>fetch_add</code> on the offset (which works for a fixed buffer but not for growth). The usual design is one arena per thread or per task. Reading arena data from many threads after it is built is fine, provided the hand-over is synchronised.</p>
+</section>
+
+<section id="ch15-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why is an arena faster than <code>malloc</code>, and what does it give up to get there?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Allocation is a round-up, an add and a bounds check on one offset, with no size classes, headers, free lists, locks or system calls, and freeing costs nothing because all objects go together at reset. It gives up individual frees: memory is only reclaimed in bulk, so it suits objects that share one lifetime.</p>
+    <p><b>Why.</b> <code>malloc</code> must support any free order, so it keeps metadata to find, merge and reuse holes. An arena has no holes by design. Consecutive allocations are also adjacent, which improves cache and TLB locality. The measured gap in this chapter was about 10× for an AST-like build-and-drop workload on an Apple M1. Saying only "it avoids system calls" misses the point: malloc's fast path avoids them too.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>An arena's <code>deallocate(p, n)</code> is a no-op. Is there any case where an arena can usefully reclaim a single allocation?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes: if <code>p</code> is the most recent allocation, the arena can move the offset back to <code>p</code> (an "undo last" free). A temporary freed right after use, or a group of temporaries freed in reverse order, then costs nothing. Any other single free cannot be honoured, and that includes the old buffer of a growing <code>std::vector</code>: the vector allocates the new buffer before freeing the old one, so the old one is never the most recent.</p>
+    <p><b>Why.</b> The arena knows only the current offset, so it can recognise "the block that ends exactly at the offset" and nothing else. LLVM's bump allocator and many game-engine linear allocators do this. <code>std::pmr::monotonic_buffer_resource</code> deliberately does not: the standard says its <code>do_deallocate</code> has no effect, so code can rely on the simpler behaviour. A related trick is a mark and rewind, which frees a whole stack-like group of recent allocations.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A <code>monotonic_buffer_resource</code> is built over a 4 KiB stack buffer with the default upstream. Request 1 uses 100 KiB, then the server calls <code>release()</code>; request 2 uses 3 KiB. Where does request 2's memory come from, and does it start with a large upstream buffer because request 1 needed one?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Request 2 is served entirely from the 4 KiB stack buffer, with no upstream call. <code>release()</code> frees every upstream buffer and returns the resource to its state at construction: the current buffer is the user's buffer again, and the size of the next upstream buffer is back to its initial value. So the next large request grows from small buffers again; nothing is remembered from request 1.</p>
+    <p><b>Why.</b> The standard specifies that <code>release()</code> resets <code>current_buffer</code> and <code>next_buffer_size</code> to their initial values ([mem.res.monotonic.buffer.mem]), and the growth factor is implementation-defined. With an initial size of 1000 bytes and a counting upstream, libstdc++ here asked for 1024, 1536, 2304, 3392, 5120 bytes (factor 1.5) and libc++ for 2032, 4032, 8032 (about 2), and both started from the first size again after <code>release()</code>. Wrong answers: "<code>release()</code> frees the stack buffer" (the resource never owned it), and "it keeps the biggest block for next time" (that is what a hand-written arena that keeps blocks on reset does; the standard resource pays to re-acquire them instead). If every request is large, construct the resource with a bigger initial buffer or size hint.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Describe the lifetime discipline that makes a per-frame arena safe in a game engine, and how double buffering changes it.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Everything allocated during frame N is used only during frame N, and nothing outside the arena keeps a pointer to it; the arena is reset at the start of frame N + 1. With two arenas alternating, data from frame N stays valid during frame N + 1 as well (for a renderer or a job system running one frame behind), and its arena is reset at the start of frame N + 2.</p>
+    <p><b>Why.</b> The schedule enforces the lifetime, so no reference counting or per-object frees are needed. The rule is broken by caches and long-lived systems that remember pointers into frame data; anything that must persist (a spawned entity, a loaded asset) has to be allocated from a longer-lived allocator or copied out before the reset.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>You place a <code>std::string</code> in an arena with placement new and never call its destructor. Is that undefined behaviour? What leaks, and what changes if it is a <code>std::pmr::string</code> using the arena?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Not calling the destructor is not undefined by itself: [basic.life]/5 lets a program end an object's lifetime by reusing or releasing its storage. Up to C++20 the same paragraph also said that a program which <em>depends on</em> the destructor's side effects has undefined behaviour; CWG2523 removed that sentence as a defect report against C++23, so now the destructor simply does not run. But a <code>std::string</code> longer than its small-string buffer owns a heap block, and that block leaks on every reset. A <code>std::pmr::string</code> whose resource is the arena allocates its characters from the arena too, so skipping its destructor leaks nothing: the characters vanish with the arena.</p>
+    <p><b>Why.</b> The skipped side effect here is <code>operator delete</code> on the character buffer, which is exactly what the program needs to avoid leaking. Common wrong answers: "it is always UB" (it is not), and "short strings are fine, so all strings are fine" (it depends on the length and the library's SSO capacity, 15 characters in libstdc++ and 22 in libc++ on 64-bit). The robust options are trivially destructible types, a finaliser list, or containers that allocate from the same arena.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What do <code>deallocate</code>, <code>release()</code> and the destructor of <code>std::pmr::monotonic_buffer_resource</code> each do?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>deallocate</code> does nothing. <code>release()</code> returns every buffer obtained from the upstream resource and resets the resource to its initial state (bumping through the user-supplied initial buffer again, if there was one). The destructor calls <code>release()</code>.</p>
+    <p><b>Why.</b> It is a pure arena, specified as such so that its behaviour does not depend on the implementation. The initial buffer is not owned, so it is never freed. Pmr containers still call <code>deallocate</code> (when they grow or are destroyed), which is why their destructors are cheap but not free: they still walk their elements. If the containers live in the arena too, you can skip their destruction entirely and just <code>release()</code>, provided nothing else they own lives elsewhere.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A <code>std::pmr::vector&lt;int&gt;</code> on a <code>monotonic_buffer_resource</code> gets 1,000,000 <code>push_back</code> calls without <code>reserve</code>. Roughly how much memory does the arena hold at the end, and why?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> About 8 MiB, twice what the data needs. With the doubling growth of libstdc++ and libc++, the final capacity is 2<sup>20</sup> ints (4 MiB), and the abandoned buffers of 1, 2, 4, ..., 2<sup>19</sup> ints add up to almost another 4 MiB. With <code>reserve(1'000'000)</code> the arena holds 4 MB.</p>
+    <p><b>Why.</b> Each time the vector grows it allocates a bigger buffer, moves the elements and deallocates the old one, which the monotonic resource ignores. The geometric series of old buffers sums to about the size of the last one. In a pool or malloc the old buffers would be reused; in an arena they are dead weight until <code>release()</code>. The reading section measures it: <code>reserve</code> exactly when the size is known, or build into a scratch structure and copy the final result into the arena once.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why would anyone construct a <code>monotonic_buffer_resource</code> over a stack buffer with <code>std::pmr::null_memory_resource()</code> as upstream?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> To prove that a code path never touches the heap. All allocations come from the stack buffer, and if it ever runs out, the null upstream throws <code>std::bad_alloc</code> instead of silently calling <code>operator new</code>. In a latency-critical path, that turns a hidden heap allocation into a test failure.</p>
+    <p><b>Why.</b> With the default upstream, overflowing the buffer works but is invisible, and the heap allocation it causes is exactly what a trading or audio thread must avoid. The same trick works for the default resource (<code>set_default_resource(null_memory_resource())</code> in tests) to find containers that were not given a resource. The buffer must be big enough for the worst case, and the code must be tested with worst-case input.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When would you choose an arena over a pool, and when a pool over an arena?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Choose an arena when many objects of mixed sizes share one lifetime (a request, a frame, a parse result) and are dropped together. Choose a pool when objects of one size come and go individually over a long period (orders, connections, nodes in a long-lived structure), because a pool reuses each freed block immediately and an arena would grow without bound.</p>
+    <p><b>Why.</b> An arena's memory is the sum of all allocations since reset; a pool's memory is the peak number of live blocks. They also compose: a <code>pmr::unsynchronized_pool_resource</code> on top of a <code>monotonic_buffer_resource</code> reuses blocks within a request (pool) and frees everything at the end (arena).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Two threads allocate from one <code>monotonic_buffer_resource</code>. What goes wrong, and what are the fixes?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The resource is not thread safe: both threads read and update the same current pointer and remaining-space fields without synchronisation, which is a data race (undefined behaviour) and in practice hands out overlapping memory. Fixes: one arena per thread (the usual answer), a mutex around the shared resource, or, for a fixed buffer only, an atomic <code>fetch_add</code> on the offset.</p>
+    <p><b>Why.</b> <code>fetch_add</code> works for a fixed-size buffer (each thread gets a disjoint range, alignment can be handled by over-allocating and rounding), but growing a chained arena needs a lock because installing a new block is a multi-step update. Reading arena-built data from many threads afterwards is fine once its construction happens-before the reads (for example, the builder joins or publishes with a release store).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is a scratch arena with save/restore marks, and why do some codebases keep two scratch arenas per thread?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A scratch arena is a per-thread arena for temporaries. A function records a mark (the current offset), allocates freely, and rewinds to the mark when it returns, usually through an RAII guard, freeing all its temporaries in O(1). Two arenas are kept so that a function can put its <em>result</em> in one and its temporaries in the other: if both were in the same arena, rewinding the temporaries would also free the result allocated after the mark.</p>
+    <p><b>Why.</b> Marks behave like a stack, so they need LIFO discipline. When a function calls another function that also uses scratch memory, passing the "other" arena to the callee guarantees the callee's rewind cannot destroy the caller's live temporaries. This gives stack-like allocation for variable-sized data without <code>alloca</code> (<a href="#ch16">Ch 16</a>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A function opens a <code>ScratchScope</code>, builds a <code>std::string_view</code> into scratch memory, and returns the view. Tests pass. Why is it still a bug, and why do the tests pass?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The scope's destructor rewinds the arena at return, so the view points to freed scratch memory. Tests pass because rewinding does not erase anything: the bytes stay there until the next scratch allocation overwrites them, and a simple test reads the result before anything else allocates.</p>
+    <p><b>Why.</b> It is a use-after-free that no tool sees, since the arena's buffer remains a live allocation. It fails later, when the caller allocates scratch memory before reading the view, and then the "string" contains someone else's data. Fixes: allocate the result in a longer-lived arena passed in by the caller, return an owning <code>std::string</code>, or make the arena poison rewound memory in debug builds (fill with a pattern or use ASan manual poisoning).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why do compilers allocate their AST nodes from arenas?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> An AST has a huge number of small nodes created during parsing, connected by raw pointers in many directions (parents, types, declarations referenced from uses), and all of them are needed until the translation unit is done. An arena makes each allocation a bump, keeps related nodes adjacent in memory, and frees the whole graph in one step without walking it.</p>
+    <p><b>Why.</b> Per-node ownership would need a tree of <code>unique_ptr</code>s (and the AST is a graph, not a tree) or reference counting, and freeing would walk millions of nodes. Clang's <code>ASTContext</code> uses LLVM's <code>BumpPtrAllocator</code> and designs most node types to be trivially destructible or to not need destruction. Many compilers even skip freeing the arena at exit, letting the OS reclaim the memory.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A per-request arena stores parsed headers as <code>std::string_view</code>s into arena memory. A developer adds a global cache of "recently seen user agents" that stores those views. What happens, and how do you fix the design?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> After the request ends and the arena is reset, the cached views dangle. The next request overwrites that memory, so the cache returns other requests' bytes, or garbage. The fix is to copy the data into storage owned by the cache (a <code>std::string</code>, or a separate long-lived arena for interned strings) at the moment it crosses from request lifetime to process lifetime.</p>
+    <p><b>Why.</b> Mixing arena objects with long-lived ones breaks the arena's only safety rule. It is easy to miss because <code>string_view</code> looks like a value. Code review rule of thumb: any pointer, reference or view stored in something that outlives the arena is a bug unless it was copied.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A server resets its request arena after each request, but the process's RSS keeps the peak from a single huge request forever. Why, and what can you do?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Reset only moves the offset; the arena keeps its blocks (often deliberately, to avoid reallocating next time), so one 500 MB request leaves 500 MB of blocks attached to that arena. Options: on reset, free every block beyond a size limit and keep only a modest first block; cap the arena and reject oversized requests; or <code>madvise(MADV_DONTNEED)</code> the pages of a kept block so the kernel drops them while the address range stays reserved.</p>
+    <p><b>Why.</b> "Reset is O(1)" and "reset returns memory" are different properties. Keeping blocks makes the steady state allocation-free, which is the point, but a high-water mark set by an outlier then becomes permanent. <code>monotonic_buffer_resource::release()</code> does free upstream buffers, so it does not have this problem, at the price of re-acquiring them on the next request.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch15-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Each allocation is placed at the next offset that satisfies its alignment. What does this print?</p>
+<pre data-run="ch17-offsets" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    std::byte* base_;
+    std::<span class="hljs-type">size_t</span> cap_, off_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Arena</span>(std::byte* b, std::<span class="hljs-type">size_t</span> c) : <span class="hljs-built_in">base_</span>(b), <span class="hljs-built_in">cap_</span>(c) {}
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">alloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> </span>{   <span class="hljs-comment">// returns the offset, for the drill</span>
+        std::<span class="hljs-type">size_t</span> start = (off_ + a - <span class="hljs-number">1</span>) &amp; ~(a - <span class="hljs-number">1</span>);
+        <span class="hljs-keyword">if</span> (start + n &gt; cap_) <span class="hljs-keyword">return</span> SIZE_MAX;
+        off_ = start + n;
+        <span class="hljs-keyword">return</span> start;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">64</span>) std::byte buf[<span class="hljs-number">128</span>];
+    <span class="hljs-function">Arena <span class="hljs-title">a</span><span class="hljs-params">(buf, <span class="hljs-keyword">sizeof</span> buf)</span></span>;
+    std::<span class="hljs-type">size_t</span> c = a.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">1</span>, <span class="hljs-number">1</span>);
+    std::<span class="hljs-type">size_t</span> d = a.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">8</span>, <span class="hljs-number">8</span>);
+    std::<span class="hljs-type">size_t</span> s = a.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">2</span>, <span class="hljs-number">2</span>);
+    std::<span class="hljs-type">size_t</span> v = a.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">32</span>, <span class="hljs-number">32</span>);
+    std::<span class="hljs-type">size_t</span> big = a.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">64</span>, <span class="hljs-number">16</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;char %zu, double %zu, short %zu, vec %zu, big %s\n&quot;</span>, c, d, s, v, big == SIZE_MAX ? <span class="hljs-string">&quot;does not fit&quot;</span> : <span class="hljs-string">&quot;fits&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch17-offsets">char 0, double 8, short 16, vec 32, big fits</pre>
+    <p><b>Answer.</b> The char takes offset 0. The double needs a multiple of 8, so it starts at 8 (7 bytes of padding) and ends at 16. The short fits at 16. The 32-aligned block skips to 32 and ends at 64. The last request would start at 64 and end at 128, which is exactly the capacity, so it fits.</p>
+    <p><b>Why.</b> Each start is <code>round_up(previous end, alignment)</code>. People often add the padding to the wrong side (after the object) or forget that a request ending exactly at the capacity fits (<code>start + n &gt; cap</code> is the failure test, not <code>&gt;=</code>). The base is declared <code>alignas(64)</code>, so aligning offsets is the same as aligning addresses here; see the bug drill below for when it is not.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A request handler keeps a pointer across a reset. What does it print, and does ASan (the harness runs it under ASan) report it?</p>
+<pre data-run="ch17-stale" data-mode="ub" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    std::byte* buf_ = <span class="hljs-built_in">static_cast</span>&lt;std::byte*&gt;(::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(<span class="hljs-number">4096</span>));
+    std::<span class="hljs-type">size_t</span> off_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    ~<span class="hljs-built_in">Arena</span>() { ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(buf_)</span></span>; }
+    <span class="hljs-function"><span class="hljs-type">char</span>* <span class="hljs-title">copy</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s)</span> </span>{
+        std::<span class="hljs-type">size_t</span> n = std::<span class="hljs-built_in">strlen</span>(s) + <span class="hljs-number">1</span>;
+        <span class="hljs-type">char</span>* p = <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(buf_ + off_);
+        std::<span class="hljs-built_in">memcpy</span>(p, s, n);
+        off_ += n;
+        <span class="hljs-keyword">return</span> p;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> </span>{ off_ = <span class="hljs-number">0</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Arena arena;
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* user = arena.<span class="hljs-built_in">copy</span>(<span class="hljs-string">&quot;alice&quot;</span>);      <span class="hljs-comment">// request 1</span>
+    arena.<span class="hljs-built_in">reset</span>();                                <span class="hljs-comment">// request 1 done</span>
+    arena.<span class="hljs-built_in">copy</span>(<span class="hljs-string">&quot;mallory&quot;</span>);                        <span class="hljs-comment">// request 2</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;audit log: request 1 was made by %s\n&quot;</span>, user);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch17-stale">audit log: request 1 was made by mallory</pre>
+    <p><b>Answer.</b> In practice it logs "mallory": after the reset, request 2's string was copied to offset 0, exactly where <code>user</code> points. ASan reports nothing (the harness confirms a clean run), because the 4 KiB buffer is one live heap allocation.</p>
+    <p><b>Why.</b> Reset invalidates every pointer into the arena, but the bytes stay mapped and owned by the arena, so stale reads see whatever was written next. The program is tagged <code>ub</code> because reading through a pointer to an object whose storage has been reused is undefined. Defences: copy anything that outlives the request out of the arena; in debug builds, poison the arena on reset (fill it with a pattern, or call <code>ASAN_POISON_MEMORY_REGION(buf_, 4096)</code> and unpoison on allocation) so the stale read fails loudly.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This growing arena frees its extra blocks on reset. What does the sanitizer build report?</p>
+<pre data-run="ch17-chained" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">GrowingArena</span> {
+    std::vector&lt;std::byte*&gt; blocks_;
+    std::<span class="hljs-type">size_t</span> block_size_ = <span class="hljs-number">64</span>, off_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">GrowingArena</span>() { blocks_.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">static_cast</span>&lt;std::byte*&gt;(::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(block_size_))); }
+    ~<span class="hljs-built_in">GrowingArena</span>() { <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>* b : blocks_) ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(b)</span></span>; }
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        n = (n + <span class="hljs-number">15</span>) &amp; ~std::<span class="hljs-type">size_t</span>{<span class="hljs-number">15</span>};
+        <span class="hljs-keyword">if</span> (off_ + n &gt; block_size_) {                     <span class="hljs-comment">// new block (requests assumed smaller than a block)</span>
+            blocks_.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">static_cast</span>&lt;std::byte*&gt;(::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(block_size_)));
+            off_ = <span class="hljs-number">0</span>;
+        }
+        <span class="hljs-type">void</span>* p = blocks_.<span class="hljs-built_in">back</span>() + off_;
+        off_ += n;
+        <span class="hljs-keyword">return</span> p;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> </span>{                                        <span class="hljs-comment">// keep only the first block</span>
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">1</span>; i &lt; blocks_.<span class="hljs-built_in">size</span>(); ++i) ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(blocks_[i])</span></span>;
+        blocks_.<span class="hljs-built_in">resize</span>(<span class="hljs-number">1</span>);
+        off_ = <span class="hljs-number">0</span>;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    GrowingArena arena;
+    <span class="hljs-type">int</span>* counters[<span class="hljs-number">6</span>];
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; c : counters) { c = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>*&gt;(arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-number">32</span>)); *c = <span class="hljs-number">1</span>; }
+    arena.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;last counter: %d\n&quot;</span>, *counters[<span class="hljs-number">5</span>]);      <span class="hljs-comment">// lives in the third block</span>
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Six 32-byte allocations fill three 64-byte blocks. Reset frees blocks 2 and 3, so reading <code>*counters[5]</code> touches freed heap memory: ASan reports <code>heap-use-after-free</code> on that read.</p>
+    <p><b>Why.</b> This is the same bug as the previous drill (a pointer kept across reset), but here part of the arena really went back to the heap, so ASan can see it. Pointers into the first, kept block would still be silent. This asymmetry is worth saying in an interview: whether a dangling arena pointer is detectable depends on an implementation detail (which blocks reset keeps), so arena bugs need arena-aware tooling (poisoning on reset), not luck.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>An arena is built on a sub-range of a bigger buffer. The alignment rounding looks correct. What does the sanitizer build report?</p>
+<pre data-run="ch17-unaligned" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    <span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>* base_;
+    std::<span class="hljs-type">size_t</span> cap_, off_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Arena</span>(<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>* b, std::<span class="hljs-type">size_t</span> c) : <span class="hljs-built_in">base_</span>(b), <span class="hljs-built_in">cap_</span>(c) {}
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> </span>{
+        std::<span class="hljs-type">size_t</span> start = (off_ + a - <span class="hljs-number">1</span>) &amp; ~(a - <span class="hljs-number">1</span>);     <span class="hljs-comment">// aligns the offset only</span>
+        <span class="hljs-keyword">if</span> (start + n &gt; cap_) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        off_ = start + n;
+        <span class="hljs-keyword">return</span> base_ + start;
+    }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">alignas</span>(<span class="hljs-number">16</span>) Quote { <span class="hljs-type">double</span> bid, ask; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">16</span>) <span class="hljs-type">static</span> <span class="hljs-type">unsigned</span> <span class="hljs-type">char</span> storage[<span class="hljs-number">1</span> + <span class="hljs-number">1024</span>];
+    storage[<span class="hljs-number">0</span>] = <span class="hljs-number">0x7F</span>;                                       <span class="hljs-comment">// a one-byte message header</span>
+    <span class="hljs-function">Arena <span class="hljs-title">arena</span><span class="hljs-params">(storage + <span class="hljs-number">1</span>, <span class="hljs-number">1024</span>)</span></span>;                          <span class="hljs-comment">// payload area starts after it</span>
+    <span class="hljs-keyword">auto</span>* q = ::<span class="hljs-built_in">new</span> (arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-built_in">sizeof</span>(Quote), <span class="hljs-built_in">alignof</span>(Quote))) Quote{<span class="hljs-number">101.25</span>, <span class="hljs-number">101.5</span>};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%.2f\n&quot;</span>, q-&gt;ask - q-&gt;bid);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The arena's base is <code>storage + 1</code>, an odd address. Offset 0 is "aligned", so the <code>Quote</code> is constructed at an address that is 1 mod 16. UBSan (part of the harness's sanitizer build) reports a misaligned address for type <code>Quote</code>, which requires 16-byte alignment.</p>
+    <p><b>Why.</b> Alignment is a property of the absolute address. Fix: round <code>reinterpret_cast&lt;std::uintptr_t&gt;(base_) + off_</code> and convert back to an offset, as the arena in the theory section does, or align the base once in the constructor. On ARM64 and x86 a misaligned scalar <code>double</code> load usually works (slowly), which hides the bug; aligned SIMD loads (<code>movaps</code>) and atomic operations fault.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>An arena with a destructor list. In what order do the destructors run?</p>
+<pre data-run="ch17-finalizers" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Finalizer</span> { <span class="hljs-built_in">void</span> (*destroy)(<span class="hljs-type">void</span>*); <span class="hljs-type">void</span>* obj; Finalizer* next; };
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) std::byte buf_[<span class="hljs-number">1024</span>];
+    std::<span class="hljs-type">size_t</span> off_ = <span class="hljs-number">0</span>;
+    Finalizer* fin_ = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">raw</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> </span>{
+        std::<span class="hljs-type">size_t</span> s = (off_ + a - <span class="hljs-number">1</span>) &amp; ~(a - <span class="hljs-number">1</span>);
+        off_ = s + n;
+        <span class="hljs-keyword">return</span> buf_ + s;
+    }
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... A&gt; <span class="hljs-function">T* <span class="hljs-title">make</span><span class="hljs-params">(A&amp;&amp;... args)</span> </span>{
+        T* obj = ::<span class="hljs-built_in">new</span> (<span class="hljs-built_in">raw</span>(<span class="hljs-built_in">sizeof</span>(T), <span class="hljs-built_in">alignof</span>(T))) <span class="hljs-built_in">T</span>(std::forward&lt;A&gt;(args)...);
+        <span class="hljs-function"><span class="hljs-keyword">if</span> <span class="hljs-title">constexpr</span> <span class="hljs-params">(!std::is_trivially_destructible_v&lt;T&gt;)</span>
+            fin_ </span>= ::<span class="hljs-keyword">new</span> (<span class="hljs-built_in">raw</span>(<span class="hljs-built_in">sizeof</span>(Finalizer), <span class="hljs-built_in">alignof</span>(Finalizer)))
+                Finalizer{[](<span class="hljs-type">void</span>* p) { <span class="hljs-built_in">static_cast</span>&lt;T*&gt;(p)-&gt;~<span class="hljs-built_in">T</span>(); }, obj, fin_};
+        <span class="hljs-keyword">return</span> obj;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">for</span> (Finalizer* f = fin_; f; f = f-&gt;next) f-&gt;<span class="hljs-built_in">destroy</span>(f-&gt;obj);
+        fin_ = <span class="hljs-literal">nullptr</span>;
+        off_ = <span class="hljs-number">0</span>;
+    }
+    ~<span class="hljs-built_in">Arena</span>() { <span class="hljs-built_in">reset</span>(); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Noisy</span> {
+    std::string name;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Noisy</span><span class="hljs-params">(std::string n)</span> : name(std::move(n)) {</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;make %s\n&quot;</span>, name.<span class="hljs-built_in">c_str</span>()); }
+    ~<span class="hljs-built_in">Noisy</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;drop %s\n&quot;</span>, name.<span class="hljs-built_in">c_str</span>()); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Arena arena;
+    arena.<span class="hljs-built_in">make</span>&lt;Noisy&gt;(<span class="hljs-string">&quot;lexer&quot;</span>);
+    arena.<span class="hljs-built_in">make</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">42</span>);                     <span class="hljs-comment">// trivially destructible: no finalizer</span>
+    arena.<span class="hljs-built_in">make</span>&lt;Noisy&gt;(<span class="hljs-string">&quot;parser&quot;</span>);
+    arena.<span class="hljs-built_in">make</span>&lt;Noisy&gt;(<span class="hljs-string">&quot;ast&quot;</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;reset:&quot;</span>);
+    arena.<span class="hljs-built_in">reset</span>();
+    arena.<span class="hljs-built_in">make</span>&lt;Noisy&gt;(<span class="hljs-string">&quot;next request&quot;</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;end of main&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch17-finalizers">make lexer
+make parser
+make ast
+reset:
+drop ast
+drop parser
+drop lexer
+make next request
+end of main
+drop next request</pre>
+    <p><b>Answer.</b> Each finaliser is pushed on the front of a list, so reset runs them newest first: ast, parser, lexer. The <code>int</code> has no finaliser. The object made after the reset is destroyed by the arena's destructor at the end of <code>main</code>.</p>
+    <p><b>Why.</b> Reverse order of construction matches what C++ does for locals and members, which matters when later objects refer to earlier ones (the parser holds a reference to the lexer). A queue would give construction order, which is usually wrong for exactly that reason.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A parse tree is placed in a trivial arena, and each node owns a <code>std::vector</code> of children. What does this print, and what is the real damage?</p>
+<pre data-run="ch17-leak" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> live_vectors = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Children</span> {
+    std::vector&lt;<span class="hljs-type">void</span>*&gt; items;
+    <span class="hljs-built_in">Children</span>() { ++live_vectors; }
+    ~<span class="hljs-built_in">Children</span>() { --live_vectors; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> { <span class="hljs-type">int</span> kind; Children kids; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) std::byte buf_[<span class="hljs-number">4096</span>];
+    std::<span class="hljs-type">size_t</span> off_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-function">T* <span class="hljs-title">make</span><span class="hljs-params">()</span> </span>{
+        std::<span class="hljs-type">size_t</span> s = (off_ + <span class="hljs-built_in">alignof</span>(T) - <span class="hljs-number">1</span>) &amp; ~(<span class="hljs-built_in">alignof</span>(T) - <span class="hljs-number">1</span>);
+        off_ = s + <span class="hljs-built_in">sizeof</span>(T);
+        <span class="hljs-keyword">return</span> ::<span class="hljs-built_in">new</span> (buf_ + s) T{};
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> </span>{ off_ = <span class="hljs-number">0</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Arena arena;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> request = <span class="hljs-number">0</span>; request &lt; <span class="hljs-number">3</span>; ++request) {
+        Node* root = arena.<span class="hljs-built_in">make</span>&lt;Node&gt;();
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">10</span>; ++i) root-&gt;kids.items.<span class="hljs-built_in">push_back</span>(arena.<span class="hljs-built_in">make</span>&lt;Node&gt;());
+        arena.<span class="hljs-built_in">reset</span>();
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;vectors never destroyed: %d\n&quot;</span>, live_vectors);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch17-leak">vectors never destroyed: 33</pre>
+    <p><b>Answer.</b> 33 node objects were created (11 per request) and none was destroyed, so every <code>Children</code> constructor ran without its destructor. The real damage is the heap buffer of each root's <code>std::vector</code>: it was allocated with the global allocator and is leaked at every reset. (The harness disables LeakSanitizer, so this run is clean; with leak detection on, ASan reports the three buffers.)</p>
+    <p><b>Why.</b> The arena only owns the bytes of the <code>Node</code> objects themselves. Anything a node owns elsewhere must be released by its destructor, which an arena reset does not run. Fixes: make nodes trivially destructible (children as an arena-allocated array plus a count, or an intrusive linked list of siblings), use <code>std::pmr::vector</code> on the arena's resource, or add a finaliser list. A <code>static_assert(std::is_trivially_destructible_v&lt;T&gt;)</code> in <code>make</code> would have rejected this code at compile time.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Marks and rewinds. What does this print?</p>
+<pre data-run="ch17-marks" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Scratch</span> {
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">16</span>) std::byte buf_[<span class="hljs-number">256</span>];
+    std::<span class="hljs-type">size_t</span> off_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Mark</span> { std::<span class="hljs-type">size_t</span> off; };
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">alloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{ std::<span class="hljs-type">size_t</span> s = (off_ + <span class="hljs-number">15</span>) &amp; ~std::<span class="hljs-type">size_t</span>{<span class="hljs-number">15</span>}; off_ = s + n; <span class="hljs-keyword">return</span> buf_ + s; }
+    <span class="hljs-function">Mark <span class="hljs-title">mark</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> {off_}; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">rewind</span><span class="hljs-params">(Mark m)</span> </span>{ off_ = m.off; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">used</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> off_; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Scratch s;
+    <span class="hljs-type">void</span>* keep = s.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">10</span>);
+    <span class="hljs-keyword">auto</span> outer = s.<span class="hljs-built_in">mark</span>();
+    <span class="hljs-type">void</span>* a = s.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">40</span>);
+    <span class="hljs-keyword">auto</span> inner = s.<span class="hljs-built_in">mark</span>();
+    s.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">100</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;used %zu\n&quot;</span>, s.<span class="hljs-built_in">used</span>());
+    s.<span class="hljs-built_in">rewind</span>(inner);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after inner rewind %zu\n&quot;</span>, s.<span class="hljs-built_in">used</span>());
+    s.<span class="hljs-built_in">rewind</span>(outer);
+    <span class="hljs-type">void</span>* b = s.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">24</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after outer rewind and alloc %zu, b reuses a: %s, keep intact: %s\n&quot;</span>,
+                s.<span class="hljs-built_in">used</span>(), b == a ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>, keep != b ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch17-marks">used 164
+after inner rewind 56
+after outer rewind and alloc 40, b reuses a: yes, keep intact: yes</pre>
+    <p><b>Answer.</b> <code>keep</code> occupies 0..10; <code>a</code> starts at 16 and ends at 56; the 100-byte block starts at 64 and ends at 164. Rewinding to <code>inner</code> returns to 56. Rewinding to <code>outer</code> returns to 10, and the next 24-byte allocation starts at 16, the address <code>a</code> had, ending at 40. <code>keep</code> is untouched because it was allocated before the outer mark.</p>
+    <p><b>Why.</b> A mark is just a saved offset, so rewinding is O(1) and frees everything allocated after it, in stack order. Note the alignment: the mark stores the unaligned end (10, 56), and the next allocation re-rounds it. Rewinding to <code>inner</code> after rewinding to <code>outer</code> would have jumped the offset forward to 56, over memory that <code>b</code> now uses, which is the nesting bug.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this not compile? Is the arena right to reject it?</p>
+<pre data-run="ch17-trivial" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) std::byte buf_[<span class="hljs-number">1024</span>];
+    std::<span class="hljs-type">size_t</span> off_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... A&gt; <span class="hljs-function">T* <span class="hljs-title">create</span><span class="hljs-params">(A&amp;&amp;... args)</span> </span>{
+        <span class="hljs-built_in">static_assert</span>(std::is_trivially_destructible_v&lt;T&gt;, <span class="hljs-string">&quot;arena objects are never destroyed&quot;</span>);
+        std::<span class="hljs-type">size_t</span> s = (off_ + <span class="hljs-built_in">alignof</span>(T) - <span class="hljs-number">1</span>) &amp; ~(<span class="hljs-built_in">alignof</span>(T) - <span class="hljs-number">1</span>);
+        off_ = s + <span class="hljs-built_in">sizeof</span>(T);
+        <span class="hljs-keyword">return</span> ::<span class="hljs-built_in">new</span> (buf_ + s) <span class="hljs-built_in">T</span>(std::forward&lt;A&gt;(args)...);
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Arena arena;
+    <span class="hljs-keyword">auto</span>* symbol = arena.<span class="hljs-built_in">create</span>&lt;std::string&gt;(<span class="hljs-string">&quot;a_rather_long_symbol_name_from_the_parser&quot;</span>);
+    (<span class="hljs-type">void</span>)symbol;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>std::string</code> has a non-trivial destructor, so the <code>static_assert</code> fires and both compilers reject the program. The arena is right: it never runs destructors, and this 41-character string owns a heap buffer that would leak on every reset.</p>
+    <p><b>Why.</b> Turning the lifetime rule into a compile-time check is the cheapest arena safety measure there is. Alternatives that compile and are correct: store a <code>std::string_view</code> into arena-copied characters, use <code>std::pmr::string</code> on the arena's memory resource, or give the arena a finaliser list. Note that the check must use <code>is_trivially_destructible</code>, not <code>is_trivial</code>: a type with a non-trivial constructor but a trivial destructor (most AST nodes) is perfectly fine.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A parser function owns its arena and returns the result. What does the sanitizer build report?</p>
+<pre data-run="ch17-escape" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory_resource&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> std::<span class="hljs-function">pmr::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">parse_numbers</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> arena = std::<span class="hljs-built_in">make_unique</span>&lt;std::pmr::monotonic_buffer_resource&gt;();
+    std::<span class="hljs-function">pmr::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">out</span><span class="hljs-params">(arena.get())</span></span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">1</span>; i &lt;= <span class="hljs-number">100</span>; ++i) out.<span class="hljs-built_in">push_back</span>(i * <span class="hljs-number">10</span>);
+    <span class="hljs-keyword">return</span> out;                    <span class="hljs-comment">// arena is destroyed here</span>
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> nums = <span class="hljs-built_in">parse_numbers</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;first %d, last %d\n&quot;</span>, nums.<span class="hljs-built_in">front</span>(), nums.<span class="hljs-built_in">back</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The vector is moved out, but its elements live in buffers owned by the arena, and the arena is destroyed when the function returns. Reading <code>nums.front()</code> is a heap-use-after-free, which ASan reports; later, <code>nums</code>'s destructor would also call <code>deallocate</code> on the destroyed resource.</p>
+    <p><b>Why.</b> A pmr container stores a raw pointer to its memory resource and never owns it. Moving the container moves the pointer, not the resource. The arena must outlive every container that uses it: create it in the caller and pass it in (<code>parse_numbers(std::pmr::memory_resource&amp; arena)</code>), or return a struct that owns both the arena and the data, declared in that order so the data is destroyed first.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>How many bytes does a <code>pmr::vector</code> request from its arena while growing to 1000 ints, with and without <code>reserve</code>?</p>
+<pre data-run="ch17-growth" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory_resource&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Tally</span> : <span class="hljs-keyword">public</span> std::pmr::memory_resource {
+    std::pmr::memory_resource* up_;
+<span class="hljs-keyword">public</span>:
+    std::<span class="hljs-type">size_t</span> requested = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Tally</span><span class="hljs-params">(std::pmr::memory_resource* up)</span> : up_(up) {</span>}
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">do_allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> <span class="hljs-keyword">override</span> </span>{ requested += n; <span class="hljs-keyword">return</span> up_-&gt;<span class="hljs-built_in">allocate</span>(n, a); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">do_deallocate</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> <span class="hljs-keyword">override</span> </span>{ up_-&gt;<span class="hljs-built_in">deallocate</span>(p, n, a); }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">do_is_equal</span><span class="hljs-params">(<span class="hljs-type">const</span> memory_resource&amp; o)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-keyword">this</span> == &amp;o; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::pmr::monotonic_buffer_resource arena;
+    <span class="hljs-function">Tally <span class="hljs-title">grow</span><span class="hljs-params">(&amp;arena)</span>, <span class="hljs-title">reserved</span><span class="hljs-params">(&amp;arena)</span></span>;
+    {
+        std::<span class="hljs-function">pmr::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">v</span><span class="hljs-params">(&amp;grow)</span></span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i) v.<span class="hljs-built_in">push_back</span>(i);
+        std::<span class="hljs-function">pmr::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">w</span><span class="hljs-params">(&amp;reserved)</span></span>;
+        w.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">1000</span>);
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i) w.<span class="hljs-built_in">push_back</span>(i);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;without reserve: %zu bytes, with reserve: %zu bytes\n&quot;</span>, grow.requested, reserved.requested);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch17-growth">without reserve: 8188 bytes, with reserve: 4000 bytes</pre>
+    <p><b>Answer.</b> Without <code>reserve</code>, the vector requests capacities 1, 2, 4, ..., 1024 ints: 2047 ints, 8188 bytes, of which only the last 4096 are in use. With <code>reserve(1000)</code> it requests exactly 4000 bytes once.</p>
+    <p><b>Why.</b> Both libstdc++ and libc++ double the capacity on growth (MSVC uses 1.5), so the abandoned buffers sum to just under the final one. With malloc or a pool those old buffers are reused; in a monotonic arena, <code>deallocate</code> is a no-op and they stay dead until <code>release()</code>. The output is the same for both libraries because both double; a library with a different growth factor would print a different first number.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch15-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a fixed-buffer arena over caller-supplied memory: <code>void* try_allocate(n, align)</code> (null when full), <code>allocate</code> (throws <code>std::bad_alloc</code>), <code>T* create&lt;T&gt;(args...)</code> for trivially destructible types only, <code>T* create_array&lt;T&gt;(count)</code>, <code>reset()</code> and <code>used()</code>. The base may be misaligned, alignments may be up to 4096, and huge sizes must not overflow the bounds check.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Work on absolute addresses: round <code>base + offset</code> up to the alignment, convert back to an offset, then check <code>n &lt;= cap - start</code> (which cannot overflow once <code>start &lt;= cap</code> is known). <code>create</code> enforces trivial destructibility with a <code>static_assert</code>, and <code>create_array</code> checks the multiplication for overflow.</p>
+<pre data-run="ch17-k-fixed" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;bit&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;limits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">FixedArena</span> {
+    std::byte* base_;
+    std::<span class="hljs-type">size_t</span> cap_, off_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">FixedArena</span>(<span class="hljs-type">void</span>* buf, std::<span class="hljs-type">size_t</span> cap) : <span class="hljs-built_in">base_</span>(<span class="hljs-built_in">static_cast</span>&lt;std::byte*&gt;(buf)), <span class="hljs-built_in">cap_</span>(cap) {}
+    <span class="hljs-built_in">FixedArena</span>(<span class="hljs-type">const</span> FixedArena&amp;) = <span class="hljs-keyword">delete</span>;
+    FixedArena&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> FixedArena&amp;) = <span class="hljs-keyword">delete</span>;
+
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">try_allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> align = <span class="hljs-keyword">alignof</span>(std::<span class="hljs-type">max_align_t</span>))</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-keyword">if</span> (!std::<span class="hljs-built_in">has_single_bit</span>(align)) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        <span class="hljs-keyword">auto</span> b = <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(base_);
+        <span class="hljs-keyword">auto</span> aligned = (b + off_ + align - <span class="hljs-number">1</span>) &amp; ~(std::<span class="hljs-type">uintptr_t</span>{align} - <span class="hljs-number">1</span>);
+        std::<span class="hljs-type">size_t</span> start = aligned - b;
+        <span class="hljs-keyword">if</span> (start &gt; cap_ || n &gt; cap_ - start) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        off_ = start + n;
+        <span class="hljs-keyword">return</span> base_ + start;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> align = <span class="hljs-keyword">alignof</span>(std::<span class="hljs-type">max_align_t</span>))</span> </span>{
+        <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = <span class="hljs-built_in">try_allocate</span>(n, align)) <span class="hljs-keyword">return</span> p;
+        <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+    }
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... A&gt; <span class="hljs-function">T* <span class="hljs-title">create</span><span class="hljs-params">(A&amp;&amp;... args)</span> </span>{
+        <span class="hljs-built_in">static_assert</span>(std::is_trivially_destructible_v&lt;T&gt;, <span class="hljs-string">&quot;the arena never runs destructors&quot;</span>);
+        <span class="hljs-keyword">return</span> ::<span class="hljs-built_in">new</span> (<span class="hljs-built_in">allocate</span>(<span class="hljs-built_in">sizeof</span>(T), <span class="hljs-built_in">alignof</span>(T))) T{std::forward&lt;A&gt;(args)...};
+    }
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-function">T* <span class="hljs-title">create_array</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> count)</span> </span>{
+        <span class="hljs-built_in">static_assert</span>(std::is_trivially_destructible_v&lt;T&gt;);
+        <span class="hljs-keyword">if</span> (count &gt; std::numeric_limits&lt;std::<span class="hljs-type">size_t</span>&gt;::<span class="hljs-built_in">max</span>() / <span class="hljs-built_in">sizeof</span>(T)) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        T* p = <span class="hljs-built_in">static_cast</span>&lt;T*&gt;(<span class="hljs-built_in">allocate</span>(<span class="hljs-built_in">sizeof</span>(T) * count, <span class="hljs-built_in">alignof</span>(T)));
+        std::<span class="hljs-built_in">uninitialized_value_construct_n</span>(p, count);
+        <span class="hljs-keyword">return</span> p;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{ off_ = <span class="hljs-number">0</span>; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">used</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> off_; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">alignas</span>(<span class="hljs-number">64</span>) CacheLine { <span class="hljs-type">long</span> counters[<span class="hljs-number">8</span>]; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Token</span> { <span class="hljs-type">int</span> kind; <span class="hljs-type">int</span> start; <span class="hljs-type">int</span> len; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">64</span>) <span class="hljs-type">static</span> std::byte storage[<span class="hljs-number">1</span> + <span class="hljs-number">8192</span>];
+    <span class="hljs-function">FixedArena <span class="hljs-title">arena</span><span class="hljs-params">(storage + <span class="hljs-number">1</span>, <span class="hljs-number">8192</span>)</span></span>;                    <span class="hljs-comment">// deliberately misaligned base</span>
+
+    <span class="hljs-keyword">auto</span>* t = arena.<span class="hljs-built_in">create</span>&lt;Token&gt;(<span class="hljs-number">1</span>, <span class="hljs-number">0</span>, <span class="hljs-number">5</span>);
+    <span class="hljs-keyword">auto</span>* line = arena.<span class="hljs-built_in">create</span>&lt;CacheLine&gt;();
+    <span class="hljs-keyword">auto</span>* page = arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-number">16</span>, <span class="hljs-number">4096</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;token kind %d, cache line aligned: %s, page aligned: %s\n&quot;</span>, t-&gt;kind,
+                <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(line) % <span class="hljs-number">64</span> == <span class="hljs-number">0</span> ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>,
+                <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(page) % <span class="hljs-number">4096</span> == <span class="hljs-number">0</span> ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+
+    <span class="hljs-type">int</span>* zeros = arena.<span class="hljs-built_in">create_array</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">100</span>);
+    <span class="hljs-type">int</span> sum = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100</span>; ++i) sum += zeros[i];
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;array of 100 ints sums to %d\n&quot;</span>, sum);
+
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;huge request: %s\n&quot;</span>, arena.<span class="hljs-built_in">try_allocate</span>(std::numeric_limits&lt;std::<span class="hljs-type">size_t</span>&gt;::<span class="hljs-built_in">max</span>() - <span class="hljs-number">8</span>) ? <span class="hljs-string">&quot;granted&quot;</span> : <span class="hljs-string">&quot;refused&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;bad alignment: %s\n&quot;</span>, arena.<span class="hljs-built_in">try_allocate</span>(<span class="hljs-number">8</span>, <span class="hljs-number">24</span>) ? <span class="hljs-string">&quot;granted&quot;</span> : <span class="hljs-string">&quot;refused&quot;</span>);
+    <span class="hljs-keyword">try</span> { arena.<span class="hljs-built_in">create_array</span>&lt;<span class="hljs-type">double</span>&gt;(std::numeric_limits&lt;std::<span class="hljs-type">size_t</span>&gt;::<span class="hljs-built_in">max</span>() / <span class="hljs-number">4</span>); }
+    <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;overflowing array: bad_alloc&quot;</span>); }
+
+    arena.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;used after reset: %zu\n&quot;</span>, arena.<span class="hljs-built_in">used</span>());
+}</code></pre>
+<pre class="out" data-out="ch17-k-fixed">token kind 1, cache line aligned: yes, page aligned: yes
+array of 100 ints sums to 0
+huge request: refused
+bad alignment: refused
+overflowing array: bad_alloc
+used after reset: 0</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per allocation, plus O(count) to value-initialise arrays. The tests cover each classic bug: the misaligned base (the 64- and 4096-aligned requests would fail with offset-only rounding), the overflow in <code>start + n</code> for a huge <code>n</code>, a non-power-of-two alignment, and the overflow in <code>sizeof(T) * count</code>. The arena does not own its buffer, so destroying it frees nothing; that is the caller's job.</p>
+    <p class="rating">Estimated rating: ~1500 · short, but every line has an alignment or overflow edge case that interviewers probe</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Extend an arena with a destructor list so it accepts any type. <code>make&lt;T&gt;(args...)</code> registers a finaliser only for types that need one; <code>reset()</code> and the destructor run finalisers newest first. The arena must stay consistent if <code>T</code>'s constructor throws or if the arena runs out of space while registering the finaliser.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Reserve the finaliser record <em>before</em> constructing the object, so that the only thing that can fail after construction is nothing. If the constructor throws, rewind the offset to where it was before both allocations, so the arena is exactly as before the call. The record stores a type-erased destroy function (a captureless lambda converted to a function pointer) and the object's address.</p>
+<pre data-run="ch17-k-dtors" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Finalizer</span> { <span class="hljs-built_in">void</span> (*destroy)(<span class="hljs-type">void</span>*); <span class="hljs-type">void</span>* obj; Finalizer* next; };
+    std::byte* buf_;
+    std::<span class="hljs-type">size_t</span> cap_, off_ = <span class="hljs-number">0</span>;
+    Finalizer* fin_ = <span class="hljs-literal">nullptr</span>;
+
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">raw</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> </span>{
+        std::<span class="hljs-type">size_t</span> s = (off_ + a - <span class="hljs-number">1</span>) &amp; ~(a - <span class="hljs-number">1</span>);
+        <span class="hljs-keyword">if</span> (s &gt; cap_ || n &gt; cap_ - s) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        off_ = s + n;
+        <span class="hljs-keyword">return</span> buf_ + s;
+    }
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Arena</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> cap)</span> : buf_(static_cast&lt;std::byte*&gt;(::operator new(cap))), cap_(cap) {</span>}
+    ~<span class="hljs-built_in">Arena</span>() { <span class="hljs-built_in">reset</span>(); ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(buf_)</span></span>; }
+    <span class="hljs-built_in">Arena</span>(<span class="hljs-type">const</span> Arena&amp;) = <span class="hljs-keyword">delete</span>;
+    Arena&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Arena&amp;) = <span class="hljs-keyword">delete</span>;
+
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... A&gt; <span class="hljs-function">T* <span class="hljs-title">make</span><span class="hljs-params">(A&amp;&amp;... args)</span> </span>{
+        <span class="hljs-built_in">static_assert</span>(<span class="hljs-built_in">alignof</span>(T) &lt;= __STDCPP_DEFAULT_NEW_ALIGNMENT__, <span class="hljs-string">&quot;buffer is only new-aligned&quot;</span>);
+        <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> saved = off_;
+        Finalizer* rec = <span class="hljs-literal">nullptr</span>;
+        <span class="hljs-function"><span class="hljs-keyword">if</span> <span class="hljs-title">constexpr</span> <span class="hljs-params">(!std::is_trivially_destructible_v&lt;T&gt;)</span>
+            rec </span>= <span class="hljs-built_in">static_cast</span>&lt;Finalizer*&gt;(<span class="hljs-built_in">raw</span>(<span class="hljs-built_in">sizeof</span>(Finalizer), <span class="hljs-built_in">alignof</span>(Finalizer)));   <span class="hljs-comment">// may throw: nothing to undo</span>
+        <span class="hljs-type">void</span>* mem;
+        <span class="hljs-keyword">try</span> {
+            mem = <span class="hljs-built_in">raw</span>(<span class="hljs-built_in">sizeof</span>(T), <span class="hljs-built_in">alignof</span>(T));
+            T* obj = ::<span class="hljs-built_in">new</span> (mem) <span class="hljs-built_in">T</span>(std::forward&lt;A&gt;(args)...);
+            <span class="hljs-function"><span class="hljs-keyword">if</span> <span class="hljs-title">constexpr</span> <span class="hljs-params">(!std::is_trivially_destructible_v&lt;T&gt;)</span>
+                fin_ </span>= ::<span class="hljs-keyword">new</span> (rec) Finalizer{[](<span class="hljs-type">void</span>* p) { <span class="hljs-built_in">static_cast</span>&lt;T*&gt;(p)-&gt;~<span class="hljs-built_in">T</span>(); }, obj, fin_};
+            <span class="hljs-keyword">return</span> obj;
+        } <span class="hljs-built_in">catch</span> (...) {
+            off_ = saved;                     <span class="hljs-comment">// undo both allocations</span>
+            <span class="hljs-keyword">throw</span>;
+        }
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-keyword">while</span> (fin_) { Finalizer* f = fin_; fin_ = f-&gt;next; f-&gt;<span class="hljs-built_in">destroy</span>(f-&gt;obj); }
+        off_ = <span class="hljs-number">0</span>;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">used</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> off_; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Symbol</span> {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> live = <span class="hljs-number">0</span>;
+    std::string name;
+    std::vector&lt;<span class="hljs-type">int</span>&gt; uses;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Symbol</span><span class="hljs-params">(std::string n, <span class="hljs-type">bool</span> fail = <span class="hljs-literal">false</span>)</span> : name(std::move(n)) {</span>
+        <span class="hljs-keyword">if</span> (fail) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;bad symbol&quot;</span>);
+        ++live;
+    }
+    ~<span class="hljs-built_in">Symbol</span>() { --live; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Arena <span class="hljs-title">arena</span><span class="hljs-params">(<span class="hljs-number">4096</span>)</span></span>;
+    arena.<span class="hljs-built_in">make</span>&lt;Symbol&gt;(<span class="hljs-string">&quot;a_symbol_name_long_enough_for_the_heap&quot;</span>)-&gt;uses.<span class="hljs-built_in">assign</span>(<span class="hljs-number">50</span>, <span class="hljs-number">7</span>);
+    arena.<span class="hljs-built_in">make</span>&lt;<span class="hljs-type">double</span>&gt;(<span class="hljs-number">3.5</span>);
+    arena.<span class="hljs-built_in">make</span>&lt;Symbol&gt;(<span class="hljs-string">&quot;another_long_symbol_name_on_the_heap&quot;</span>);
+    std::<span class="hljs-type">size_t</span> before = arena.<span class="hljs-built_in">used</span>();
+    <span class="hljs-keyword">try</span> { arena.<span class="hljs-built_in">make</span>&lt;Symbol&gt;(<span class="hljs-string">&quot;broken&quot;</span>, <span class="hljs-literal">true</span>); } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;caught: %s\n&quot;</span>, e.<span class="hljs-built_in">what</span>()); }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;live %d, offset restored: %s\n&quot;</span>, Symbol::live, arena.<span class="hljs-built_in">used</span>() == before ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    <span class="hljs-keyword">try</span> { <span class="hljs-keyword">for</span> (;;) arena.<span class="hljs-built_in">make</span>&lt;Symbol&gt;(<span class="hljs-string">&quot;filler&quot;</span>); } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;arena full: bad_alloc&quot;</span>); }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;live before reset: %s\n&quot;</span>, Symbol::live &gt; <span class="hljs-number">2</span> ? <span class="hljs-string">&quot;many&quot;</span> : <span class="hljs-string">&quot;few&quot;</span>);
+    arena.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;live after reset: %d, used %zu\n&quot;</span>, Symbol::live, arena.<span class="hljs-built_in">used</span>());
+}</code></pre>
+<pre class="out" data-out="ch17-k-dtors">caught: bad symbol
+live 2, offset restored: yes
+arena full: bad_alloc
+live before reset: many
+live after reset: 0, used 0</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per <code>make</code>, O(number of non-trivial objects) per reset. ASan runs this clean, which proves the strings' and vectors' heap buffers are freed by the finalisers. Pitfalls: registering the finaliser after construction (if that allocation throws, the constructed object is never destroyed); pushing a finaliser before the constructor succeeds (reset would destroy a half-built object); running finalisers oldest first; and finalisers that throw, which is why <code>reset</code> is <code>noexcept</code> and destructors must not throw. Rewinding on failure is only valid because nothing else allocated in between.</p>
+    <p class="rating">Estimated rating: ~1800 · type erasure with function pointers plus careful exception-safety ordering</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a growing arena that chains blocks: the first block is 1 KiB, each new block doubles, requests larger than half the next block size get a dedicated block, and <code>reset()</code> keeps only the first block. Each block stores its header at its start. Report the number of blocks and the bytes reserved.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Each block begins with <code>{next, size}</code> and the usable area follows, so the arena needs one allocation per block. The arena tracks the current block's bump pointer and end. A request that does not fit allocates either a normal doubled block (which becomes current) or, for large requests, a dedicated block inserted <em>behind</em> the current one so the current block keeps serving small requests.</p>
+<pre data-run="ch17-k-growing" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">GrowingArena</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Block</span> { Block* next; std::<span class="hljs-type">size_t</span> size; };            <span class="hljs-comment">// header; data follows</span>
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kHeader = (<span class="hljs-built_in">sizeof</span>(Block) + <span class="hljs-number">15</span>) &amp; ~std::<span class="hljs-type">size_t</span>{<span class="hljs-number">15</span>};
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kFirst = <span class="hljs-number">1024</span>;
+
+    Block* head_ = <span class="hljs-literal">nullptr</span>;          <span class="hljs-comment">// current block, chain points to older blocks</span>
+    Block* first_ = <span class="hljs-literal">nullptr</span>;         <span class="hljs-comment">// the 1 KiB block that reset() keeps</span>
+    std::byte* ptr_ = <span class="hljs-literal">nullptr</span>;
+    std::byte* end_ = <span class="hljs-literal">nullptr</span>;
+    std::<span class="hljs-type">size_t</span> next_size_ = kFirst;
+
+    <span class="hljs-function"><span class="hljs-type">static</span> Block* <span class="hljs-title">new_block</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> data_size, Block* next)</span> </span>{
+        <span class="hljs-type">void</span>* mem = ::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(kHeader + data_size);
+        <span class="hljs-keyword">return</span> ::<span class="hljs-built_in">new</span> (mem) Block{next, data_size};
+    }
+    <span class="hljs-function"><span class="hljs-type">static</span> std::byte* <span class="hljs-title">data</span><span class="hljs-params">(Block* b)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">reinterpret_cast</span>&lt;std::byte*&gt;(b) + kHeader; }
+    <span class="hljs-function"><span class="hljs-type">static</span> std::byte* <span class="hljs-title">align_up</span><span class="hljs-params">(std::byte* p, std::<span class="hljs-type">size_t</span> a)</span> </span>{
+        <span class="hljs-keyword">auto</span> v = <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(p);
+        <span class="hljs-keyword">return</span> p + (((v + a - <span class="hljs-number">1</span>) &amp; ~(std::<span class="hljs-type">uintptr_t</span>{a} - <span class="hljs-number">1</span>)) - v);
+    }
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">GrowingArena</span>() { first_ = head_ = <span class="hljs-built_in">new_block</span>(kFirst, <span class="hljs-literal">nullptr</span>); ptr_ = <span class="hljs-built_in">data</span>(head_); end_ = ptr_ + kFirst; next_size_ = <span class="hljs-number">2</span> * kFirst; }
+    ~<span class="hljs-built_in">GrowingArena</span>() { <span class="hljs-built_in">release_all</span>(head_); }
+    <span class="hljs-built_in">GrowingArena</span>(<span class="hljs-type">const</span> GrowingArena&amp;) = <span class="hljs-keyword">delete</span>;
+    GrowingArena&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> GrowingArena&amp;) = <span class="hljs-keyword">delete</span>;
+
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> align = <span class="hljs-number">16</span>)</span> </span>{     <span class="hljs-comment">// align &lt;= 16</span>
+        std::byte* p = <span class="hljs-built_in">align_up</span>(ptr_, align);
+        <span class="hljs-keyword">if</span> (p &lt;= end_ &amp;&amp; n &lt;= <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(end_ - p)) { ptr_ = p + n; <span class="hljs-keyword">return</span> p; }
+        <span class="hljs-keyword">if</span> (n &gt; next_size_ / <span class="hljs-number">2</span>) {                                <span class="hljs-comment">// dedicated block behind the current one</span>
+            head_-&gt;next = <span class="hljs-built_in">new_block</span>(n, head_-&gt;next);
+            <span class="hljs-keyword">return</span> <span class="hljs-built_in">data</span>(head_-&gt;next);
+        }
+        head_ = <span class="hljs-built_in">new_block</span>(next_size_, head_);
+        ptr_ = <span class="hljs-built_in">data</span>(head_) + n;
+        end_ = <span class="hljs-built_in">data</span>(head_) + next_size_;
+        next_size_ *= <span class="hljs-number">2</span>;
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">data</span>(head_);
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">for</span> (Block* b = head_; b;) {                             <span class="hljs-comment">// a dedicated block may sit behind first_</span>
+            Block* n = b-&gt;next;
+            <span class="hljs-keyword">if</span> (b != first_) ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(b)</span></span>;
+            b = n;
+        }
+        first_-&gt;next = <span class="hljs-literal">nullptr</span>;
+        head_ = first_;
+        ptr_ = <span class="hljs-built_in">data</span>(first_);
+        end_ = ptr_ + first_-&gt;size;
+        next_size_ = <span class="hljs-number">2</span> * kFirst;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">stats</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* when)</span> <span class="hljs-type">const</span> </span>{
+        std::<span class="hljs-type">size_t</span> blocks = <span class="hljs-number">0</span>, bytes = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (Block* b = head_; b; b = b-&gt;next) { ++blocks; bytes += b-&gt;size; }
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%-14s %zu blocks, %zu bytes reserved\n&quot;</span>, when, blocks, bytes);
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">release_all</span><span class="hljs-params">(Block* b)</span> </span>{ <span class="hljs-keyword">while</span> (b) { Block* n = b-&gt;next; ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(b)</span></span>; b = n; } }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    GrowingArena arena;
+    arena.<span class="hljs-built_in">stats</span>(<span class="hljs-string">&quot;start:&quot;</span>);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100</span>; ++i) <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-number">40</span>))[<span class="hljs-number">0</span>] = <span class="hljs-string">&#x27;x&#x27;</span>;   <span class="hljs-comment">// 4000 bytes in 48-byte steps</span>
+    arena.<span class="hljs-built_in">stats</span>(<span class="hljs-string">&quot;100 x 40 B:&quot;</span>);
+    <span class="hljs-keyword">auto</span>* big = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-number">100000</span>));
+    big[<span class="hljs-number">99999</span>] = <span class="hljs-string">&#x27;y&#x27;</span>;
+    <span class="hljs-type">void</span>* small = arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-number">16</span>);
+    arena.<span class="hljs-built_in">stats</span>(<span class="hljs-string">&quot;after 100 KB:&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;small request still served from the current block: %s\n&quot;</span>, small != <span class="hljs-literal">nullptr</span> ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    arena.<span class="hljs-built_in">reset</span>();
+    arena.<span class="hljs-built_in">stats</span>(<span class="hljs-string">&quot;after reset:&quot;</span>);
+    arena.<span class="hljs-built_in">allocate</span>(<span class="hljs-number">5000</span>);                                       <span class="hljs-comment">// dedicated block behind the first one</span>
+    arena.<span class="hljs-built_in">reset</span>();
+    arena.<span class="hljs-built_in">stats</span>(<span class="hljs-string">&quot;reset again:&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch17-k-growing">start:         1 blocks, 1024 bytes reserved
+100 x 40 B:    3 blocks, 7168 bytes reserved
+after 100 KB:  4 blocks, 107168 bytes reserved
+small request still served from the current block: yes
+after reset:   1 blocks, 1024 bytes reserved
+reset again:   1 blocks, 1024 bytes reserved</pre>
+    <p><b>Complexity and pitfalls.</b> Allocation is O(1) amortised; reset is O(number of blocks). The header is rounded to 16 bytes so that block data stays 16-aligned (the header itself is 16 bytes on 64-bit, so this is free). Pitfalls: a large request that becomes the current block wastes the rest of the previous block and makes the next small request start a new block, which is why it is linked behind; reset must keep the first block, which is not always the tail of the chain (a large request made while the first block is current is linked behind it), so the arena remembers it; and the bounds test compares <code>n</code> with the remaining space rather than computing <code>p + n</code>, which could overflow past the end of the block.</p>
+    <p class="rating">Estimated rating: ~1800 · pointer arithmetic across a linked list of blocks, with a dedicated-block path and a selective reset</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a scratch arena with <code>mark()</code>, <code>rewind(mark)</code> and an RAII <code>ScratchScope</code>. Use it in a recursive function that needs a temporary array at every level (a merge sort), and show that the peak memory stays far below the total requested. In debug builds, rewinding should fill freed memory with a pattern.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A mark is the current offset. The scope saves it in its constructor and rewinds in its destructor, so every exit path, including exceptions, frees the temporaries. Rewinding fills the released range with <code>0xCD</code> so a stale pointer reads garbage at once. A merge sort that takes its merge buffer from the arena at every level shows the effect: the total requested is n log n per sort, but the high-water mark is a single buffer of n elements.</p>
+<pre data-run="ch17-k-scratch" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ScratchArena</span> {
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">16</span>) std::byte buf_[<span class="hljs-number">64</span> * <span class="hljs-number">1024</span>];
+    std::<span class="hljs-type">size_t</span> off_ = <span class="hljs-number">0</span>, high_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Mark</span> { std::<span class="hljs-type">size_t</span> off; };
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        std::<span class="hljs-type">size_t</span> s = (off_ + <span class="hljs-number">15</span>) &amp; ~std::<span class="hljs-type">size_t</span>{<span class="hljs-number">15</span>};
+        <span class="hljs-keyword">if</span> (s &gt; <span class="hljs-keyword">sizeof</span> buf_ || n &gt; <span class="hljs-keyword">sizeof</span> buf_ - s) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        off_ = s + n;
+        high_ = std::<span class="hljs-built_in">max</span>(high_, off_);
+        <span class="hljs-keyword">return</span> buf_ + s;
+    }
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-function">T* <span class="hljs-title">array</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{ <span class="hljs-keyword">return</span> ::<span class="hljs-built_in">new</span> (<span class="hljs-built_in">allocate</span>(n * <span class="hljs-built_in">sizeof</span>(T))) T[n]{}; }
+    <span class="hljs-function">Mark <span class="hljs-title">mark</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> {off_}; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">rewind</span><span class="hljs-params">(Mark m)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-built_in">memset</span>(buf_ + m.off, <span class="hljs-number">0xCD</span>, off_ - m.off);      <span class="hljs-comment">// debug poison</span>
+        off_ = m.off;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">used</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> off_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">high_water</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> high_; }
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ScratchScope</span> {
+    ScratchArena&amp; a_;
+    ScratchArena::Mark m_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ScratchScope</span><span class="hljs-params">(ScratchArena&amp; a)</span> : a_(a), m_(a.mark()) {</span>}
+    ~<span class="hljs-built_in">ScratchScope</span>() { a_.<span class="hljs-built_in">rewind</span>(m_); }
+    <span class="hljs-built_in">ScratchScope</span>(<span class="hljs-type">const</span> ScratchScope&amp;) = <span class="hljs-keyword">delete</span>;
+    ScratchScope&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> ScratchScope&amp;) = <span class="hljs-keyword">delete</span>;
+};
+
+<span class="hljs-comment">// Merge sort that takes its merge buffer from the scratch arena at every level.</span>
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">merge_sort</span><span class="hljs-params">(ScratchArena&amp; s, <span class="hljs-type">int</span>* a, std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span>&amp; total_bytes)</span> </span>{
+    <span class="hljs-keyword">if</span> (n &lt; <span class="hljs-number">2</span>) <span class="hljs-keyword">return</span>;
+    std::<span class="hljs-type">size_t</span> half = n / <span class="hljs-number">2</span>;
+    <span class="hljs-built_in">merge_sort</span>(s, a, half, total_bytes);
+    <span class="hljs-built_in">merge_sort</span>(s, a + half, n - half, total_bytes);
+    <span class="hljs-function">ScratchScope <span class="hljs-title">scope</span><span class="hljs-params">(s)</span></span>;                          <span class="hljs-comment">// the buffer below is freed when this level returns</span>
+    <span class="hljs-type">int</span>* tmp = s.<span class="hljs-built_in">array</span>&lt;<span class="hljs-type">int</span>&gt;(n);
+    total_bytes += n * <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">int</span>);
+    std::<span class="hljs-built_in">merge</span>(a, a + half, a + half, a + n, tmp);
+    std::<span class="hljs-built_in">copy</span>(tmp, tmp + n, a);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    ScratchArena scratch;
+    <span class="hljs-type">int</span> data[<span class="hljs-number">1000</span>];
+    std::<span class="hljs-type">size_t</span> total = <span class="hljs-number">0</span>;
+    <span class="hljs-type">bool</span> sorted = <span class="hljs-literal">true</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> round = <span class="hljs-number">0</span>; round &lt; <span class="hljs-number">100</span>; ++round) {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i) data[i] = (i * <span class="hljs-number">7919</span> + round * <span class="hljs-number">31</span>) % <span class="hljs-number">1000</span>;
+        <span class="hljs-built_in">merge_sort</span>(scratch, data, <span class="hljs-number">1000</span>, total);
+        sorted = sorted &amp;&amp; std::<span class="hljs-built_in">is_sorted</span>(data, data + <span class="hljs-number">1000</span>);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;100 sorts correct: %s\n&quot;</span>, sorted ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;scratch requested in total: %zu bytes\n&quot;</span>, total);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;high-water mark: %zu bytes, used now: %zu\n&quot;</span>, scratch.<span class="hljs-built_in">high_water</span>(), scratch.<span class="hljs-built_in">used</span>());
+
+    <span class="hljs-keyword">auto</span> outer = scratch.<span class="hljs-built_in">mark</span>();
+    <span class="hljs-type">int</span>* stale = scratch.<span class="hljs-built_in">array</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">4</span>);
+    stale[<span class="hljs-number">0</span>] = <span class="hljs-number">42</span>;
+    scratch.<span class="hljs-built_in">rewind</span>(outer);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;stale read after rewind: 0x%X\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span>&gt;(stale[<span class="hljs-number">0</span>]));
+}</code></pre>
+<pre class="out" data-out="ch17-k-scratch">100 sorts correct: yes
+scratch requested in total: 3990400 bytes
+high-water mark: 4000 bytes, used now: 0
+stale read after rewind: 0xCDCDCDCD</pre>
+    <p><b>Complexity and pitfalls.</b> Allocation and rewind are O(1) (the debug fill is O(bytes freed)). 100 sorts of 1000 ints requested almost 4 MB of scratch in total, yet the arena never held more than one 4000-byte buffer: each level opens its scope after its recursive calls have returned and rewound, so buffers never stack up. Opening the scope at the top of the function instead would still be correct but would hold buffers along the whole recursion path. Pitfalls: returning a pointer allocated inside the scope, rewinding marks out of order, and forgetting that the fill is a debugging aid only. The last lines read freed scratch memory on purpose to show the poison; it is safe here only because the bytes are still inside the arena's own buffer and are read as plain integers.</p>
+    <p class="rating">Estimated rating: ~1600 · RAII rewinding plus reasoning about high-water memory in recursion</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a parser for integer expressions with <code>+</code>, <code>*</code>, parentheses and variable names (for example <code>2 * (price + 3) * qty</code>) that builds an AST in a <code>std::pmr::monotonic_buffer_resource</code> over a stack buffer, with <code>null_memory_resource()</code> as upstream so it provably never touches the heap. Variable names are <code>std::pmr::string</code>. Evaluate the AST with a variable table.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A recursive-descent parser (<code>expr := term ('+' term)*</code>, <code>term := factor ('*' factor)*</code>, <code>factor := number | name | '(' expr ')'</code>) creates nodes with <code>std::pmr::polymorphic_allocator&lt;&gt;::new_object</code>, so every node and every name comes from the arena. Nodes are never destroyed individually: the whole tree disappears when the arena does. That is safe because everything a node owns (the name's characters) is in the same arena.</p>
+<pre data-run="ch17-k-parser" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cctype&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory_resource&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+    <span class="hljs-type">char</span> op;                   <span class="hljs-comment">// &#x27;+&#x27;, &#x27;*&#x27;, &#x27;n&#x27; (number) or &#x27;v&#x27; (variable)</span>
+    <span class="hljs-type">long</span> value = <span class="hljs-number">0</span>;
+    std::pmr::string name;
+    Node* lhs = <span class="hljs-literal">nullptr</span>;
+    Node* rhs = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-built_in">Node</span>(<span class="hljs-type">char</span> o, std::pmr::polymorphic_allocator&lt;&gt; a) : <span class="hljs-built_in">op</span>(o), <span class="hljs-built_in">name</span>(a) {}
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Parser</span> {
+    std::string_view src_;
+    std::<span class="hljs-type">size_t</span> pos_ = <span class="hljs-number">0</span>;
+    std::pmr::polymorphic_allocator&lt;&gt; alloc_;
+
+    <span class="hljs-function"><span class="hljs-type">char</span> <span class="hljs-title">peek</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">while</span> (pos_ &lt; src_.<span class="hljs-built_in">size</span>() &amp;&amp; src_[pos_] == <span class="hljs-string">&#x27; &#x27;</span>) ++pos_; <span class="hljs-keyword">return</span> pos_ &lt; src_.<span class="hljs-built_in">size</span>() ? src_[pos_] : <span class="hljs-string">&#x27;\0&#x27;</span>; }
+    <span class="hljs-function">Node* <span class="hljs-title">make</span><span class="hljs-params">(<span class="hljs-type">char</span> op)</span> </span>{ <span class="hljs-keyword">return</span> alloc_.<span class="hljs-built_in">new_object</span>&lt;Node&gt;(op, alloc_); }
+    <span class="hljs-function">Node* <span class="hljs-title">binary</span><span class="hljs-params">(<span class="hljs-type">char</span> op, Node* l, Node* r)</span> </span>{ Node* n = <span class="hljs-built_in">make</span>(op); n-&gt;lhs = l; n-&gt;rhs = r; <span class="hljs-keyword">return</span> n; }
+
+    <span class="hljs-function">Node* <span class="hljs-title">factor</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-type">char</span> c = <span class="hljs-built_in">peek</span>();
+        <span class="hljs-keyword">if</span> (c == <span class="hljs-string">&#x27;(&#x27;</span>) { ++pos_; Node* e = <span class="hljs-built_in">expr</span>(); <span class="hljs-keyword">if</span> (<span class="hljs-built_in">peek</span>() != <span class="hljs-string">&#x27;)&#x27;</span>) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;expected )&quot;</span>); ++pos_; <span class="hljs-keyword">return</span> e; }
+        <span class="hljs-keyword">if</span> (std::<span class="hljs-built_in">isdigit</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(c))) {
+            Node* n = <span class="hljs-built_in">make</span>(<span class="hljs-string">&#x27;n&#x27;</span>);
+            <span class="hljs-keyword">while</span> (pos_ &lt; src_.<span class="hljs-built_in">size</span>() &amp;&amp; std::<span class="hljs-built_in">isdigit</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(src_[pos_]))) n-&gt;value = n-&gt;value * <span class="hljs-number">10</span> + (src_[pos_++] - <span class="hljs-string">&#x27;0&#x27;</span>);
+            <span class="hljs-keyword">return</span> n;
+        }
+        <span class="hljs-keyword">if</span> (std::<span class="hljs-built_in">isalpha</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(c)) || c == <span class="hljs-string">&#x27;_&#x27;</span>) {
+            Node* n = <span class="hljs-built_in">make</span>(<span class="hljs-string">&#x27;v&#x27;</span>);
+            std::<span class="hljs-type">size_t</span> start = pos_;
+            <span class="hljs-keyword">while</span> (pos_ &lt; src_.<span class="hljs-built_in">size</span>() &amp;&amp; (std::<span class="hljs-built_in">isalnum</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(src_[pos_])) || src_[pos_] == <span class="hljs-string">&#x27;_&#x27;</span>)) ++pos_;
+            n-&gt;name.<span class="hljs-built_in">assign</span>(src_.<span class="hljs-built_in">substr</span>(start, pos_ - start));
+            <span class="hljs-keyword">return</span> n;
+        }
+        <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;unexpected character&quot;</span>);
+    }
+    <span class="hljs-function">Node* <span class="hljs-title">term</span><span class="hljs-params">()</span> </span>{ Node* l = <span class="hljs-built_in">factor</span>(); <span class="hljs-keyword">while</span> (<span class="hljs-built_in">peek</span>() == <span class="hljs-string">&#x27;*&#x27;</span>) { ++pos_; l = <span class="hljs-built_in">binary</span>(<span class="hljs-string">&#x27;*&#x27;</span>, l, <span class="hljs-built_in">factor</span>()); } <span class="hljs-keyword">return</span> l; }
+    <span class="hljs-function">Node* <span class="hljs-title">expr</span><span class="hljs-params">()</span> </span>{ Node* l = <span class="hljs-built_in">term</span>(); <span class="hljs-keyword">while</span> (<span class="hljs-built_in">peek</span>() == <span class="hljs-string">&#x27;+&#x27;</span>) { ++pos_; l = <span class="hljs-built_in">binary</span>(<span class="hljs-string">&#x27;+&#x27;</span>, l, <span class="hljs-built_in">term</span>()); } <span class="hljs-keyword">return</span> l; }
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Parser</span>(std::string_view s, std::pmr::memory_resource* r) : <span class="hljs-built_in">src_</span>(s), <span class="hljs-built_in">alloc_</span>(r) {}
+    <span class="hljs-function">Node* <span class="hljs-title">parse</span><span class="hljs-params">()</span> </span>{ Node* e = <span class="hljs-built_in">expr</span>(); <span class="hljs-keyword">if</span> (<span class="hljs-built_in">peek</span>() != <span class="hljs-string">&#x27;\0&#x27;</span>) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;trailing input&quot;</span>); <span class="hljs-keyword">return</span> e; }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">long</span> <span class="hljs-title">eval</span><span class="hljs-params">(<span class="hljs-type">const</span> Node* n, <span class="hljs-type">const</span> std::map&lt;std::string, <span class="hljs-type">long</span>, std::less&lt;&gt;&gt;&amp; vars)</span> </span>{
+    <span class="hljs-keyword">switch</span> (n-&gt;op) {
+        <span class="hljs-keyword">case</span> <span class="hljs-string">&#x27;n&#x27;</span>: <span class="hljs-keyword">return</span> n-&gt;value;
+        <span class="hljs-keyword">case</span> <span class="hljs-string">&#x27;v&#x27;</span>: <span class="hljs-keyword">return</span> vars.<span class="hljs-built_in">at</span>(std::<span class="hljs-built_in">string</span>(n-&gt;name));
+        <span class="hljs-keyword">case</span> <span class="hljs-string">&#x27;+&#x27;</span>: <span class="hljs-keyword">return</span> <span class="hljs-built_in">eval</span>(n-&gt;lhs, vars) + <span class="hljs-built_in">eval</span>(n-&gt;rhs, vars);
+        <span class="hljs-keyword">default</span>:  <span class="hljs-keyword">return</span> <span class="hljs-built_in">eval</span>(n-&gt;lhs, vars) * <span class="hljs-built_in">eval</span>(n-&gt;rhs, vars);
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">count</span><span class="hljs-params">(<span class="hljs-type">const</span> Node* n)</span> </span>{ <span class="hljs-keyword">return</span> n ? <span class="hljs-number">1</span> + <span class="hljs-built_in">count</span>(n-&gt;lhs) + <span class="hljs-built_in">count</span>(n-&gt;rhs) : <span class="hljs-number">0</span>; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> std::map&lt;std::string, <span class="hljs-type">long</span>, std::less&lt;&gt;&gt; vars{{<span class="hljs-string">&quot;price&quot;</span>, <span class="hljs-number">7</span>}, {<span class="hljs-string">&quot;qty&quot;</span>, <span class="hljs-number">5</span>}, {<span class="hljs-string">&quot;a_very_long_variable_name_for_the_heap&quot;</span>, <span class="hljs-number">2</span>}};
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) std::array&lt;std::byte, 4096&gt; stack_buf;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* text : {<span class="hljs-string">&quot;2 * (price + 3) * qty&quot;</span>, <span class="hljs-string">&quot;1 + 2 * 3 + a_very_long_variable_name_for_the_heap&quot;</span>, <span class="hljs-string">&quot;(1 + 2&quot;</span>}) {
+        std::<span class="hljs-function">pmr::monotonic_buffer_resource <span class="hljs-title">arena</span><span class="hljs-params">(stack_buf.data(), stack_buf.size(), std::pmr::null_memory_resource())</span></span>;
+        <span class="hljs-keyword">try</span> {
+            Node* ast = <span class="hljs-built_in">Parser</span>(text, &amp;arena).<span class="hljs-built_in">parse</span>();
+            std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%-50s = %ld (%d nodes)\n&quot;</span>, text, <span class="hljs-built_in">eval</span>(ast, vars), <span class="hljs-built_in">count</span>(ast));
+        } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) {
+            std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%-50s : error: %s\n&quot;</span>, text, e.<span class="hljs-built_in">what</span>());
+        }
+    }   <span class="hljs-comment">// each arena (and its tree) vanishes here; the stack buffer is reused</span>
+
+    std::<span class="hljs-function">pmr::monotonic_buffer_resource <span class="hljs-title">tiny</span><span class="hljs-params">(stack_buf.data(), <span class="hljs-number">64</span>, std::pmr::null_memory_resource())</span></span>;
+    <span class="hljs-keyword">try</span> { <span class="hljs-built_in">Parser</span>(<span class="hljs-string">&quot;1 + 2 + 3 + 4 + 5 + 6&quot;</span>, &amp;tiny).<span class="hljs-built_in">parse</span>(); }
+    <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;64-byte arena: bad_alloc, never the heap&quot;</span>); }
+}</code></pre>
+<pre class="out" data-out="ch17-k-parser">2 * (price + 3) * qty                              = 100 (7 nodes)
+1 + 2 * 3 + a_very_long_variable_name_for_the_heap = 9 (7 nodes)
+(1 + 2                                             : error: expected )
+64-byte arena: bad_alloc, never the heap</pre>
+    <p><b>Complexity and pitfalls.</b> Parsing is O(length); each node is one bump allocation. Nodes are not trivially destructible (they hold a <code>pmr::string</code>), yet skipping their destructors is safe because the string's buffer is in the same arena, so nothing is leaked (skipping a destructor is allowed by [basic.life]/5); ASan confirms it. The <code>polymorphic_allocator</code> passed to each <code>Node</code> makes the long variable name allocate from the arena too. Pitfalls: a name stored as <code>std::string</code> would leak at every reset; a tree that escapes the scope of its arena dangles; and the null upstream means the buffer must be sized for the largest input you accept, which is a feature for hot paths and a limit you must test.</p>
+    <p class="rating">Estimated rating: ~1900 · a working recursive-descent parser plus correct pmr allocator propagation and arena lifetime reasoning</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>ArenaAllocator&lt;T&gt;</code>, an STL allocator over a bump arena, so that <code>std::vector</code>, <code>std::map</code> and <code>std::basic_string</code> can live in the arena. <code>deallocate</code> must reclaim the memory when it is the most recent allocation (so a temporary that is freed right away costs nothing), and two allocators must compare equal exactly when they share an arena.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> The allocator is a handle holding an <code>Arena*</code>; the converting constructor copies that pointer so rebound allocators share the arena. The arena implements "undo last": if the block being freed ends exactly at the current offset, the offset moves back to its start. Equality compares arena pointers. Copy and move assignment propagate the allocator so containers can be swapped and assigned freely within one arena.</p>
+<pre data-run="ch17-k-stl" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) std::byte buf_[<span class="hljs-number">64</span> * <span class="hljs-number">1024</span>];
+    std::<span class="hljs-type">size_t</span> off_ = <span class="hljs-number">0</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> </span>{
+        std::<span class="hljs-type">size_t</span> s = (off_ + a - <span class="hljs-number">1</span>) &amp; ~(a - <span class="hljs-number">1</span>);
+        <span class="hljs-keyword">if</span> (s &gt; <span class="hljs-keyword">sizeof</span> buf_ || n &gt; <span class="hljs-keyword">sizeof</span> buf_ - s) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        off_ = s + n;
+        <span class="hljs-keyword">return</span> buf_ + s;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">deallocate</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span> n)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-keyword">if</span> (<span class="hljs-built_in">static_cast</span>&lt;std::byte*&gt;(p) + n == buf_ + off_) off_ = <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(<span class="hljs-built_in">static_cast</span>&lt;std::byte*&gt;(p) - buf_);
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">used</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> off_; }
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ArenaAllocator</span> {
+    Arena* arena_;
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">U</span>&gt; <span class="hljs-keyword">friend</span> <span class="hljs-keyword">class</span> <span class="hljs-title class_">ArenaAllocator</span>;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">using</span> value_type = T;
+    <span class="hljs-keyword">using</span> propagate_on_container_copy_assignment = std::true_type;
+    <span class="hljs-keyword">using</span> propagate_on_container_move_assignment = std::true_type;
+    <span class="hljs-keyword">using</span> propagate_on_container_swap = std::true_type;
+
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ArenaAllocator</span><span class="hljs-params">(Arena&amp; a)</span> <span class="hljs-keyword">noexcept</span> : arena_(&amp;a) {</span>}
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">U</span>&gt; <span class="hljs-built_in">ArenaAllocator</span>(<span class="hljs-type">const</span> ArenaAllocator&lt;U&gt;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">arena_</span>(o.arena_) {}
+
+    <span class="hljs-function">T* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-keyword">if</span> (n &gt; <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(<span class="hljs-number">-1</span>) / <span class="hljs-built_in">sizeof</span>(T)) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;T*&gt;(arena_-&gt;<span class="hljs-built_in">allocate</span>(n * <span class="hljs-built_in">sizeof</span>(T), <span class="hljs-built_in">alignof</span>(T)));
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">deallocate</span><span class="hljs-params">(T* p, std::<span class="hljs-type">size_t</span> n)</span> <span class="hljs-keyword">noexcept</span> </span>{ arena_-&gt;<span class="hljs-built_in">deallocate</span>(p, n * <span class="hljs-built_in">sizeof</span>(T)); }
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">U</span>&gt; <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> ArenaAllocator&lt;U&gt;&amp; o) <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> { <span class="hljs-keyword">return</span> arena_ == o.arena_; }
+};
+
+<span class="hljs-keyword">using</span> AString = std::basic_string&lt;<span class="hljs-type">char</span>, std::char_traits&lt;<span class="hljs-type">char</span>&gt;, ArenaAllocator&lt;<span class="hljs-type">char</span>&gt;&gt;;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Arena arena;
+    {
+        std::vector&lt;<span class="hljs-type">int</span>, ArenaAllocator&lt;<span class="hljs-type">int</span>&gt;&gt; v{<span class="hljs-built_in">ArenaAllocator</span>&lt;<span class="hljs-type">int</span>&gt;(arena)};
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i) v.<span class="hljs-built_in">push_back</span>(i);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;vector of 1000 ints: arena holds %zu bytes\n&quot;</span>, arena.<span class="hljs-built_in">used</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after the vector died: %zu bytes\n&quot;</span>, arena.<span class="hljs-built_in">used</span>());
+    {
+        <span class="hljs-function">AString <span class="hljs-title">temp</span><span class="hljs-params">(<span class="hljs-number">200</span>, <span class="hljs-string">&#x27;x&#x27;</span>, ArenaAllocator&lt;<span class="hljs-type">char</span>&gt;(arena))</span></span>;   <span class="hljs-comment">// freed while still on top</span>
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after a temporary string: %zu bytes\n&quot;</span>, arena.<span class="hljs-built_in">used</span>());
+
+    <span class="hljs-function">ArenaAllocator&lt;<span class="hljs-type">char</span>&gt; <span class="hljs-title">ca</span><span class="hljs-params">(arena)</span></span>;
+    <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> before_map = arena.<span class="hljs-built_in">used</span>();
+    std::map&lt;AString, <span class="hljs-type">int</span>, std::less&lt;&gt;, ArenaAllocator&lt;std::pair&lt;<span class="hljs-type">const</span> AString, <span class="hljs-type">int</span>&gt;&gt;&gt; prices{ArenaAllocator&lt;std::pair&lt;<span class="hljs-type">const</span> AString, <span class="hljs-type">int</span>&gt;&gt;(arena)};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* sym : {<span class="hljs-string">&quot;AAPL&quot;</span>, <span class="hljs-string">&quot;MSFT&quot;</span>, <span class="hljs-string">&quot;a_long_instrument_identifier_on_the_arena&quot;</span>}) prices.<span class="hljs-built_in">emplace</span>(<span class="hljs-built_in">AString</span>(sym, ca), <span class="hljs-number">100</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;map entries %zu, nodes and keys in the arena: %s\n&quot;</span>, prices.<span class="hljs-built_in">size</span>(), arena.<span class="hljs-built_in">used</span>() &gt; before_map ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+
+    Arena other;
+    <span class="hljs-function">ArenaAllocator&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">x</span><span class="hljs-params">(arena)</span>, <span class="hljs-title">y</span><span class="hljs-params">(arena)</span>, <span class="hljs-title">z</span><span class="hljs-params">(other)</span></span>;
+    <span class="hljs-function">ArenaAllocator&lt;<span class="hljs-type">long</span>&gt; <span class="hljs-title">rebound</span><span class="hljs-params">(x)</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;x == y: %d, x == z: %d, rebound == x: %d\n&quot;</span>, x == y, x == z, rebound == x);
+}</code></pre>
+<pre class="out" data-out="ch17-k-stl">vector of 1000 ints: arena holds 8188 bytes
+after the vector died: 4092 bytes
+after a temporary string: 4092 bytes
+map entries 3, nodes and keys in the arena: yes
+x == y: 1, x == z: 0, rebound == x: 1</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per allocation. The output shows what undo-last can and cannot do. While the vector grows it allocates the new buffer <em>before</em> freeing the old one, so the old buffer is never on top and is never reclaimed: the arena holds 8188 bytes, the same as a monotonic resource. When the vector dies, its final 4096-byte buffer is on top and comes back, leaving 4092 bytes of dead buffers. The temporary string is allocated and freed while on top, so it costs nothing. (<code>std::vector</code> has no way to ask an allocator to grow a block in place, which is why <code>reserve</code> matters so much in arenas.) The <code>propagate_*</code> traits are set to true so that assigning or swapping two arena containers never falls back to element-wise copies. Swapping containers on <em>different</em> arenas then swaps arenas, which is what you want only if the containers' lifetimes match their new arenas. The map's nodes and its long key string are both in the arena; short keys fit in the string's inline buffer. The <code>Arena</code> object is 64 KiB, which is fine on a desktop stack but should be heap-allocated or static on small-stack threads.</p>
+    <p class="rating">Estimated rating: ~1800 · allocator requirements, rebind, propagation traits and an undo-last arena working together</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch15-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+  <li>Arena = buffer + offset. Allocate: <code>start = round_up(addr, a)</code>, <code>offset = start + n</code>. Free one: no-op (or undo-last). Free all: reset in O(1).</li>
+  <li><code>round_up(x, a) = (x + a - 1) &amp; ~(a - 1)</code> for power-of-two <code>a</code>; align the <b>address</b>, not just the offset; check <code>n &lt;= cap - start</code> to avoid overflow.</li>
+  <li>Safe only under a lifetime discipline: per request, per frame (double buffered), per parse. Nothing outside may point in after reset.</li>
+  <li>Destructors are not run: allow only trivially destructible types (<code>static_assert</code>), or keep a finaliser list run newest first. Default-allocator containers inside arena objects leak.</li>
+  <li><code>std::pmr::monotonic_buffer_resource</code>: optional initial buffer, geometric growth from upstream, no-op <code>deallocate</code>, <code>release()</code> frees upstream buffers, not thread safe; upstream <code>null_memory_resource()</code> proves no heap use.</li>
+  <li>Growing arenas chain doubling blocks, give huge requests their own block, and keep one block on reset. Marks give O(1) rewind for scratch memory; use RAII scopes and two scratch arenas.</li>
+  <li>Arena vs pool: one shared lifetime and mixed sizes → arena; one size with individual lifetimes → pool. Measured on an Apple M1: arena about 10× malloc, monotonic resource 4 to 5×.</li>
+  <li>Pitfalls: dangling pointers after reset (ASan silent unless blocks are freed or memory is poisoned), unbounded growth (vector regrowth doubles memory), mixing with long-lived objects, alignment bugs, sharing across threads.</li>
+</ul>
+</section>

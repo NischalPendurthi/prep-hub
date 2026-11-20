@@ -1,0 +1,1467 @@
+---
+title: TCP, UDP, sockets and HTTP
+part: Part B · Networks
+lede: How bytes get reliably from one process to another: TCP's handshake, teardown and state machine, TIME_WAIT, retransmission, flow and congestion control, the latency knobs (Nagle, delayed ACK), the BSD sockets API in C++, and the HTTP and TLS layers on top. These are the most common networking questions in systems, backend and low-latency interviews, and the socket bugs here (short reads, missing byte-order conversion, SIGPIPE) are the ones that reach production.
+desc: Handshake, TIME_WAIT, flow and congestion control, sockets API, TLS
+hours: 5
+prereqs: [Ch 4](#ch04) (layers, IP addressing), file descriptors, basic threads
+---
+<section id="ch05-tcp-udp" data-roles="th"><div class="sec-head"><h2>TCP vs UDP</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> UDP is a thin wrapper over IP: it adds ports and a checksum, then sends each datagram on its own, with no promise that it arrives, arrives once or arrives in order. TCP builds a reliable, ordered, flow-controlled and congestion-controlled <b>byte stream</b> between two sockets on top of the same unreliable packets. Everything TCP adds costs latency, header bytes and kernel state.</p>
+<h3 id="ch05-compare">Key facts: the comparison table</h3>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>TCP (RFC 9293)</th><th>UDP (RFC 768)</th></tr></thead>
+<tbody>
+<tr><td>Connection</td><td>connection-oriented: 3-way handshake before data, teardown after</td><td>connectionless: just send</td></tr>
+<tr><td>Delivery</td><td>reliable: acknowledgements and retransmission</td><td>best effort: datagrams can be lost or duplicated</td></tr>
+<tr><td>Order</td><td>in order (sequence numbers, reassembly)</td><td>no ordering</td></tr>
+<tr><td>Data model</td><td>byte stream, no message boundaries</td><td>datagrams, boundaries preserved</td></tr>
+<tr><td>Flow control</td><td>yes, receive window</td><td>no</td></tr>
+<tr><td>Congestion control</td><td>yes (Reno, CUBIC, BBR)</td><td>no (the application must be polite)</td></tr>
+<tr><td>Header</td><td>20 to 60 bytes</td><td>8 bytes</td></tr>
+<tr><td>Setup latency</td><td>1 RTT before the first byte of data (plus TLS)</td><td>0 RTT</td></tr>
+<tr><td>Broadcast / multicast</td><td>no</td><td>yes</td></tr>
+<tr><td>Typical uses</td><td>HTTP/1.1 and HTTP/2, SSH, databases, file transfer, most RPC</td><td>DNS, DHCP, VoIP and video, games, market data multicast, QUIC (HTTP/3)</td></tr>
+</tbody></table></div>
+<p>The UDP header is four 16-bit fields: source port, destination port, length and checksum. The checksum is optional over IPv4 (0 means "none") and mandatory over IPv6. Choose UDP when stale data is worthless (a game position, a voice sample, a market data tick that the next one supersedes), when you need multicast, or when you want to build your own reliability with different trade-offs, which is exactly what QUIC does in user space.</p>
+
+<h3 id="ch05-tcp-header">The TCP header</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Field</th><th>Bits</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td>Source port, destination port</td><td>16 + 16</td><td>identify the sockets (with the IP addresses, the 4-tuple)</td></tr>
+<tr><td>Sequence number</td><td>32</td><td>stream offset of the first data byte in this segment (offset from the random ISN)</td></tr>
+<tr><td>Acknowledgement number</td><td>32</td><td>next byte expected from the peer; valid when ACK is set; cumulative</td></tr>
+<tr><td>Data offset</td><td>4</td><td>header length in 32-bit words: 5 (20 bytes) to 15 (60 bytes)</td></tr>
+<tr><td>Flags</td><td>8</td><td>CWR, ECE (ECN), URG, ACK, PSH, RST, SYN, FIN</td></tr>
+<tr><td>Window</td><td>16</td><td>receive window in bytes, shifted by the window scale option</td></tr>
+<tr><td>Checksum</td><td>16</td><td>Internet checksum over a pseudo-header (IPs, protocol, length), header and data</td></tr>
+<tr><td>Urgent pointer</td><td>16</td><td>rarely used</td></tr>
+<tr><td>Options</td><td>0 to 320</td><td>MSS, window scale (RFC 7323), SACK permitted and SACK blocks (RFC 2018), timestamps</td></tr>
+</tbody></table></div>
+<p>Most options can only be negotiated in the SYN and SYN+ACK: MSS, window scale and SACK permitted. If a middlebox strips them, the connection silently falls back to a 64 KB window, which caps throughput on long-distance links.</p>
+</section>
+
+<section id="ch05-handshake" data-roles="th"><div class="sec-head"><h2>Connection setup and teardown</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch05-three-way">The three-way handshake</h3>
+<ol>
+<li>The client sends <b>SYN</b> with its initial sequence number <code>x</code> and its options (MSS, window scale, SACK permitted, timestamps). Client state: SYN_SENT.</li>
+<li>The server replies <b>SYN+ACK</b> with its own ISN <code>y</code> and <code>ack = x + 1</code>. Server state: SYN_RCVD.</li>
+<li>The client sends <b>ACK</b> with <code>ack = y + 1</code>. Both sides are ESTABLISHED. This ACK may already carry data.</li>
+</ol>
+<p>The SYN and the FIN each consume one sequence number even though they carry no data, so that they can be acknowledged like data. ISNs are chosen pseudo-randomly from a clock plus a keyed hash of the 4-tuple (RFC 6528, folded into RFC 9293), which defends against blind injection attacks and keeps segments from an old connection with the same 4-tuple from being accepted by a new one.</p>
+<p><b>Why three messages?</b> Each side must announce its ISN and have it acknowledged. That is four messages, and the server's SYN and ACK travel together, which gives three. Two would not work: the server could not know that the client actually received its ISN, and a delayed duplicate SYN from an old connection would make the server open a connection the client does not know about.</p>
+
+<h3 id="ch05-backlog">Inside the kernel: SYN queue, accept queue, SYN floods</h3>
+<p>On Linux a listening socket has two queues. Half-open connections (SYN received, SYN+ACK sent) wait in the <b>SYN queue</b>. When the final ACK arrives, the connection moves to the <b>accept queue</b>, where <code>accept()</code> picks it up. The <code>backlog</code> argument of <code>listen()</code> sizes the accept queue, capped by <code>net.core.somaxconn</code> (4096 by default since Linux 5.4, 128 before). If the accept queue is full, Linux drops the final ACK (the client thinks it is connected, the server will retransmit its SYN+ACK), so a slow accept loop looks like random connection stalls. A <b>SYN flood</b> fills the SYN queue with spoofed SYNs; <b>SYN cookies</b> (RFC 4987) defend by encoding the connection state into the server's ISN and keeping no state until a valid ACK returns.</p>
+<p>The handshake is completed by the kernel, not by <code>accept()</code>. A client's <code>connect()</code> succeeds as soon as the server kernel answers, even if the server process never calls <code>accept()</code>.</p>
+
+<h3 id="ch05-teardown">The four-way teardown, half-close and RST</h3>
+<p>Each direction is closed separately, because TCP is full duplex. The side that closes first (the <b>active closer</b>) sends FIN; the peer ACKs it, may keep sending data (the connection is <b>half-closed</b>), and later sends its own FIN, which the active closer ACKs. The middle ACK and FIN are often combined, which gives three segments on the wire. <code>shutdown(fd, SHUT_WR)</code> sends FIN while keeping the read direction open, which is how a client says "request finished" while still reading the response. <code>close()</code> releases the descriptor and closes both directions once the last descriptor for the socket is gone.</p>
+<p>A <b>RST</b> aborts a connection immediately, with no TIME_WAIT. Causes: a SYN to a port with no listener (the client sees "connection refused"), a segment for a connection the host does not know (for example after a reboot), <code>close()</code> while unread data sits in the receive buffer, or <code>SO_LINGER</code> with a zero timeout.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 420" role="img" aria-label="TCP three-way handshake and four-way teardown timeline with the state of each side">
+<defs><marker id="ch05-c08a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="190" y="22" text-anchor="middle" class="t-bold">Client (active open, active close)</text>
+<text x="530" y="22" text-anchor="middle" class="t-bold">Server</text>
+<line x1="190" y1="32" x2="190" y2="404" class="d-line d-dash"/><line x1="530" y1="32" x2="530" y2="404" class="d-line d-dash"/>
+<text x="180" y="52" text-anchor="end" class="t-small t-mono">SYN_SENT</text><text x="540" y="52" class="t-small t-mono">LISTEN</text>
+<line x1="190" y1="54" x2="528" y2="80" class="d-line-acc" marker-end="url(#ch08-c08a)"/>
+<text x="360" y="58" text-anchor="middle" class="t-small t-acc">SYN seq=x</text>
+<line x1="530" y1="94" x2="192" y2="120" class="d-line-key" marker-end="url(#ch08-c08a)"/>
+<text x="540" y="92" class="t-small t-mono">SYN_RCVD</text>
+<text x="360" y="98" text-anchor="middle" class="t-small t-key">SYN+ACK seq=y ack=x+1</text>
+<line x1="190" y1="134" x2="528" y2="160" class="d-line-acc" marker-end="url(#ch08-c08a)"/>
+<text x="180" y="136" text-anchor="end" class="t-small t-mono">ESTABLISHED</text>
+<text x="360" y="138" text-anchor="middle" class="t-small t-acc">ACK ack=y+1</text>
+<text x="540" y="164" class="t-small t-mono">ESTABLISHED</text>
+<rect x="200" y="176" width="320" height="26" class="d-soft"/><text x="360" y="194" text-anchor="middle" class="t-small t-muted">data in both directions</text>
+<text x="180" y="222" text-anchor="end" class="t-small t-mono">FIN_WAIT_1</text>
+<line x1="190" y1="222" x2="528" y2="246" class="d-line-acc" marker-end="url(#ch08-c08a)"/>
+<text x="360" y="224" text-anchor="middle" class="t-small t-acc">FIN seq=u</text>
+<text x="540" y="250" class="t-small t-mono">CLOSE_WAIT</text>
+<line x1="530" y1="258" x2="192" y2="282" class="d-line-key" marker-end="url(#ch08-c08a)"/>
+<text x="360" y="262" text-anchor="middle" class="t-small t-key">ACK ack=u+1</text>
+<text x="180" y="290" text-anchor="end" class="t-small t-mono">FIN_WAIT_2</text>
+<text x="540" y="300" class="t-small t-mono">LAST_ACK</text>
+<line x1="530" y1="302" x2="192" y2="326" class="d-line-key" marker-end="url(#ch08-c08a)"/>
+<text x="360" y="306" text-anchor="middle" class="t-small t-key">FIN seq=v (app called close)</text>
+<text x="180" y="334" text-anchor="end" class="t-small t-mono t-trap">TIME_WAIT</text>
+<line x1="190" y1="338" x2="528" y2="362" class="d-line-acc" marker-end="url(#ch08-c08a)"/>
+<text x="360" y="342" text-anchor="middle" class="t-small t-acc">ACK ack=v+1</text>
+<text x="540" y="366" class="t-small t-mono">CLOSED</text>
+<text x="180" y="398" text-anchor="end" class="t-small t-mono">CLOSED</text>
+<text x="200" y="372" class="t-small t-trap">wait 2·MSL</text>
+<line x1="196" y1="378" x2="196" y2="396" class="d-line-trap" marker-end="url(#ch08-c08a)"/>
+</svg></div><figcaption><b>Setup takes one round trip; teardown is two half-closes.</b> The SYN and FIN each consume a sequence number, so they are acknowledged with +1. The side that sends the first FIN ends in TIME_WAIT; the passive side sits in CLOSE_WAIT until its application calls <code>close()</code>.</figcaption></figure>
+</section>
+
+<section id="ch05-states" data-roles="th"><div class="sec-head"><h2>The TCP state machine and TIME_WAIT</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 530" role="img" aria-label="Simplified TCP state diagram with the active open and close path and the passive path">
+<defs><marker id="ch05-c08b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="310" y="20" width="120" height="34" class="d-box"/><text x="370" y="42" text-anchor="middle" class="t-small t-mono t-bold">CLOSED</text>
+<rect x="140" y="95" width="120" height="34" class="d-box"/><text x="200" y="117" text-anchor="middle" class="t-small t-mono">LISTEN</text>
+<rect x="500" y="95" width="120" height="34" class="d-box"/><text x="560" y="117" text-anchor="middle" class="t-small t-mono">SYN_SENT</text>
+<rect x="140" y="170" width="120" height="34" class="d-box"/><text x="200" y="192" text-anchor="middle" class="t-small t-mono">SYN_RCVD</text>
+<rect x="300" y="245" width="140" height="34" class="d-key"/><text x="370" y="267" text-anchor="middle" class="t-small t-mono t-bold">ESTABLISHED</text>
+<rect x="110" y="320" width="120" height="34" class="d-acc"/><text x="170" y="342" text-anchor="middle" class="t-small t-mono">FIN_WAIT_1</text>
+<rect x="530" y="320" width="120" height="34" class="d-soft"/><text x="590" y="342" text-anchor="middle" class="t-small t-mono">CLOSE_WAIT</text>
+<rect x="30" y="400" width="120" height="34" class="d-acc"/><text x="90" y="422" text-anchor="middle" class="t-small t-mono">FIN_WAIT_2</text>
+<rect x="210" y="400" width="120" height="34" class="d-acc"/><text x="270" y="422" text-anchor="middle" class="t-small t-mono">CLOSING</text>
+<rect x="530" y="400" width="120" height="34" class="d-soft"/><text x="590" y="422" text-anchor="middle" class="t-small t-mono">LAST_ACK</text>
+<rect x="110" y="475" width="120" height="34" class="d-trap"/><text x="170" y="497" text-anchor="middle" class="t-small t-mono t-bold">TIME_WAIT</text>
+<rect x="530" y="475" width="120" height="34" class="d-box"/><text x="590" y="497" text-anchor="middle" class="t-small t-mono t-bold">CLOSED</text>
+<line x1="330" y1="54" x2="220" y2="94" class="d-line-key" marker-end="url(#ch08-c08b)"/><text x="268" y="66" text-anchor="end" class="t-small">listen()</text>
+<line x1="410" y1="54" x2="540" y2="94" class="d-line-acc" marker-end="url(#ch08-c08b)"/><text x="482" y="66" class="t-small">connect(): send SYN</text>
+<line x1="200" y1="129" x2="200" y2="169" class="d-line-key" marker-end="url(#ch08-c08b)"/><text x="208" y="153" class="t-small">rcv SYN / send SYN+ACK</text>
+<line x1="560" y1="129" x2="420" y2="244" class="d-line-acc" marker-end="url(#ch08-c08b)"/><text x="500" y="190" class="t-small">rcv SYN+ACK / send ACK</text>
+<line x1="220" y1="204" x2="320" y2="244" class="d-line-key" marker-end="url(#ch08-c08b)"/><text x="264" y="218" class="t-small">rcv ACK</text>
+<line x1="320" y1="279" x2="190" y2="319" class="d-line-acc" marker-end="url(#ch08-c08b)"/><text x="248" y="290" text-anchor="end" class="t-small">close() / send FIN</text>
+<line x1="420" y1="279" x2="570" y2="319" class="d-line-key" marker-end="url(#ch08-c08b)"/><text x="500" y="290" class="t-small">rcv FIN / send ACK</text>
+<line x1="150" y1="354" x2="100" y2="399" class="d-line-acc" marker-end="url(#ch08-c08b)"/><text x="116" y="382" text-anchor="end" class="t-small">rcv ACK</text>
+<line x1="190" y1="354" x2="255" y2="399" class="d-line-acc" marker-end="url(#ch08-c08b)"/><text x="230" y="372" class="t-small">rcv FIN / send ACK</text>
+<line x1="90" y1="434" x2="150" y2="474" class="d-line-acc" marker-end="url(#ch08-c08b)"/><text x="16" y="466" class="t-small">rcv FIN / send ACK</text>
+<line x1="260" y1="434" x2="200" y2="474" class="d-line-acc" marker-end="url(#ch08-c08b)"/><text x="248" y="462" class="t-small">rcv ACK</text>
+<line x1="590" y1="354" x2="590" y2="399" class="d-line-key" marker-end="url(#ch08-c08b)"/><text x="598" y="382" class="t-small">close() / send FIN</text>
+<line x1="590" y1="434" x2="590" y2="474" class="d-line-key" marker-end="url(#ch08-c08b)"/><text x="598" y="458" class="t-small">rcv ACK</text>
+<line x1="230" y1="492" x2="528" y2="492" class="d-line-trap" marker-end="url(#ch08-c08b)"/><text x="380" y="486" text-anchor="middle" class="t-small t-trap">2·MSL timer expires</text>
+</svg></div><figcaption><b>Eleven states, two paths.</b> The left (active) side is what the side calling <code>close()</code> first goes through; the right (passive) side is what the peer goes through. CLOSING is the rare simultaneous-close case, and a FIN that arrives together with the ACK of our FIN takes FIN_WAIT_1 straight to TIME_WAIT. Inspect real sockets with <code>ss -tan</code>.</figcaption></figure>
+
+<h3 id="ch05-time-wait">TIME_WAIT and 2·MSL</h3>
+<p>The active closer stays in TIME_WAIT for twice the <b>maximum segment lifetime</b> (MSL, nominally 2 minutes in RFC 793 and RFC 9293; Linux hard-codes TIME_WAIT at 60 seconds). Two reasons:</p>
+<ol>
+<li><b>Reliable close.</b> If the final ACK is lost, the peer retransmits its FIN. The TIME_WAIT side must still exist to ACK it again; otherwise it would answer with RST and the peer would report an error. One MSL for the lost ACK to die and one MSL for the retransmitted FIN to arrive gives 2·MSL.</li>
+<li><b>No ghost segments.</b> Delayed segments of the old connection must expire before a new connection with the same 4-tuple can start, or they could be accepted as data of the new one.</li>
+</ol>
+<p>TIME_WAIT costs only a small kernel structure (no file descriptor), but a busy client opening many short connections to the same server can run out of ephemeral ports (the 4-tuple must be unique, and Linux's default range 32768 to 60999 gives about 28 thousand). Fixes: connection reuse (keep-alive, pooling), more ephemeral ports or more client IPs, and <code>net.ipv4.tcp_tw_reuse</code>, which lets a <i>new outgoing</i> connection reuse a TIME_WAIT 4-tuple when timestamps prove it safe. (The old <code>tcp_tw_recycle</code> broke clients behind NAT and was removed in Linux 4.12.)</p>
+
+<h3 id="ch05-reuseaddr">SO_REUSEADDR and SO_REUSEPORT</h3>
+<p>A server that restarts while connections it closed are still in TIME_WAIT gets <code>EADDRINUSE</code> from <code>bind()</code>. Setting <code>SO_REUSEADDR</code> <b>before</b> <code>bind()</code> allows binding a port that has TIME_WAIT connections on it. Every TCP server should set it. On Linux it does not allow two sockets to <i>listen</i> on the same address and port; that is <code>SO_REUSEPORT</code> (Linux 3.9), which lets several sockets (usually one per worker thread or process) bind the same port, with the kernel load-balancing incoming connections between them. BSD and macOS semantics differ in details, so check the platform when it matters.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"The server is in TIME_WAIT" is not a property of servers. Whichever side calls <code>close()</code> first enters TIME_WAIT. HTTP servers that close idle keep-alive connections accumulate TIME_WAIT sockets; clients that close first push the cost to the client side. Conversely, thousands of sockets in <b>CLOSE_WAIT</b> mean your application received FIN and never called <code>close()</code>: a descriptor leak in your code, not a kernel tuning problem.</p></div>
+</section>
+
+<section id="ch05-reliability" data-roles="th"><div class="sec-head"><h2>Sequence numbers, ACKs and retransmission</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> TCP numbers every byte. The receiver says "I have everything before byte N" (a cumulative ACK of N). The sender keeps every unacknowledged byte in its send buffer and resends whatever is not acknowledged in time.</p>
+<ul>
+<li><b>Sequence number</b> of a segment = stream position of its first byte. A segment with sequence number 1001 and 100 bytes of data covers 1001 to 1100, and the receiver acknowledges it with ACK 1101.</li>
+<li><b>Cumulative ACKs</b> mean a lost segment holds back the ACK number even if later segments arrive; the receiver buffers out-of-order data and sends <b>duplicate ACKs</b> for the hole. <b>SACK</b> (RFC 2018) adds option blocks that tell the sender exactly which later ranges arrived, so it only resends the holes.</li>
+<li>Sequence numbers are 32-bit and wrap around (after 4 GiB of data). Comparisons use serial arithmetic: <code>a</code> is before <code>b</code> when <code>(int32_t)(a - b) &lt; 0</code>. On very fast links, timestamps (PAWS, RFC 7323) guard against an old segment from the previous wrap being accepted.</li>
+</ul>
+<h3 id="ch05-rto">Retransmission timeout</h3>
+<p>The sender measures round-trip times and keeps a smoothed RTT and its variance. RFC 6298 sets RTO = SRTT + 4·RTTVAR, with an initial RTO of 1 second and a recommended minimum of 1 second (Linux uses a 200 ms minimum). Each timeout doubles the RTO (exponential backoff). <b>Karn's algorithm:</b> never take an RTT sample from a retransmitted segment, because you cannot tell which transmission the ACK answers. A timeout is treated as a strong congestion signal (see below).</p>
+<h3 id="ch05-fast-retransmit">Fast retransmit</h3>
+<p>Waiting a full RTO for each loss is slow. When the sender receives <b>three duplicate ACKs</b> (four ACKs with the same number), it assumes the segment at that number was lost, because later segments are clearly arriving, and retransmits it immediately (RFC 5681). Modern stacks also use RACK (time-based loss detection, RFC 8985) and tail loss probes.</p>
+</section>
+
+<section id="ch05-flow-congestion" data-roles="th"><div class="sec-head"><h2>Flow control vs congestion control</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Two different limits stop a sender from sending too fast. <b>Flow control</b> protects the <i>receiver</i>: do not send more than its buffer can hold. <b>Congestion control</b> protects the <i>network</i>: do not send more than the path can carry. The sender may have at most <code>min(rwnd, cwnd)</code> unacknowledged bytes in flight.</p>
+<h3 id="ch05-rwnd">Flow control: the receive window</h3>
+<p>Every segment carries the receiver's free buffer space (rwnd) in the window field. If the application stops reading, the window shrinks to zero and the sender stops; it then sends periodic <b>zero-window probes</b> until the window opens. The 16-bit field caps the window at 64 KB, so the <b>window scale</b> option (RFC 7323, negotiated in the SYN) shifts it left by up to 14 bits, allowing windows up to 1 GiB. To fill a path, the window must cover the <b>bandwidth-delay product</b>: 1 Gbit/s × 100 ms = 12.5 MB in flight. A 64 KB window on that path gives at most 64 KB per 100 ms, about 5 Mbit/s.</p>
+<h3 id="ch05-cwnd">Congestion control: slow start and AIMD</h3>
+<p>The sender keeps a congestion window (cwnd), which it learns by probing, and a threshold (ssthresh). Classic Reno (RFC 5681):</p>
+<ul>
+<li><b>Slow start</b> (cwnd &lt; ssthresh): start with an initial window of up to 10 segments (RFC 6928, the Linux default) and add one MSS per ACK, so cwnd <b>doubles every RTT</b>. "Slow" refers to starting small, not to the growth rate.</li>
+<li><b>Congestion avoidance</b> (cwnd ≥ ssthresh): add about one MSS per RTT (MSS·MSS/cwnd per ACK). This is the additive increase.</li>
+<li><b>Fast retransmit and fast recovery</b> on three duplicate ACKs: set ssthresh = max(FlightSize / 2, 2·MSS), retransmit the lost segment, set cwnd = ssthresh + 3·MSS and inflate it per further duplicate ACK; when new data is acknowledged, deflate cwnd to ssthresh and continue in congestion avoidance. This is the multiplicative decrease.</li>
+<li><b>Timeout:</b> ssthresh = max(FlightSize / 2, 2·MSS) and cwnd = 1 MSS, then slow start again. A timeout means the ACK clock stopped, which is worse news than a few duplicate ACKs.</li>
+</ul>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 360" role="img" aria-label="Reno congestion window over time: exponential slow start, linear growth, halving on triple duplicate ACK, reset to one on timeout">
+<line x1="60" y1="300" x2="680" y2="300" class="d-line"/><line x1="60" y1="300" x2="60" y2="50" class="d-line"/>
+<text x="680" y="342" text-anchor="end" class="t-small t-muted">time (RTTs)</text>
+<text x="66" y="46" class="t-small t-muted">cwnd (segments)</text>
+<text x="60" y="318" text-anchor="middle" class="t-small t-muted">0</text><text x="210" y="318" text-anchor="middle" class="t-small t-muted">5</text><text x="360" y="318" text-anchor="middle" class="t-small t-muted">10</text><text x="510" y="318" text-anchor="middle" class="t-small t-muted">15</text><text x="660" y="318" text-anchor="middle" class="t-small t-muted">20</text>
+<text x="52" y="304" text-anchor="end" class="t-small t-muted">0</text><text x="52" y="224" text-anchor="end" class="t-small t-muted">8</text><text x="52" y="144" text-anchor="end" class="t-small t-muted">16</text><text x="52" y="64" text-anchor="end" class="t-small t-muted">24</text>
+<line x1="60" y1="140" x2="360" y2="140" class="d-line-trap d-dash"/><text x="64" y="134" class="t-small t-trap">ssthresh 16</text>
+<line x1="360" y1="190" x2="510" y2="190" class="d-line-trap d-dash"/><text x="440" y="206" class="t-small t-trap">ssthresh 11</text>
+<line x1="510" y1="220" x2="660" y2="220" class="d-line-trap d-dash"/><text x="616" y="236" class="t-small t-trap">ssthresh 8</text>
+<polyline points="60,290 90,280 120,260 150,220 180,140 210,130 240,120 270,110 300,100 330,90 360,80 360,190 390,180 420,170 450,160 480,150 510,140 510,290 540,280 570,260 600,220 630,210 660,200" class="d-line-acc" fill="none"/>
+<text x="96" y="250" class="t-small t-acc">slow start: ×2 per RTT</text>
+<text x="196" y="96" class="t-small t-acc">congestion avoidance: +1 per RTT</text>
+<text x="368" y="76" class="t-small">3 dup ACKs: halve</text>
+<text x="518" y="136" class="t-small">timeout: cwnd = 1</text>
+</svg></div><figcaption><b>The Reno sawtooth.</b> Exponential growth until ssthresh, then linear probing. A triple duplicate ACK halves the window (fast recovery, no slow start); a timeout drops it to one segment and slow-starts back to the new, lower ssthresh. This is a per-RTT model of the same rules the coding section simulates.</figcaption></figure>
+<p>Linux uses <b>CUBIC</b> by default (RFC 9438): it grows cwnd as a cubic function of the time since the last loss, which recovers faster on high-bandwidth, long-delay paths and is fairer between flows with different RTTs. <b>BBR</b> (Google) instead models the bottleneck bandwidth and minimum RTT and paces packets to match, so it does not need loss as its signal. <b>ECN</b> lets routers mark packets (CE) instead of dropping them; the receiver echoes ECE and the sender reacts as if a loss had happened and answers with CWR.</p>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>Flow control is end to end and receiver driven (rwnd in every ACK). Congestion control is a sender-side estimate of the network (cwnd, never sent on the wire). In flight ≤ min(rwnd, cwnd). Slow start is exponential, congestion avoidance is linear, a loss signal halves (AIMD), a timeout resets to 1.</p></div>
+</section>
+
+<section id="ch05-latency" data-roles="th"><div class="sec-head"><h2>Nagle, delayed ACK and head-of-line blocking</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch05-nagle">Nagle's algorithm and delayed ACKs</h3>
+<p><b>Nagle</b> (RFC 896) reduces tiny packets: while any sent data is unacknowledged, small writes are buffered and sent together, either when the ACK arrives or when a full MSS has accumulated. <b>Delayed ACK</b> (RFC 1122, RFC 9293) reduces pure ACKs: the receiver waits a little (it must ACK within 500 ms and should ACK at least every second full-size segment; Linux uses 40 ms to 200 ms) hoping to piggyback the ACK on response data.</p>
+<p>Each is fine alone; together they stall. A client that does <b>write, write, read</b> (for example a header and a body in two <code>send()</code> calls) sends the first small segment at once. The second is held by Nagle until the first is ACKed, and the server holds its ACK hoping to piggyback it on a response it cannot produce until it gets the second part. The connection sits idle until the delayed-ACK timer fires, adding about 40 ms (Linux) or up to 200 ms per request.</p>
+<p>Fixes, best first: build the whole message and send it in one call (or use <code>writev</code>/<code>sendmsg</code> with an iovec); set <code>TCP_NODELAY</code> to disable Nagle, which every latency-sensitive system does (trading, RPC frameworks, games, interactive protocols); or on Linux, use <code>TCP_CORK</code> to batch explicitly and uncork to flush. <code>TCP_QUICKACK</code> turns off delayed ACKs temporarily on Linux.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-type">int</span> one = <span class="hljs-number">1</span>;
+<span class="hljs-built_in">setsockopt</span>(fd, IPPROTO_TCP, TCP_NODELAY, &amp;one, <span class="hljs-keyword">sizeof</span> one);  <span class="hljs-comment">// needs &lt;netinet/tcp.h&gt;</span></code></pre>
+
+<h3 id="ch05-hol">Head-of-line blocking</h3>
+<p>Because TCP delivers a single ordered byte stream, one lost segment blocks delivery of everything after it, even data that has already arrived, until the retransmission fills the hole. This is <b>head-of-line (HOL) blocking</b>, and it appears at two levels:</p>
+<ul>
+<li><b>HTTP/1.1</b>: a connection carries one request/response at a time (pipelining exists but is effectively unused), so a slow response blocks the requests behind it. Browsers open about 6 connections per host to compensate.</li>
+<li><b>HTTP/2</b> multiplexes many streams over one TCP connection, which fixes HTTP-level HOL blocking, but a single lost TCP segment still stalls <i>every</i> stream, which is worse than HTTP/1.1's six independent connections on lossy networks.</li>
+<li><b>HTTP/3</b> runs over QUIC on UDP, where each stream is ordered independently, so a loss only stalls the stream it belongs to.</li>
+</ul>
+</section>
+
+<section id="ch05-sockets" data-roles="th"><div class="sec-head"><h2>The BSD sockets API in C and C++</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A socket is a file descriptor that names one end of a communication channel inside the kernel. The kernel owns the protocol state, the send buffer and the receive buffer; your calls only copy bytes between your memory and those buffers, and ask the kernel to change state.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Call</th><th>Server</th><th>Client</th><th>What it really does</th></tr></thead>
+<tbody>
+<tr><td><code>socket(AF_INET, SOCK_STREAM, 0)</code></td><td>yes</td><td>yes</td><td>creates an unconnected socket, returns an fd</td></tr>
+<tr><td><code>setsockopt(SO_REUSEADDR)</code></td><td>before bind</td><td>rarely</td><td>allows rebinding a port with TIME_WAIT connections</td></tr>
+<tr><td><code>bind(fd, addr, len)</code></td><td>yes</td><td>optional</td><td>attaches a local address and port (port 0 lets the kernel choose)</td></tr>
+<tr><td><code>listen(fd, backlog)</code></td><td>yes</td><td></td><td>marks it passive: the kernel now completes handshakes</td></tr>
+<tr><td><code>accept(fd, peer, len)</code></td><td>yes</td><td></td><td>takes one finished connection from the accept queue; returns a <i>new</i> fd</td></tr>
+<tr><td><code>connect(fd, addr, len)</code></td><td></td><td>yes</td><td>picks an ephemeral port, runs the 3-way handshake</td></tr>
+<tr><td><code>send</code>/<code>recv</code> (or <code>write</code>/<code>read</code>)</td><td>yes</td><td>yes</td><td>copy into the send buffer / out of the receive buffer; may do less than asked</td></tr>
+<tr><td><code>shutdown(fd, SHUT_WR)</code></td><td>optional</td><td>optional</td><td>sends FIN, keeps reading</td></tr>
+<tr><td><code>close(fd)</code></td><td>yes</td><td>yes</td><td>releases the fd; FIN when the last reference goes</td></tr>
+</tbody></table></div>
+
+<h3 id="ch05-echo-server">A blocking echo server</h3>
+<p>The minimal correct server. Notice the new descriptor returned by <code>accept</code>, the loop around <code>send</code>, the <code>n == 0</code> end-of-stream check, and the byte-order conversions. This program blocks forever, so it is compile-only here.</p>
+<pre data-run="ch08-echo-server" data-mode="compile"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;netinet/in.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cerrno&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">send_all</span><span class="hljs-params">(<span class="hljs-type">int</span> fd, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* p, <span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-keyword">while</span> (n &gt; <span class="hljs-number">0</span>) {
+        <span class="hljs-type">ssize_t</span> w = <span class="hljs-built_in">send</span>(fd, p, n, MSG_NOSIGNAL);  <span class="hljs-comment">// no SIGPIPE if the peer is gone</span>
+        <span class="hljs-keyword">if</span> (w &lt; <span class="hljs-number">0</span>) {
+            <span class="hljs-keyword">if</span> (errno == EINTR) <span class="hljs-keyword">continue</span>;
+            <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        }
+        p += w;
+        n -= <span class="hljs-built_in">size_t</span>(w);
+    }
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> lfd = <span class="hljs-built_in">socket</span>(AF_INET, SOCK_STREAM, <span class="hljs-number">0</span>);
+    <span class="hljs-keyword">if</span> (lfd &lt; <span class="hljs-number">0</span>) { std::<span class="hljs-built_in">perror</span>(<span class="hljs-string">&quot;socket&quot;</span>); <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>; }
+    <span class="hljs-type">int</span> yes = <span class="hljs-number">1</span>;
+    <span class="hljs-built_in">setsockopt</span>(lfd, SOL_SOCKET, SO_REUSEADDR, &amp;yes, <span class="hljs-keyword">sizeof</span> yes);  <span class="hljs-comment">// before bind</span>
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = <span class="hljs-built_in">htonl</span>(INADDR_ANY);  <span class="hljs-comment">// all interfaces</span>
+    addr.sin_port = <span class="hljs-built_in">htons</span>(<span class="hljs-number">9000</span>);               <span class="hljs-comment">// network byte order</span>
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">bind</span>(lfd, <span class="hljs-built_in">reinterpret_cast</span>&lt;sockaddr*&gt;(&amp;addr), <span class="hljs-keyword">sizeof</span> addr) &lt; <span class="hljs-number">0</span>) { std::<span class="hljs-built_in">perror</span>(<span class="hljs-string">&quot;bind&quot;</span>); <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>; }
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">listen</span>(lfd, SOMAXCONN) &lt; <span class="hljs-number">0</span>) { std::<span class="hljs-built_in">perror</span>(<span class="hljs-string">&quot;listen&quot;</span>); <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>; }
+
+    <span class="hljs-keyword">for</span> (;;) {
+        sockaddr_in peer{};
+        <span class="hljs-type">socklen_t</span> plen = <span class="hljs-keyword">sizeof</span> peer;
+        <span class="hljs-type">int</span> cfd = <span class="hljs-built_in">accept</span>(lfd, <span class="hljs-built_in">reinterpret_cast</span>&lt;sockaddr*&gt;(&amp;peer), &amp;plen);
+        <span class="hljs-keyword">if</span> (cfd &lt; <span class="hljs-number">0</span>) {
+            <span class="hljs-keyword">if</span> (errno == EINTR) <span class="hljs-keyword">continue</span>;
+            std::<span class="hljs-built_in">perror</span>(<span class="hljs-string">&quot;accept&quot;</span>);
+            <span class="hljs-keyword">break</span>;
+        }
+        <span class="hljs-type">char</span> ip[INET_ADDRSTRLEN];
+        <span class="hljs-built_in">inet_ntop</span>(AF_INET, &amp;peer.sin_addr, ip, <span class="hljs-keyword">sizeof</span> ip);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;client %s:%d\n&quot;</span>, ip, <span class="hljs-built_in">ntohs</span>(peer.sin_port));
+        <span class="hljs-type">char</span> buf[<span class="hljs-number">4096</span>];
+        <span class="hljs-keyword">for</span> (;;) {
+            <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">recv</span>(cfd, buf, <span class="hljs-keyword">sizeof</span> buf, <span class="hljs-number">0</span>);
+            <span class="hljs-keyword">if</span> (n == <span class="hljs-number">0</span>) <span class="hljs-keyword">break</span>;  <span class="hljs-comment">// peer sent FIN</span>
+            <span class="hljs-keyword">if</span> (n &lt; <span class="hljs-number">0</span>) {
+                <span class="hljs-keyword">if</span> (errno == EINTR) <span class="hljs-keyword">continue</span>;
+                <span class="hljs-keyword">break</span>;
+            }
+            <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">send_all</span>(cfd, buf, <span class="hljs-built_in">size_t</span>(n))) <span class="hljs-keyword">break</span>;
+        }
+        <span class="hljs-built_in">close</span>(cfd);  <span class="hljs-comment">// forgetting this leaks fds and leaves peers in FIN_WAIT_2</span>
+    }
+    <span class="hljs-built_in">close</span>(lfd);
+}</code></pre>
+<p>This server handles one client at a time. Real servers use a thread per connection (simple, but costly beyond thousands of connections), a thread pool, or an event loop with non-blocking sockets and <code>epoll</code>.</p>
+
+<h3 id="ch05-client">A client with getaddrinfo</h3>
+<p><code>getaddrinfo</code> resolves names for IPv4 and IPv6 alike and returns a list of candidate addresses; a robust client tries each in turn. Never hand-fill <code>sockaddr_in</code> from a hostname, and never use the obsolete <code>gethostbyname</code> (not thread-safe, IPv4 only).</p>
+<pre data-run="ch08-client" data-mode="compile"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;netdb.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">connect_to</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* host, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* port)</span> </span>{
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;  <span class="hljs-comment">// IPv4 or IPv6</span>
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* res = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-keyword">if</span> (<span class="hljs-type">int</span> rc = <span class="hljs-built_in">getaddrinfo</span>(host, port, &amp;hints, &amp;res); rc != <span class="hljs-number">0</span>) {
+        std::<span class="hljs-built_in">fprintf</span>(stderr, <span class="hljs-string">&quot;getaddrinfo: %s\n&quot;</span>, <span class="hljs-built_in">gai_strerror</span>(rc));
+        <span class="hljs-keyword">return</span> <span class="hljs-number">-1</span>;
+    }
+    <span class="hljs-type">int</span> fd = <span class="hljs-number">-1</span>;
+    <span class="hljs-keyword">for</span> (addrinfo* ai = res; ai; ai = ai-&gt;ai_next) {
+        fd = <span class="hljs-built_in">socket</span>(ai-&gt;ai_family, ai-&gt;ai_socktype, ai-&gt;ai_protocol);
+        <span class="hljs-keyword">if</span> (fd &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">continue</span>;
+        <span class="hljs-keyword">if</span> (<span class="hljs-built_in">connect</span>(fd, ai-&gt;ai_addr, ai-&gt;ai_addrlen) == <span class="hljs-number">0</span>) <span class="hljs-keyword">break</span>;
+        <span class="hljs-built_in">close</span>(fd);
+        fd = <span class="hljs-number">-1</span>;
+    }
+    <span class="hljs-built_in">freeaddrinfo</span>(res);
+    <span class="hljs-keyword">return</span> fd;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">(<span class="hljs-type">int</span> argc, <span class="hljs-type">char</span>** argv)</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* host = argc &gt; <span class="hljs-number">1</span> ? argv[<span class="hljs-number">1</span>] : <span class="hljs-string">&quot;example.com&quot;</span>;
+    <span class="hljs-type">int</span> fd = <span class="hljs-built_in">connect_to</span>(host, <span class="hljs-string">&quot;80&quot;</span>);
+    <span class="hljs-keyword">if</span> (fd &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    std::string req = std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;GET / HTTP/1.1\r\nHost: &quot;</span>) + host + <span class="hljs-string">&quot;\r\nConnection: close\r\n\r\n&quot;</span>;
+    <span class="hljs-built_in">send</span>(fd, req.<span class="hljs-built_in">data</span>(), req.<span class="hljs-built_in">size</span>(), <span class="hljs-number">0</span>);  <span class="hljs-comment">// small request; production code loops like send_all</span>
+    <span class="hljs-type">char</span> buf[<span class="hljs-number">4096</span>];
+    <span class="hljs-type">ssize_t</span> n;
+    <span class="hljs-keyword">while</span> ((n = <span class="hljs-built_in">recv</span>(fd, buf, <span class="hljs-keyword">sizeof</span> buf, <span class="hljs-number">0</span>)) &gt; <span class="hljs-number">0</span>) std::<span class="hljs-built_in">fwrite</span>(buf, <span class="hljs-number">1</span>, <span class="hljs-built_in">size_t</span>(n), stdout);
+    <span class="hljs-built_in">close</span>(fd);
+}</code></pre>
+
+<h3 id="ch05-byte-order">Byte order</h3>
+<p>Every multi-byte field in IP, TCP and UDP headers is big-endian ("network byte order"). The sockets API passes ports and IPv4 addresses in network order inside <code>sockaddr_in</code>, so convert with <code>htons</code>/<code>htonl</code> on the way in and <code>ntohs</code>/<code>ntohl</code> on the way out. Use <code>inet_pton</code> and <code>inet_ntop</code> for text conversion. Your own wire formats should also pick one order explicitly and serialise byte by byte (or with <code>std::byteswap</code> in C++23), never by <code>memcpy</code> of a struct, which also copies padding and host byte order.</p>
+
+<h3 id="ch05-blocking">Blocking vs non-blocking, select, poll and epoll</h3>
+<p>By default <code>accept</code>, <code>connect</code>, <code>recv</code> and (when the send buffer is full) <code>send</code> block the thread. With <code>fcntl(fd, F_SETFL, flags | O_NONBLOCK)</code> they return −1 with <code>errno</code> set to <code>EAGAIN</code>/<code>EWOULDBLOCK</code> instead, and a non-blocking <code>connect</code> returns <code>EINPROGRESS</code>; you then wait for writability and read <code>SO_ERROR</code>. To wait on many sockets at once you use a readiness API:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>API</th><th>Interface</th><th>Cost per wait</th><th>Limits</th></tr></thead>
+<tbody>
+<tr><td><code>select</code></td><td>three <code>fd_set</code> bitmaps, rebuilt every call, <code>nfds</code> = highest fd + 1</td><td>O(highest fd)</td><td><code>FD_SETSIZE</code>, usually 1024; fds above it overflow the bitmap</td></tr>
+<tr><td><code>poll</code></td><td>array of <code>pollfd {fd, events, revents}</code></td><td>O(number of fds)</td><td>no fixed limit</td></tr>
+<tr><td><code>epoll</code> (Linux)</td><td>kernel-side interest set: <code>epoll_create1</code>, <code>epoll_ctl</code>, <code>epoll_wait</code></td><td>O(ready fds)</td><td>Linux only; BSD and macOS have <code>kqueue</code>, Windows has IOCP</td></tr>
+</tbody></table></div>
+<p><code>epoll</code> is level-triggered by default (reports a socket as long as it has data). With <code>EPOLLET</code> (edge-triggered) it reports only <i>changes</i>, so you must read until <code>EAGAIN</code> every time, or the remaining data is never reported again. A Linux-only sketch of the loop:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-type">int</span> ep = <span class="hljs-built_in">epoll_create1</span>(<span class="hljs-number">0</span>);
+epoll_event ev{};
+ev.events = EPOLLIN;
+ev.data.fd = listen_fd;
+<span class="hljs-built_in">epoll_ctl</span>(ep, EPOLL_CTL_ADD, listen_fd, &amp;ev);
+epoll_event ready[<span class="hljs-number">64</span>];
+<span class="hljs-keyword">for</span> (;;) {
+    <span class="hljs-type">int</span> n = <span class="hljs-built_in">epoll_wait</span>(ep, ready, <span class="hljs-number">64</span>, <span class="hljs-number">-1</span>);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) {
+        <span class="hljs-keyword">if</span> (ready[i].data.fd == listen_fd) { <span class="hljs-comment">/* accept, set O_NONBLOCK, EPOLL_CTL_ADD the new fd */</span> }
+        <span class="hljs-keyword">else</span> { <span class="hljs-comment">/* recv until EAGAIN; on 0 or error: EPOLL_CTL_DEL and close */</span> }
+    }
+}</code></pre>
+<p>Newer Linux code can also use <code>io_uring</code>, which submits the operations themselves (completion-based, like IOCP) instead of waiting for readiness.</p>
+
+<h3 id="ch05-framing">Message framing: TCP is a byte stream</h3>
+<p>TCP preserves the order of bytes and nothing else. One <code>send</code> of 12 bytes can arrive as one <code>recv</code> of 12, as 12 reads of 1 byte, or merged with the next message. <code>recv(fd, buf, n, 0)</code> returns whatever is available, between 1 and <code>n</code> bytes (0 means the peer closed). Any protocol on TCP therefore needs framing: a delimiter (HTTP header lines end with CRLF, Redis uses CRLF), a length prefix (most binary protocols, gRPC, Kafka) or a fixed message size. The receiver keeps a buffer, appends what each <code>recv</code> returns, and extracts complete messages from the front.</p>
+<pre data-run="ch08-short-read"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> sv[<span class="hljs-number">2</span>];
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">socketpair</span>(AF_UNIX, SOCK_STREAM, <span class="hljs-number">0</span>, sv) &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-built_in">write</span>(sv[<span class="hljs-number">0</span>], <span class="hljs-string">&quot;HELLO &quot;</span>, <span class="hljs-number">6</span>);  <span class="hljs-comment">// the sender&#x27;s 12-byte message arrives in two pieces</span>
+    <span class="hljs-type">char</span> buf[<span class="hljs-number">12</span>];
+    <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">recv</span>(sv[<span class="hljs-number">1</span>], buf, <span class="hljs-keyword">sizeof</span> buf, <span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;asked for %zu, got %zd\n&quot;</span>, <span class="hljs-keyword">sizeof</span> buf, n);
+    <span class="hljs-built_in">write</span>(sv[<span class="hljs-number">0</span>], <span class="hljs-string">&quot;WORLD!&quot;</span>, <span class="hljs-number">6</span>);
+    <span class="hljs-type">ssize_t</span> m = <span class="hljs-built_in">recv</span>(sv[<span class="hljs-number">1</span>], buf + n, <span class="hljs-keyword">sizeof</span> buf - <span class="hljs-built_in">size_t</span>(n), <span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;then got %zd: %.12s\n&quot;</span>, m, buf);
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">0</span>]);
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">1</span>]);
+}</code></pre>
+<pre class="out" data-out="ch08-short-read">asked for 12, got 6
+then got 6: HELLO WORLD!</pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>Code that does a single <code>recv</code> per message works on localhost and in tests, because small messages usually arrive whole, and then fails under load or over a real network. Interviewers often hand you exactly this bug. The same is true of <code>send</code>: on a blocking socket it normally sends everything, but it can return less (signals, non-blocking mode), so loop until all bytes are written.</p></div>
+<div class="callout tip"><p class="callout-title">Tip</p><p>Two more production habits: ignore <code>SIGPIPE</code> (or pass <code>MSG_NOSIGNAL</code>), because writing to a socket the peer has reset kills the process by default; and treat <code>EINTR</code> as "retry", not as an error.</p></div>
+</section>
+
+<section id="ch05-http" data-roles="th"><div class="sec-head"><h2>HTTP/1.1, HTTP/2 and HTTP/3</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch05-http11">HTTP/1.1 messages</h3>
+<p>HTTP semantics are in RFC 9110 and the HTTP/1.1 wire format in RFC 9112. A request is a request line, header lines, an empty line, and an optional body, with CRLF line endings:</p>
+<pre><code class="language-text hljs">GET /search?q=tcp HTTP/1.1
+Host: www.example.com
+User-Agent: curl/8.5.0
+Accept: */*
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 1256
+Cache-Control: max-age=60
+
+&lt;!doctype html&gt;...</code></pre>
+<ul>
+<li><b>Host</b> is mandatory in HTTP/1.1 (a server answers 400 without it), which is what lets one IP address host many sites.</li>
+<li>Header names are case-insensitive. HTTP/2 and HTTP/3 send them lowercase.</li>
+<li>The body length is known from <b>Content-Length</b>, or from <b>Transfer-Encoding: chunked</b> (hex size lines, terminated by a zero-size chunk), or, for responses only, by the server closing the connection.</li>
+<li><b>Persistent connections</b> are the default in HTTP/1.1 ("keep-alive"): the connection stays open for further requests until either side sends <code>Connection: close</code> or times out. HTTP/1.0 needed <code>Connection: keep-alive</code> explicitly. Reusing connections avoids a new TCP and TLS handshake and a new slow start per request.</li>
+</ul>
+<h3 id="ch05-methods-status">Methods and status codes</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Method</th><th>Safe</th><th>Idempotent</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>GET, HEAD</td><td>yes</td><td>yes</td><td>read a resource (HEAD: headers only)</td></tr>
+<tr><td>OPTIONS</td><td>yes</td><td>yes</td><td>capabilities, CORS preflight</td></tr>
+<tr><td>PUT</td><td>no</td><td>yes</td><td>create or replace at a known URL</td></tr>
+<tr><td>DELETE</td><td>no</td><td>yes</td><td>remove</td></tr>
+<tr><td>POST</td><td>no</td><td>no</td><td>create under a collection, or any non-idempotent action</td></tr>
+<tr><td>PATCH</td><td>no</td><td>not guaranteed</td><td>partial update (RFC 5789)</td></tr>
+</tbody></table></div>
+<p><b>Safe</b> means no intended side effects. <b>Idempotent</b> means sending it twice has the same effect as once, which is what makes a request safe to retry after a timeout. Status classes: 1xx informational, 2xx success, 3xx redirection, 4xx client error, 5xx server error.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Code</th><th>Meaning</th><th>Code</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>200</td><td>OK</td><td>400</td><td>Bad Request (malformed)</td></tr>
+<tr><td>201</td><td>Created (with Location)</td><td>401</td><td>Unauthorized: not authenticated</td></tr>
+<tr><td>204</td><td>No Content</td><td>403</td><td>Forbidden: authenticated but not allowed</td></tr>
+<tr><td>206</td><td>Partial Content (Range)</td><td>404</td><td>Not Found</td></tr>
+<tr><td>301 / 308</td><td>Moved permanently (308 keeps the method)</td><td>409 / 429</td><td>Conflict / Too Many Requests</td></tr>
+<tr><td>302 / 307</td><td>Found, temporary (307 keeps the method)</td><td>500</td><td>Internal Server Error</td></tr>
+<tr><td>304</td><td>Not Modified (cache revalidation)</td><td>502 / 503 / 504</td><td>Bad Gateway / Service Unavailable / Gateway Timeout</td></tr>
+</tbody></table></div>
+<h3 id="ch05-http2-3">HTTP/2 and HTTP/3 in one breath</h3>
+<ul>
+<li><b>HTTP/2</b> (RFC 9113): same semantics, binary framing, many concurrent <b>streams</b> multiplexed on one TCP connection, header compression with HPACK (RFC 7541), stream priorities and flow control. Browsers use it only over TLS (negotiated with ALPN "h2"); cleartext h2c appears mainly between backend services, for example gRPC. It removes HTTP-level HOL blocking but keeps TCP's.</li>
+<li><b>HTTP/3</b> (RFC 9114): HTTP over <b>QUIC</b> (RFC 9000), a transport on UDP that builds in TLS 1.3 (RFC 9001), independent streams (no cross-stream HOL blocking), 1-RTT setup for transport and crypto together (0-RTT on resumption), connection IDs that survive a change of IP address (Wi-Fi to cellular), and QPACK header compression (RFC 9204). Servers advertise it with an <code>Alt-Svc</code> header or an HTTPS DNS record.</li>
+</ul>
+</section>
+
+<section id="ch05-tls" data-roles="th"><div class="sec-head"><h2>HTTPS and the TLS 1.3 handshake</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> TLS turns a TCP connection into an authenticated, encrypted, integrity-protected byte stream. Asymmetric crypto is used only during the handshake, to agree on symmetric keys (ephemeral Diffie-Hellman) and to prove the server's identity (a certificate signature); the data itself is protected with fast symmetric AEAD ciphers such as AES-GCM or ChaCha20-Poly1305.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 324" role="img" aria-label="TCP handshake followed by the one round trip TLS 1.3 handshake before the HTTP request">
+<defs><marker id="ch05-c08c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="150" y="22" text-anchor="middle" class="t-bold">Client</text><text x="570" y="22" text-anchor="middle" class="t-bold">Server</text>
+<line x1="150" y1="32" x2="150" y2="306" class="d-line d-dash"/><line x1="570" y1="32" x2="570" y2="306" class="d-line d-dash"/>
+<line x1="150" y1="44" x2="568" y2="58" class="d-line" marker-end="url(#ch08-c08c)"/><text x="360" y="44" text-anchor="middle" class="t-small t-muted">SYN</text>
+<line x1="570" y1="66" x2="152" y2="80" class="d-line" marker-end="url(#ch08-c08c)"/><text x="360" y="66" text-anchor="middle" class="t-small t-muted">SYN+ACK</text>
+<text x="16" y="66" class="t-small t-muted">TCP: 1 RTT</text>
+<line x1="150" y1="100" x2="568" y2="122" class="d-line-acc" marker-end="url(#ch08-c08c)"/>
+<text x="360" y="98" text-anchor="middle" class="t-small t-acc">ACK + ClientHello: versions, ciphers, key_share, SNI, ALPN</text>
+<line x1="570" y1="186" x2="152" y2="204" class="d-line-key" marker-end="url(#ch08-c08c)"/>
+<text x="360" y="146" text-anchor="middle" class="t-small t-key">ServerHello: key_share (keys now derived)</text>
+<text x="360" y="164" text-anchor="middle" class="t-small t-key">{EncryptedExtensions, Certificate,</text>
+<text x="360" y="180" text-anchor="middle" class="t-small t-key">CertificateVerify, Finished}</text>
+<text x="16" y="160" class="t-small t-muted">TLS 1.3: 1 RTT</text>
+<line x1="150" y1="226" x2="568" y2="244" class="d-line-acc" marker-end="url(#ch08-c08c)"/>
+<text x="360" y="226" text-anchor="middle" class="t-small t-acc">{Finished} + {GET / HTTP/1.1}</text>
+<line x1="570" y1="262" x2="152" y2="282" class="d-line-key" marker-end="url(#ch08-c08c)"/>
+<text x="360" y="264" text-anchor="middle" class="t-small t-key">{HTTP/1.1 200 OK ...}</text>
+<text x="360" y="312" text-anchor="middle" class="t-small t-muted">{ } = encrypted. First response byte after 3 RTTs: TCP 1 + TLS 1 + HTTP 1 (TLS 1.2 needed 2 RTTs for its handshake).</text>
+</svg></div><figcaption><b>TLS 1.3 needs one round trip.</b> The client guesses the key exchange group and sends its key share in the first message, so the server can derive keys and encrypt everything after ServerHello, including its certificate. The client's request travels with its Finished message.</figcaption></figure>
+<ol>
+<li><b>ClientHello</b>: supported versions and cipher suites, a random value, an ephemeral (EC)DHE public key share (usually X25519, increasingly a hybrid post-quantum group), <b>SNI</b> (the hostname, still sent in clear unless Encrypted Client Hello is used) and <b>ALPN</b> (h2 or http/1.1).</li>
+<li><b>ServerHello</b>: the chosen suite and the server's key share. Both sides now compute the shared secret and derive handshake keys (HKDF). Everything from here is encrypted.</li>
+<li>The server sends <b>EncryptedExtensions</b>, its <b>Certificate</b> chain, <b>CertificateVerify</b> (a signature over the handshake transcript with the certificate's private key, which proves it owns the key) and <b>Finished</b> (a MAC over the transcript).</li>
+<li>The client <b>validates the certificate</b>: chain to a trusted root CA, hostname matches the subject alternative name, within its validity dates, not revoked. Then it checks CertificateVerify and Finished, sends its own <b>Finished</b>, and starts sending application data.</li>
+</ol>
+<p>TLS 1.3 (RFC 8446) removed RSA key transport and static Diffie-Hellman, so every connection has <b>forward secrecy</b>: stealing the server's private key later does not decrypt recorded traffic. On resumption, a pre-shared key from an earlier session allows <b>0-RTT</b> early data, which can be <b>replayed</b> by an attacker and is not forward secret with respect to the resumption key, so servers should accept only idempotent requests as early data. HSTS (a response header) tells browsers to use HTTPS only for a domain, which prevents downgrade to plain HTTP.</p>
+</section>
+
+<section id="ch05-url" data-roles="th"><div class="sec-head"><h2>What happens when you type a URL</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The classic open question. A strong answer walks the layers in order, says what is cached at each step, and offers depth where the interviewer wants it. For <code>https://www.example.com/index.html</code>:</p>
+<ol>
+<li><b>Parse the input.</b> The browser decides it is a URL (not a search), extracts scheme, host, port (443 by default for https) and path, and checks the HSTS list (an http URL for an HSTS host is upgraded to https before anything is sent).</li>
+<li><b>Reuse check.</b> If an open connection to that origin exists (keep-alive, or an HTTP/2 connection whose certificate covers the name), the browser skips to step 6. It also checks its HTTP cache: a fresh cached response skips the network entirely.</li>
+<li><b>DNS.</b> Browser cache, then OS cache and <code>/etc/hosts</code>, then a recursive query to the configured resolver, which iterates from root to <code>com</code> to <code>example.com</code> (<a href="#ch04">Ch 4</a>). The browser asks for A and AAAA (and possibly HTTPS records, which can advertise HTTP/3).</li>
+<li><b>Route the first packet.</b> The destination is off-subnet, so the OS sends to the default gateway, using ARP (or cached ARP) for the gateway's MAC. The home router applies NAT, and routers hop by hop forward on longest-prefix match.</li>
+<li><b>Transport.</b> A TCP 3-way handshake to port 443 (or a QUIC handshake over UDP for HTTP/3, which merges this step with the next).</li>
+<li><b>TLS 1.3.</b> ClientHello with SNI and ALPN, server certificate validated against the hostname, keys derived, 1 RTT.</li>
+<li><b>HTTP request.</b> <code>GET /index.html</code> with Host, cookies and accept headers, over HTTP/2 if ALPN chose h2.</li>
+<li><b>Server side.</b> A CDN edge or load balancer terminates TLS, routes the request (L4 or L7) to an application server, which may hit caches and databases, and produces a response with a status code and caching headers.</li>
+<li><b>Response and rendering.</b> The browser parses HTML into the DOM, discovers CSS, JavaScript and images and fetches them (over the same connection with HTTP/2), builds the CSSOM, runs scripts, computes layout and paints.</li>
+<li><b>Afterwards.</b> The connection stays open for reuse until idle timeout; DNS answers and cacheable responses stay cached for their TTL and max-age.</li>
+</ol>
+<div class="callout tip"><p class="callout-title">Tip</p><p>Count the round trips: DNS (often 0 if cached), TCP 1, TLS 1, HTTP 1, so about 3 RTTs before the first byte on a cold HTTPS connection over TCP, and 2 with HTTP/3 (QUIC combines the transport and TLS handshakes). On a 100 ms RTT that is the difference between 300 ms and 200 ms, which is why CDNs put servers close to users.</p></div>
+</section>
+
+<section id="ch05-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Give four differences between TCP and UDP, and three situations where UDP is the better choice.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> TCP is connection-oriented, reliable, ordered, a byte stream, and flow and congestion controlled, with a 20 to 60 byte header. UDP is connectionless, best effort, unordered, message-oriented, with an 8-byte header and no handshake. UDP wins for DNS queries (one request, one reply, no handshake), real-time media and games (late data is useless, so retransmission only adds delay), multicast (market data feeds, service discovery) and protocols that implement their own reliability, such as QUIC.</p>
+    <p><b>Why.</b> TCP's guarantees come from state and waiting: a handshake before data, retransmission timers, and in-order delivery that holds back later data behind a loss. When the application would rather skip a lost packet than wait for it, those guarantees hurt. The wrong answer "UDP is faster" is too vague: UDP has no setup round trip and no head-of-line blocking, but raw throughput on a clean path is similar, and UDP without congestion control can be worse for everyone.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why does TCP need a three-way handshake? Why would two messages not be enough?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Both sides must choose an initial sequence number and learn that the other side received it. The client's ISN is confirmed by the SYN+ACK, and the server's ISN is confirmed only by the third message. With two messages the server would never know its ISN arrived, and a delayed duplicate SYN from an old connection would make the server create a connection that the client does not want.</p>
+    <p><b>Why.</b> RFC 9293 section 3.5 describes exactly the old-duplicate case: with the third step, the client sees a SYN+ACK for a SYN it did not just send and answers with RST, so the bogus half-open connection dies. The "four messages, two piggybacked into one" view explains the count: SYN, ACK, SYN, ACK, with the server's ACK and SYN combined. An answer about "checking that the network works" misses the point that the purpose is synchronising sequence numbers (that is what SYN stands for).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Which side of a TCP connection enters TIME_WAIT, how long does it stay there, and why is the duration 2·MSL?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The side that sends the first FIN (the active closer), whether client or server. It stays for 2·MSL, nominally 4 minutes by RFC (MSL is 2 minutes), 60 seconds on Linux. The two reasons: to re-ACK the peer's FIN if the last ACK is lost, and to let delayed segments of this connection expire before the same 4-tuple can be reused.</p>
+    <p><b>Why.</b> If the final ACK is lost, the peer in LAST_ACK retransmits its FIN; that FIN can arrive up to one MSL after the lost ACK would have expired, so the active closer must survive two segment lifetimes. Without TIME_WAIT the retransmitted FIN would get a RST and the peer's close would be reported as an error. The common wrong answers are "the server" and "the client": it depends only on who closes first. Disabling TIME_WAIT (with SO_LINGER and a zero timeout, which sends RST) is almost always the wrong fix; reusing connections is the right one.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does <code>SO_REUSEADDR</code> let two server processes listen on the same TCP port on Linux? What does?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. On Linux <code>SO_REUSEADDR</code> lets a socket bind a port that still has connections in TIME_WAIT (so a restarted server can bind at once), but a second listener on the same address and port still fails with <code>EADDRINUSE</code>. <code>SO_REUSEPORT</code> (Linux 3.9 and later) allows several sockets, owned by the same user, to bind and listen on the same port, and the kernel distributes new connections between them by hashing the 4-tuple.</p>
+    <p><b>Why.</b> The two options solve different problems: restart after close (REUSEADDR) and load-balancing across workers without a shared accept queue (REUSEPORT, used by nginx with <code>reuseport</code> and by many multi-threaded servers). On BSD and macOS, <code>SO_REUSEADDR</code> also allows binding a specific address while another socket holds the wildcard address, which is where the confusion comes from. The option must be set before <code>bind()</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Explain the difference between flow control and congestion control. Which variable implements each, and who sets it?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Flow control stops the sender from overrunning the receiver's buffer; it uses the receive window (rwnd), which the receiver advertises in every segment. Congestion control stops the sender from overloading the network; it uses the congestion window (cwnd), which the sender estimates from ACKs, losses and delay and never transmits. The sender keeps in flight at most min(rwnd, cwnd).</p>
+    <p><b>Why.</b> A fast server talking to a slow phone is limited by rwnd even on an empty network; a fast phone and fast server across a congested link are limited by cwnd even with large buffers. Mixing them up is the classic mistake, as is saying "slow start is flow control". The window scale option only affects rwnd. A useful follow-up: throughput ≤ window / RTT, so a 64 KB window over a 100 ms RTT gives at most about 5 Mbit/s regardless of link speed.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What is a SYN flood, and how do SYN cookies let a server survive one without keeping state? What does the server give up while cookies are in use?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> An attacker sends many SYNs, usually from spoofed source addresses, and never completes the handshake. Each SYN creates a half-open entry in the listener's SYN queue, and once the queue is full, real clients' SYNs are dropped. With SYN cookies the server stores nothing: it encodes a coarse timestamp, an index for the client's MSS and a keyed hash of the 4-tuple into the ISN of its SYN+ACK. A real client's final ACK carries that value plus one, and the server checks the hash and rebuilds the connection from it. While cookies are active, the server loses options that need state from the SYN: window scale and SACK survive only if TCP timestamps are on (Linux stores them in the timestamp value), and the MSS is rounded to one of a few values.</p>
+    <p><b>Why.</b> The attack exhausts state, not bandwidth, so the fix is to stop holding state before the client proves it can receive packets at its claimed address. A spoofed SYN never produces a valid ACK. Linux turns cookies on automatically when the SYN queue overflows (<code>net.ipv4.tcp_syncookies=1</code>, the default), so normal traffic keeps every option. A common wrong answer is "increase the backlog": that only delays the overflow. Another is "SYN cookies stop DDoS": they do nothing against floods that saturate the link or against attackers that complete real handshakes. RFC 4987 surveys this and the other mitigations.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span><code>send()</code> returned the full length of your message. Has the peer received it? And if you call <code>close()</code> right after, is delivery guaranteed?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No and no. A successful <code>send</code> means only that the bytes were copied into the local kernel send buffer. After <code>close</code> the kernel keeps trying to deliver them in the background, but your process gets no report if that fails, and if unread data is still sitting in <i>your</i> receive buffer at close time, Linux sends RST instead of FIN, and the peer may discard data it has not read yet.</p>
+    <p><b>Why.</b> TCP acknowledgements are between kernels, never surfaced to the application, so "delivered to the peer application" needs an application-level reply. The RST-on-close-with-unread-data behaviour (described in RFC 1122 and RFC 2525) catches servers that send an error response and close without draining the request body: the client sees "connection reset" and loses the response. The graceful pattern is <code>shutdown(fd, SHUT_WR)</code>, read until 0, then <code>close</code>. <code>SO_LINGER</code> with a timeout makes <code>close</code> block until the data is acknowledged or the timeout expires.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>A request/response protocol shows a steady 40 ms latency per request on Linux, although the server answers in microseconds. The client writes a header and then a body with two <code>send</code> calls. What is happening and how do you fix it?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Nagle's algorithm holds the second small write until the first is acknowledged, and the server's delayed-ACK timer (40 ms minimum on Linux) holds the ACK because the server has nothing to send until it has the whole request. Fix by writing the request in one call (<code>writev</code> or one buffer), or set <code>TCP_NODELAY</code> on the client.</p>
+    <p><b>Why.</b> Nagle (RFC 896) allows only one small unacknowledged segment in flight; delayed ACK (RFC 1122) waits to piggyback. Each is sensible alone, and together they wait for each other until the timer fires. The pattern is write-write-read; write-read-write-read does not trigger it. Turning off delayed ACK on the server (<code>TCP_QUICKACK</code>) also helps but must be re-armed, and disabling Nagle without batching your writes produces many tiny packets, so the best fix is one write per message plus <code>TCP_NODELAY</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does HTTP/2 solve head-of-line blocking?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Only at the HTTP layer. HTTP/2 multiplexes streams on one TCP connection, so a slow response no longer blocks others, but one lost TCP segment still stalls every stream until it is retransmitted. HTTP/3 over QUIC removes transport-level HOL blocking because QUIC orders each stream independently.</p>
+    <p><b>Why.</b> TCP delivers one ordered byte stream and knows nothing about HTTP/2 streams; bytes after a hole wait in the kernel even if they belong to a different stream. On lossy links, HTTP/2 on one connection can perform worse than HTTP/1.1 on six. "Yes, HTTP/2 fixed it" is the half-right answer interviewers are listening for. QUIC still has HOL blocking within a single stream, which is inherent to ordered delivery.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span><code>ss -tan</code> on your server shows 20,000 sockets in CLOSE_WAIT and the count keeps rising. What does that mean and where is the bug?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The peers have closed their side (sent FIN, which the kernel ACKed), but your application never called <code>close()</code> on those sockets. The bug is in your code: a missing close on some path (often an error path or a <code>recv</code> returning 0 that is not handled), or threads stuck elsewhere. Eventually the process runs out of file descriptors (<code>EMFILE</code>).</p>
+    <p><b>Why.</b> CLOSE_WAIT has no timeout in TCP: the kernel waits for the application indefinitely, since only the application knows whether it still wants to send. Contrast TIME_WAIT, which is normal, bounded by a timer, and holds no descriptor. Tuning kernel parameters does not fix CLOSE_WAIT. Look for the code path that reads EOF and does not close, and use RAII wrappers for descriptors in C++ so every path closes.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can you call <code>connect()</code> on a UDP socket? What does it do, given that UDP has no connection?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes. It sends nothing; it records a default peer address. Afterwards you can use <code>send</code>/<code>recv</code> without addresses, the kernel discards datagrams from other sources, and asynchronous ICMP errors (such as port unreachable) are reported to you as <code>ECONNREFUSED</code> on a later call.</p>
+    <p><b>Why.</b> A connected UDP socket also lets the kernel cache the route, which makes sending slightly cheaper, and it is how you find your own outgoing address: connect a UDP socket to a remote IP and call <code>getsockname</code>, with no packet sent. On an unconnected UDP socket ICMP errors are not delivered, because the kernel cannot tell which destination they belong to. Saying "connect is TCP-only" is the common wrong answer.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What does the <code>backlog</code> argument to <code>listen()</code> limit on Linux, and what happens to new clients when that limit is reached?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It sizes the accept queue: connections whose handshake has completed but that the application has not yet accepted, capped by <code>net.core.somaxconn</code>. When the queue is full, Linux drops the client's final ACK (and may drop new SYNs), so clients see retransmissions and connection delays of a second or more, not an immediate refusal.</p>
+    <p><b>Why.</b> Since Linux 2.2 the half-open (SYN_RCVD) connections live in a separate SYN queue sized by <code>tcp_max_syn_backlog</code>, protected by SYN cookies. Older BSD semantics counted both together, which is the source of the classic "backlog is the number of pending connections" answer. The client may already believe it is connected (it got the SYN+ACK) and send data that the server silently drops until the handshake completes. <code>net.ipv4.tcp_abort_on_overflow=1</code> makes Linux send RST instead. The real fix is to call <code>accept</code> faster.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>The peer has closed its socket. You call <code>write()</code> twice on yours. What happens on each call?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Over TCP, the first write usually succeeds: the data is buffered and sent. The peer's kernel has no socket for it any more and replies with RST. The second write then fails with <code>EPIPE</code>, and by default the kernel also sends <code>SIGPIPE</code>, which terminates the process (exit status 141 from a shell) unless it is ignored or <code>MSG_NOSIGNAL</code> is used.</p>
+    <p><b>Why.</b> Receiving the peer's FIN only means "they will send no more"; they might still be reading (half-close), so TCP cannot fail the first write. Only the RST proves nobody is listening. Many servers have died "mysteriously" with no log line because of SIGPIPE. Standard practice: <code>signal(SIGPIPE, SIG_IGN)</code> at startup or <code>MSG_NOSIGNAL</code> on every send (on macOS, the <code>SO_NOSIGPIPE</code> socket option is the traditional equivalent), and handle <code>EPIPE</code> and <code>ECONNRESET</code> as ordinary errors.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Walk through the TLS 1.3 handshake. How many round trips does it take, what is encrypted, and what is the risk of 0-RTT?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> One round trip. ClientHello carries an ephemeral key share; ServerHello returns the server's share, after which both derive keys, and the server sends encrypted EncryptedExtensions, Certificate, CertificateVerify and Finished. The client verifies the certificate chain and hostname and the signature, sends Finished, and its first request goes with it. Everything after ServerHello is encrypted, including the certificate; SNI in the ClientHello is still visible unless ECH is used. 0-RTT early data on resumption can be replayed by an attacker, so it must only carry idempotent requests.</p>
+    <p><b>Why.</b> TLS 1.2 needed two round trips because the key exchange parameters came only after the server picked a cipher suite. TLS 1.3 (RFC 8446) cut the options to a few (EC)DHE groups so the client can guess and send its share up front (if it guesses wrong, HelloRetryRequest costs an extra round trip). Ephemeral keys give forward secrecy. Certificates authenticate; Diffie-Hellman provides the key; symmetric AEAD protects the data. The common error is "the client encrypts a session key with the server's RSA public key", which is TLS 1.2 RSA key exchange and was removed in 1.3.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>"TCP guarantees delivery." True or false?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> False as stated. TCP guarantees that the bytes the receiver gets are in order, without gaps or duplicates, and that loss is retried while the connection lives. It cannot guarantee delivery if the connection breaks: bytes in the send buffer or in flight are lost, and the sender learns only that the connection failed, not which bytes the peer application processed.</p>
+    <p><b>Why.</b> This is why payment systems, message queues and RPC frameworks add application-level acknowledgements, request ids and idempotent retries. A related trap is the "exactly once" claim: after a timeout the client cannot tell whether the server processed the request, so retries need idempotency keys. Also note that TCP's 16-bit checksum is weak; very rare corruption can pass it, which is one reason TLS (with its MAC) also gives integrity.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A server listens on port 443. Is the number of simultaneous clients limited to about 65 thousand because ports are 16-bit?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. A connection is identified by the 4-tuple (source IP, source port, destination IP, destination port), and all server-side connections share the server port. The real limits are memory, file descriptors (<code>ulimit -n</code>) and CPU. The 16-bit limit applies to a <i>client</i> host: about 28 thousand ephemeral ports (Linux default range) per (destination IP, destination port) pair, per source IP.</p>
+    <p><b>Why.</b> <code>accept</code> returns a new socket that shares the listening port; the kernel demultiplexes incoming segments by the full tuple. Servers handle millions of connections on one port. The client-side limit bites load generators and proxies that open many connections to one backend, especially with TIME_WAIT on the client side; fixes include more source IPs, a wider <code>ip_local_port_range</code> and connection pooling.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Explain these pairs of HTTP status codes: 401 vs 403, 301 vs 308, 502 vs 504. Which methods are idempotent, and why does that matter?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> 401 means "not authenticated" (send credentials; it comes with <code>WWW-Authenticate</code>), 403 means "authenticated, or authentication would not help, but not allowed". 301 and 308 are both permanent redirects, but clients may change a POST to GET after 301, while 308 requires keeping the method and body (307 is the temporary version of 308). 502 means the gateway got an invalid response from the upstream (for example a crash or reset), 504 means the upstream did not answer in time. GET, HEAD, OPTIONS, PUT and DELETE are idempotent; POST is not, and PATCH is not guaranteed to be.</p>
+    <p><b>Why.</b> Idempotency (RFC 9110 section 9.2.2) decides what a client, proxy or library may retry automatically after a timeout or connection reset: retrying an idempotent request cannot double its effect, while retrying a POST might charge a card twice. That is why APIs add idempotency keys to POST. Idempotent is not the same as safe: DELETE changes state but is idempotent.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Compare <code>select</code>, <code>poll</code> and <code>epoll</code>. Why does epoll scale to 100,000 idle connections when the other two do not, and what extra rule does edge-triggered mode impose?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> All three tell you which descriptors are ready. <code>select</code> passes three bitmaps limited to <code>FD_SETSIZE</code> (usually 1024) and rewrites them, so you rebuild them every call. <code>poll</code> passes an array with no fixed limit. Both copy the whole interest set into the kernel on every call and scan all of it, so each wait costs O(n) even when only one descriptor is ready. <code>epoll</code> keeps the interest set inside the kernel (<code>epoll_ctl</code> once per descriptor), and the kernel puts descriptors on a ready list as events arrive, so <code>epoll_wait</code> costs O(ready). In edge-triggered mode (<code>EPOLLET</code>) you are told only when a descriptor <i>becomes</i> ready, so you must use non-blocking sockets and read (or accept, or write) until <code>EAGAIN</code>. Otherwise the data left behind is never reported again.</p>
+    <p><b>Why.</b> With 100,000 connections and 10 active, poll copies and scans 100,000 entries per wakeup, while epoll returns 10. The common wrong answer is "epoll is always faster": with a few busy descriptors poll is just as fast, and epoll costs one system call per interest change. Level-triggered epoll (the default) behaves like poll and is the safer choice. Edge-triggered mode saves wakeups but turns a missed drain into a hung connection. With several threads waiting on one epoll set, use <code>EPOLLEXCLUSIVE</code> or <code>EPOLLONESHOT</code> to avoid thundering-herd wakeups and two threads handling the same socket. All three report readiness, which differs from completion: <code>io_uring</code> and Windows IOCP perform the I/O and tell you when it is done.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>How many round trips pass before the first response byte of an HTTPS request on a new connection, with DNS already cached, for: TCP + TLS 1.2, TCP + TLS 1.3, TCP + TLS 1.3 with 0-RTT resumption, and HTTP/3 (QUIC) on a first and on a resumed connection?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> TCP + TLS 1.2: 4 (TCP 1, TLS 2, HTTP 1). TCP + TLS 1.3: 3. TCP + TLS 1.3 with 0-RTT: 2, because the request rides in the first TLS flight but the TCP handshake still costs a round trip. QUIC first connection: 2 (one combined transport and crypto handshake, then the request). QUIC with 0-RTT: 1, since the request goes in the first packet.</p>
+    <p><b>Why.</b> TLS 1.3 saves a round trip because the client sends its key share in ClientHello. 0-RTT reuses a pre-shared key from an earlier session, so it is available only on resumption. QUIC also merges the transport handshake into the TLS one. The trap is the name: "0-RTT TLS" over TCP still costs at least one round trip, unless TCP Fast Open also carries the ClientHello in the SYN, which is rarely deployed because middleboxes interfere with it. A cold DNS lookup adds at least one round trip to the resolver, plus the resolver's own queries on a cache miss. On a 100 ms path, going from 4 round trips to 1 saves 300 ms, which is why CDNs and HTTP/3 matter most on mobile networks. 0-RTT data can be replayed, so servers accept only idempotent requests in it.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch05-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+<p>Programs that run use only a <code>socketpair</code> or pure computation, so they are deterministic. Programs that would block or need a network are compile-only. Byte-order answers assume a little-endian machine (x86-64, ARM64).</p>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>This decodes the first 20 bytes of a captured TCP segment. What does it print, and what kind of segment is it?</p>
+<pre data-run="ch08-tcphdr"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">uint8_t</span> seg[<span class="hljs-number">20</span>] = {<span class="hljs-number">0xc3</span>, <span class="hljs-number">0x50</span>, <span class="hljs-number">0x01</span>, <span class="hljs-number">0xbb</span>,
+                             <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x03</span>, <span class="hljs-number">0xe8</span>,
+                             <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>,
+                             <span class="hljs-number">0x50</span>, <span class="hljs-number">0x02</span>, <span class="hljs-number">0xfa</span>, <span class="hljs-number">0xf0</span>,
+                             <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>};
+    <span class="hljs-type">uint16_t</span> sport, dport, win;
+    <span class="hljs-type">uint32_t</span> seq;
+    std::<span class="hljs-built_in">memcpy</span>(&amp;sport, seg, <span class="hljs-number">2</span>);
+    std::<span class="hljs-built_in">memcpy</span>(&amp;dport, seg + <span class="hljs-number">2</span>, <span class="hljs-number">2</span>);
+    std::<span class="hljs-built_in">memcpy</span>(&amp;seq, seg + <span class="hljs-number">4</span>, <span class="hljs-number">4</span>);
+    std::<span class="hljs-built_in">memcpy</span>(&amp;win, seg + <span class="hljs-number">14</span>, <span class="hljs-number">2</span>);
+    <span class="hljs-type">int</span> hlen = (seg[<span class="hljs-number">12</span>] &gt;&gt; <span class="hljs-number">4</span>) * <span class="hljs-number">4</span>;
+    <span class="hljs-type">uint8_t</span> f = seg[<span class="hljs-number">13</span>];
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d -&gt; %d seq=%u hlen=%d win=%d\n&quot;</span>, <span class="hljs-built_in">ntohs</span>(sport), <span class="hljs-built_in">ntohs</span>(dport), <span class="hljs-built_in">ntohl</span>(seq), hlen, <span class="hljs-built_in">ntohs</span>(win));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;SYN=%d ACK=%d FIN=%d RST=%d\n&quot;</span>, (f &gt;&gt; <span class="hljs-number">1</span>) &amp; <span class="hljs-number">1</span>, (f &gt;&gt; <span class="hljs-number">4</span>) &amp; <span class="hljs-number">1</span>, f &amp; <span class="hljs-number">1</span>, (f &gt;&gt; <span class="hljs-number">2</span>) &amp; <span class="hljs-number">1</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A SYN from ephemeral port 50000 to HTTPS (443), the first segment of a handshake.</p>
+<pre class="out" data-out="ch08-tcphdr">50000 -&gt; 443 seq=1000 hlen=20 win=64240
+SYN=1 ACK=0 FIN=0 RST=0</pre>
+    <p><b>Why.</b> Ports and numbers are big-endian on the wire: 0xc350 = 50000, 0x01bb = 443, 0x000003e8 = 1000. The data offset is the top nibble of byte 12, in 32-bit words: 5 × 4 = 20 bytes, so no options (a real SYN almost always carries MSS and other options, so you would usually see 0xa0, 40 bytes). The flag byte 0x02 is SYN alone; the bit order from the low end is FIN, SYN, RST, PSH, ACK, URG, ECE, CWR. Using <code>memcpy</code> plus <code>ntohs</code> avoids both the byte-order bug and the misaligned-pointer cast that <code>*(uint16_t*)(seg + 2)</code> would be.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Fill in the numbers: what does this connection trace print?</p>
+<pre data-run="ch08-seqack"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">uint32_t</span> c = <span class="hljs-number">1000</span>, s = <span class="hljs-number">5000</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;C-&gt;S SYN seq=%u\n&quot;</span>, c);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;S-&gt;C SYN+ACK seq=%u ack=%u\n&quot;</span>, s, c + <span class="hljs-number">1</span>);
+    c += <span class="hljs-number">1</span>;
+    s += <span class="hljs-number">1</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;C-&gt;S ACK seq=%u ack=%u\n&quot;</span>, c, s);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">2</span>; ++i) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;C-&gt;S data seq=%u len=100\n&quot;</span>, c);
+        c += <span class="hljs-number">100</span>;
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;S-&gt;C ACK ack=%u\n&quot;</span>, c);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;C-&gt;S FIN seq=%u\n&quot;</span>, c);
+    c += <span class="hljs-number">1</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;S-&gt;C ACK ack=%u\n&quot;</span>, c);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch08-seqack">C-&gt;S SYN seq=1000
+S-&gt;C SYN+ACK seq=5000 ack=1001
+C-&gt;S ACK seq=1001 ack=5001
+C-&gt;S data seq=1001 len=100
+C-&gt;S data seq=1101 len=100
+S-&gt;C ACK ack=1201
+C-&gt;S FIN seq=1201
+S-&gt;C ACK ack=1202</pre>
+    <p><b>Why.</b> The SYN occupies sequence number 1000, so the first data byte is 1001, and the server's SYN+ACK acknowledges 1001 ("next byte I expect"). The server's own SYN uses 5000, so the client acknowledges 5001. Two 100-byte segments cover 1001 to 1200; one cumulative ACK of 1201 acknowledges both (with delayed ACK, a receiver typically sends one ACK per two full segments). The FIN takes 1201 and is acknowledged with 1202. The pure ACK in the third line consumes nothing, which is why the first data segment also carries 1001. In real captures the ISNs are random 32-bit values; Wireshark shows "relative sequence numbers" starting at 0 to make traces like this readable.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Two sends of two bytes each, then one receive of up to 16 bytes, on a stream socket pair and on a datagram socket pair. What does each first receive return?</p>
+<pre data-run="ch08-boundaries"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> type : {SOCK_STREAM, SOCK_DGRAM}) {
+        <span class="hljs-type">int</span> sv[<span class="hljs-number">2</span>];
+        <span class="hljs-keyword">if</span> (<span class="hljs-built_in">socketpair</span>(AF_UNIX, type, <span class="hljs-number">0</span>, sv) &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+        <span class="hljs-built_in">send</span>(sv[<span class="hljs-number">0</span>], <span class="hljs-string">&quot;ab&quot;</span>, <span class="hljs-number">2</span>, <span class="hljs-number">0</span>);
+        <span class="hljs-built_in">send</span>(sv[<span class="hljs-number">0</span>], <span class="hljs-string">&quot;cd&quot;</span>, <span class="hljs-number">2</span>, <span class="hljs-number">0</span>);
+        <span class="hljs-type">char</span> buf[<span class="hljs-number">16</span>];
+        <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">recv</span>(sv[<span class="hljs-number">1</span>], buf, <span class="hljs-keyword">sizeof</span> buf, <span class="hljs-number">0</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s: first recv got \&quot;%.*s\&quot;\n&quot;</span>, type == SOCK_STREAM ? <span class="hljs-string">&quot;stream&quot;</span> : <span class="hljs-string">&quot;dgram&quot;</span>, <span class="hljs-built_in">int</span>(n), buf);
+        <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">0</span>]);
+        <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">1</span>]);
+    }
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch08-boundaries">stream: first recv got "abcd"
+dgram: first recv got "ab"</pre>
+    <p><b>Why.</b> A stream socket has no message boundaries: both writes sit in one receive buffer and one read returns everything available. A datagram socket returns exactly one datagram per receive, and the second <code>recv</code> would return "cd". TCP behaves like the stream case and UDP like the datagram case. On a local socket pair the merge is reliable; over a network, a TCP reader may see "abcd", "ab" then "cd", or "a" then "bcd", which is why protocols on TCP need explicit framing. With UDP, a buffer smaller than the datagram silently truncates it (the excess is discarded, and <code>MSG_TRUNC</code> is set in <code>recvmsg</code> flags).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The socket has data waiting, yet <code>select</code> reports nothing ready. Why?</p>
+<pre data-run="ch08-select"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/select.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> sv[<span class="hljs-number">2</span>];
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">socketpair</span>(AF_UNIX, SOCK_STREAM, <span class="hljs-number">0</span>, sv) &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-built_in">send</span>(sv[<span class="hljs-number">0</span>], <span class="hljs-string">&quot;x&quot;</span>, <span class="hljs-number">1</span>, <span class="hljs-number">0</span>);  <span class="hljs-comment">// sv[1] is now readable</span>
+    <span class="hljs-type">int</span> fd = sv[<span class="hljs-number">1</span>];
+    fd_set rd;
+    <span class="hljs-built_in">FD_ZERO</span>(&amp;rd);
+    <span class="hljs-built_in">FD_SET</span>(fd, &amp;rd);
+    timeval tv{<span class="hljs-number">0</span>, <span class="hljs-number">0</span>};        <span class="hljs-comment">// check without blocking</span>
+    <span class="hljs-type">int</span> ready = <span class="hljs-built_in">select</span>(fd, &amp;rd, <span class="hljs-literal">nullptr</span>, <span class="hljs-literal">nullptr</span>, &amp;tv);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ready = %d\n&quot;</span>, ready);
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">0</span>]);
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">1</span>]);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The first argument of <code>select</code> is the highest descriptor <b>plus one</b>, not the highest descriptor. With <code>nfds = fd</code> the kernel checks descriptors 0 to fd − 1 and never looks at fd.</p>
+<pre class="out" data-out="ch08-select">ready = 0</pre>
+    <p><b>Why.</b> <code>nfds</code> is a count of bits to scan in the bitmaps. Here <code>sv[1]</code> is the highest open descriptor, so it is skipped and the call times out immediately with 0; with <code>select(fd + 1, ...)</code> it returns 1. Two more <code>select</code> traps: the sets are modified in place, so you must rebuild them before every call, and <code>FD_SET</code> on a descriptor ≥ <code>FD_SETSIZE</code> (usually 1024) writes past the bitmap, which is memory corruption. Use <code>poll</code> or <code>epoll</code> in new code.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span><code>write_some</code> behaves like <code>send</code> under pressure: it may write fewer bytes than asked. What does the peer receive?</p>
+<pre data-run="ch08-sendall"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-type">static</span> std::string wire;  <span class="hljs-comment">// what the peer receives</span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">long</span> <span class="hljs-title">write_some</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* p, <span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-type">size_t</span> k = std::<span class="hljs-built_in">min</span>&lt;<span class="hljs-type">size_t</span>&gt;(n, <span class="hljs-number">4</span>);
+    wire.<span class="hljs-built_in">append</span>(p, k);
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">long</span>(k);
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">send_all</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* buf, <span class="hljs-type">size_t</span> len)</span> </span>{
+    <span class="hljs-type">size_t</span> sent = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">while</span> (sent &lt; len) {
+        <span class="hljs-type">long</span> n = <span class="hljs-built_in">write_some</span>(buf, len - sent);
+        <span class="hljs-keyword">if</span> (n &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span>;
+        sent += <span class="hljs-built_in">size_t</span>(n);
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* msg = <span class="hljs-string">&quot;hello world&quot;</span>;
+    <span class="hljs-built_in">send_all</span>(msg, std::<span class="hljs-built_in">strlen</span>(msg));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;peer got \&quot;%s\&quot;\n&quot;</span>, wire.<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The loop tracks how much was sent but always passes <code>buf</code>, not <code>buf + sent</code>, so it resends the start of the message.</p>
+<pre class="out" data-out="ch08-sendall">peer got "hellhellhel"</pre>
+    <p><b>Why.</b> The calls write "hell" (4), then "hell" again (4), then "hel" (the remaining length is 3), and the loop ends believing 11 bytes went out. The fix is <code>write_some(buf + sent, len - sent)</code>. A real <code>send_all</code> must also retry on <code>EINTR</code>, treat <code>EAGAIN</code> on a non-blocking socket as "wait for POLLOUT", and stop on other errors. Partial writes are rare on blocking sockets, so this bug survives testing and appears under load.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This echo server compiles, accepts connections, and never echoes anything. After running for a while it stops accepting. Find two bugs.</p>
+<pre data-run="ch08-wrongfd" data-mode="compile"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;netinet/in.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> lfd = <span class="hljs-built_in">socket</span>(AF_INET, SOCK_STREAM, <span class="hljs-number">0</span>);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = <span class="hljs-built_in">htonl</span>(INADDR_ANY);
+    a.sin_port = <span class="hljs-built_in">htons</span>(<span class="hljs-number">9000</span>);
+    <span class="hljs-built_in">bind</span>(lfd, <span class="hljs-built_in">reinterpret_cast</span>&lt;sockaddr*&gt;(&amp;a), <span class="hljs-keyword">sizeof</span> a);
+    <span class="hljs-built_in">listen</span>(lfd, <span class="hljs-number">16</span>);
+    <span class="hljs-keyword">for</span> (;;) {
+        <span class="hljs-type">int</span> cfd = <span class="hljs-built_in">accept</span>(lfd, <span class="hljs-literal">nullptr</span>, <span class="hljs-literal">nullptr</span>);
+        <span class="hljs-keyword">if</span> (cfd &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">continue</span>;
+        <span class="hljs-type">char</span> buf[<span class="hljs-number">1024</span>];
+        <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">recv</span>(lfd, buf, <span class="hljs-keyword">sizeof</span> buf, <span class="hljs-number">0</span>);
+        <span class="hljs-keyword">if</span> (n &gt; <span class="hljs-number">0</span>) <span class="hljs-built_in">send</span>(cfd, buf, <span class="hljs-built_in">size_t</span>(n), <span class="hljs-number">0</span>);
+    }
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> (1) It reads from the listening socket <code>lfd</code> instead of the connected socket <code>cfd</code>; <code>recv</code> on a listening socket fails with <code>ENOTCONN</code>, so nothing is echoed. (2) It never closes <code>cfd</code>, so every client leaks a descriptor; at the <code>ulimit -n</code> limit (often 1024) <code>accept</code> fails with <code>EMFILE</code>, and the <code>continue</code> turns that into a busy loop at 100% CPU.</p>
+    <p><b>Why.</b> <code>accept</code> returns a new descriptor per connection; the listening socket only produces connections, never data. Leaked sockets also leave clients hanging, since no FIN is ever sent. Further problems: no error checks on <code>bind</code> (a port in use goes unnoticed), no <code>SO_REUSEADDR</code>, a single <code>recv</code> per connection instead of a loop until 0, and no <code>send_all</code>. In C++, wrap descriptors in an RAII type so the close cannot be forgotten.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>After a restart, this server fails with "bind: Address already in use" for about a minute, even though it sets <code>SO_REUSEADDR</code>. Why?</p>
+<pre data-run="ch08-reuse-order" data-mode="compile"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;netinet/in.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> fd = <span class="hljs-built_in">socket</span>(AF_INET, SOCK_STREAM, <span class="hljs-number">0</span>);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = <span class="hljs-built_in">htonl</span>(INADDR_ANY);
+    a.sin_port = <span class="hljs-built_in">htons</span>(<span class="hljs-number">8080</span>);
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">bind</span>(fd, <span class="hljs-built_in">reinterpret_cast</span>&lt;sockaddr*&gt;(&amp;a), <span class="hljs-keyword">sizeof</span> a) &lt; <span class="hljs-number">0</span>) {
+        std::<span class="hljs-built_in">perror</span>(<span class="hljs-string">&quot;bind&quot;</span>);
+        <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    }
+    <span class="hljs-type">int</span> yes = <span class="hljs-number">1</span>;
+    <span class="hljs-built_in">setsockopt</span>(fd, SOL_SOCKET, SO_REUSEADDR, &amp;yes, <span class="hljs-keyword">sizeof</span> yes);
+    <span class="hljs-built_in">listen</span>(fd, SOMAXCONN);
+    <span class="hljs-keyword">for</span> (;;) {
+        <span class="hljs-type">int</span> c = <span class="hljs-built_in">accept</span>(fd, <span class="hljs-literal">nullptr</span>, <span class="hljs-literal">nullptr</span>);
+        <span class="hljs-keyword">if</span> (c &gt;= <span class="hljs-number">0</span>) <span class="hljs-built_in">close</span>(c);
+    }
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The option is set after <code>bind</code>. The address check happens inside <code>bind</code>, so <code>SO_REUSEADDR</code> must be set between <code>socket</code> and <code>bind</code>.</p>
+    <p><b>Why.</b> This server closes every connection first (<code>close(c)</code> right after accept), so each of those connections sits in TIME_WAIT on the server for 60 seconds on Linux. A restarted process trying to bind port 8080 then conflicts with them unless <code>SO_REUSEADDR</code> was already set when it called <code>bind</code>. Many socket options have the same "before the call that uses them" rule: <code>SO_REUSEPORT</code> before bind, and buffer sizes (<code>SO_RCVBUF</code>) before <code>listen</code>/<code>connect</code> because the window scale is negotiated in the SYN.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A client reads the body length from a response. It works against one server and reads an empty body from another. What does it print?</p>
+<pre data-run="ch08-headercase"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">size_t</span> <span class="hljs-title">content_length</span><span class="hljs-params">(std::string_view head)</span> </span>{
+    <span class="hljs-type">size_t</span> pos = head.<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;Content-Length:&quot;</span>);
+    <span class="hljs-keyword">if</span> (pos == std::string_view::npos) <span class="hljs-keyword">return</span> <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">stoul</span>(std::<span class="hljs-built_in">string</span>(head.<span class="hljs-built_in">substr</span>(pos + <span class="hljs-number">15</span>)));
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::string_view a = <span class="hljs-string">&quot;HTTP/1.1 200 OK\r\nContent-Length: 42\r\n\r\n&quot;</span>;
+    std::string_view b = <span class="hljs-string">&quot;HTTP/1.1 200 OK\r\ncontent-length: 42\r\n\r\n&quot;</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-built_in">content_length</span>(a), <span class="hljs-built_in">content_length</span>(b));
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> HTTP header field names are case-insensitive (RFC 9110 section 5.1), and the lookup is case-sensitive.</p>
+<pre class="out" data-out="ch08-headercase">42 0</pre>
+    <p><b>Why.</b> Servers, proxies and especially HTTP/2 and HTTP/3 (which require lowercase names on the wire) send <code>content-length</code>. Parse each header line into a name and a value, lowercase the name, and trim optional whitespace from the value. The substring search has more bugs: it would match "X-Content-Length:", it would find the text inside the body, and a missing header should not mean "length 0" (it means chunked encoding or read-until-close). <code>std::stoul</code> also throws on garbage, which a network parser must not do on hostile input.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A server stores the peer address from <code>accept</code> in a <code>sockaddr_in</code>. What does this print, and what breaks when IPv6 clients arrive?</p>
+<pre data-run="ch08-sizes"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;netinet/in.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sockaddr %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(sockaddr));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sockaddr_in %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(sockaddr_in));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sockaddr_in6 %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(sockaddr_in6));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sockaddr_storage %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(sockaddr_storage));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch08-sizes">sockaddr 16
+sockaddr_in 16
+sockaddr_in6 28
+sockaddr_storage 128</pre>
+    <p><b>Why.</b> An IPv6 address alone is 16 bytes, so <code>sockaddr_in6</code> (family, port, flow info, address, scope id) does not fit in the 16-byte <code>sockaddr</code> or <code>sockaddr_in</code>. <code>accept</code> truncates the address to the length you pass and reports the real length, so code using <code>sockaddr_in</code> on a dual-stack listener silently gets a cut-off address. Use <code>sockaddr_storage</code>, which is large enough and suitably aligned for every family, and switch on <code>ss_family</code>. The sizes are the same on Linux and macOS (macOS adds a length byte but keeps the totals).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The peer has gone away. What does this print? What happens if you delete the <code>signal</code> line?</p>
+<pre data-run="ch08-epipe"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cerrno&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;csignal&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">signal</span>(SIGPIPE, SIG_IGN);
+    <span class="hljs-type">int</span> sv[<span class="hljs-number">2</span>];
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">socketpair</span>(AF_UNIX, SOCK_STREAM, <span class="hljs-number">0</span>, sv) &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">1</span>]);
+    <span class="hljs-type">ssize_t</span> w = <span class="hljs-built_in">write</span>(sv[<span class="hljs-number">0</span>], <span class="hljs-string">&quot;x&quot;</span>, <span class="hljs-number">1</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;write returned %zd, EPIPE=%d\n&quot;</span>, w, errno == EPIPE);
+    <span class="hljs-type">char</span> c;
+    <span class="hljs-type">ssize_t</span> r = <span class="hljs-built_in">read</span>(sv[<span class="hljs-number">0</span>], &amp;c, <span class="hljs-number">1</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;read returned %zd\n&quot;</span>, r);
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">0</span>]);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch08-epipe">write returned -1, EPIPE=1
+read returned 0</pre>
+    <p><b>Why.</b> Writing to a stream socket whose peer is closed raises <code>SIGPIPE</code>; ignored, the write fails with <code>EPIPE</code> instead. Without the <code>signal</code> line the default action of <code>SIGPIPE</code> terminates the process on the <code>write</code>, before anything is printed, with no error message. Reading returns 0, which is end of stream, not an error. With a local socket pair the kernel knows at once that the peer is gone; over TCP, as the drill in the concept section explains, the first write usually succeeds and the error appears on a later one, after the peer's RST.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch05-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+<p>Every reference solution here runs: framing and parsing are tested on buffers, and the socket solutions use a <code>socketpair</code> or a loopback server on an ephemeral port with receive timeouts, so they cannot hang.</p>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a length-prefixed message framer for a TCP stream. Each frame is a 4-byte big-endian length followed by that many payload bytes. <code>FrameDecoder::feed(data, n, out)</code> is called with whatever each <code>recv</code> returned (any split, including one byte at a time) and appends every complete frame to <code>out</code>. Reject frames larger than a configured maximum. Show that the output does not depend on how the stream is split.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Keep one buffer of unconsumed bytes. After appending new data, loop: if fewer than 4 bytes are buffered, stop; decode the length; if the whole payload is not buffered yet, stop; otherwise emit the frame and advance. Erase the consumed prefix once per call rather than once per frame, which keeps the cost linear. Check the length against the maximum before waiting for the payload, so a hostile peer cannot make you buffer 4 GiB.</p>
+<pre data-run="ch08-framer" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string <span class="hljs-title">encode_frame</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; payload)</span> </span>{
+    <span class="hljs-type">uint32_t</span> n = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">uint32_t</span>&gt;(payload.<span class="hljs-built_in">size</span>());
+    std::string out = {<span class="hljs-built_in">char</span>(n &gt;&gt; <span class="hljs-number">24</span>), <span class="hljs-built_in">char</span>(n &gt;&gt; <span class="hljs-number">16</span>), <span class="hljs-built_in">char</span>(n &gt;&gt; <span class="hljs-number">8</span>), <span class="hljs-built_in">char</span>(n)};
+    <span class="hljs-keyword">return</span> out + payload;
+}
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">FrameDecoder</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">FrameDecoder</span><span class="hljs-params">(<span class="hljs-type">uint32_t</span> max_frame)</span> : max_(max_frame) {</span>}
+
+    <span class="hljs-comment">// Returns false if the stream is corrupt; the connection should then be closed.</span>
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">feed</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* data, <span class="hljs-type">size_t</span> n, std::vector&lt;std::string&gt;&amp; out)</span> </span>{
+        buf_.<span class="hljs-built_in">append</span>(data, n);
+        <span class="hljs-type">size_t</span> pos = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">while</span> (buf_.<span class="hljs-built_in">size</span>() - pos &gt;= <span class="hljs-number">4</span>) {
+            <span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>* p = <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>*&gt;(buf_.<span class="hljs-built_in">data</span>() + pos);
+            <span class="hljs-type">uint32_t</span> len = <span class="hljs-built_in">uint32_t</span>(p[<span class="hljs-number">0</span>]) &lt;&lt; <span class="hljs-number">24</span> | <span class="hljs-built_in">uint32_t</span>(p[<span class="hljs-number">1</span>]) &lt;&lt; <span class="hljs-number">16</span> | <span class="hljs-built_in">uint32_t</span>(p[<span class="hljs-number">2</span>]) &lt;&lt; <span class="hljs-number">8</span> | p[<span class="hljs-number">3</span>];
+            <span class="hljs-keyword">if</span> (len &gt; max_) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+            <span class="hljs-keyword">if</span> (buf_.<span class="hljs-built_in">size</span>() - pos - <span class="hljs-number">4</span> &lt; len) <span class="hljs-keyword">break</span>;  <span class="hljs-comment">// payload not complete yet</span>
+            out.<span class="hljs-built_in">emplace_back</span>(buf_, pos + <span class="hljs-number">4</span>, len);
+            pos += <span class="hljs-number">4</span> + <span class="hljs-built_in">size_t</span>(len);
+        }
+        buf_.<span class="hljs-built_in">erase</span>(<span class="hljs-number">0</span>, pos);
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">size_t</span> <span class="hljs-title">buffered</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> buf_.<span class="hljs-built_in">size</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    std::string buf_;
+    <span class="hljs-type">uint32_t</span> max_;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::vector&lt;std::string&gt; <span class="hljs-title">decode</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; stream, <span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">size_t</span>&gt;&amp; sizes, <span class="hljs-type">bool</span>&amp; ok)</span> </span>{
+    <span class="hljs-function">FrameDecoder <span class="hljs-title">d</span><span class="hljs-params">(<span class="hljs-number">1</span> &lt;&lt; <span class="hljs-number">20</span>)</span></span>;
+    std::vector&lt;std::string&gt; frames;
+    <span class="hljs-type">size_t</span> pos = <span class="hljs-number">0</span>, k = <span class="hljs-number">0</span>;
+    ok = <span class="hljs-literal">true</span>;
+    <span class="hljs-keyword">while</span> (ok &amp;&amp; pos &lt; stream.<span class="hljs-built_in">size</span>()) {
+        <span class="hljs-type">size_t</span> n = std::<span class="hljs-built_in">min</span>(sizes[k++ % sizes.<span class="hljs-built_in">size</span>()], stream.<span class="hljs-built_in">size</span>() - pos);
+        ok = d.<span class="hljs-built_in">feed</span>(stream.<span class="hljs-built_in">data</span>() + pos, n, frames);
+        pos += n;
+    }
+    ok = ok &amp;&amp; d.<span class="hljs-built_in">buffered</span>() == <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">return</span> frames;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::string&gt; msgs = {<span class="hljs-string">&quot;hello&quot;</span>, <span class="hljs-string">&quot;&quot;</span>, <span class="hljs-string">&quot;a longer message with spaces&quot;</span>, std::<span class="hljs-built_in">string</span>(<span class="hljs-number">300</span>, <span class="hljs-string">&#x27;z&#x27;</span>)};
+    std::string stream;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; m : msgs) stream += <span class="hljs-built_in">encode_frame</span>(m);
+    std::vector&lt;std::pair&lt;<span class="hljs-type">const</span> <span class="hljs-type">char</span>*, std::vector&lt;<span class="hljs-type">size_t</span>&gt;&gt;&gt; patterns = {
+        {<span class="hljs-string">&quot;1 byte at a time&quot;</span>, {<span class="hljs-number">1</span>}}, {<span class="hljs-string">&quot;chunks 1,2,3,5,7&quot;</span>, {<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">5</span>, <span class="hljs-number">7</span>}}, {<span class="hljs-string">&quot;all at once&quot;</span>, {stream.<span class="hljs-built_in">size</span>()}}};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; [name, sizes] : patterns) {
+        <span class="hljs-type">bool</span> ok;
+        <span class="hljs-keyword">auto</span> frames = <span class="hljs-built_in">decode</span>(stream, sizes, ok);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s: %zu frames, %s\n&quot;</span>, name, frames.<span class="hljs-built_in">size</span>(), ok &amp;&amp; frames == msgs ? <span class="hljs-string">&quot;match&quot;</span> : <span class="hljs-string">&quot;MISMATCH&quot;</span>);
+    }
+    <span class="hljs-function">FrameDecoder <span class="hljs-title">d</span><span class="hljs-params">(<span class="hljs-number">1</span> &lt;&lt; <span class="hljs-number">20</span>)</span></span>;
+    std::vector&lt;std::string&gt; out;
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span> evil[<span class="hljs-number">4</span>] = {<span class="hljs-built_in">char</span>(<span class="hljs-number">0xFF</span>), <span class="hljs-built_in">char</span>(<span class="hljs-number">0xFF</span>), <span class="hljs-built_in">char</span>(<span class="hljs-number">0xFF</span>), <span class="hljs-built_in">char</span>(<span class="hljs-number">0xFF</span>)};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;4 GiB length accepted: %s\n&quot;</span>, d.<span class="hljs-built_in">feed</span>(evil, <span class="hljs-number">4</span>, out) ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch08-framer">1 byte at a time: 4 frames, match
+chunks 1,2,3,5,7: 4 frames, match
+all at once: 4 frames, match
+4 GiB length accepted: no</pre>
+    <p><b>Complexity and pitfalls.</b> O(total bytes) time; memory is bounded by one maximum frame plus one <code>recv</code> buffer. Pitfalls: assuming the 4-byte header arrives in one piece, reading the length with <code>memcpy</code> into a <code>uint32_t</code> and forgetting <code>ntohl</code>, erasing from the front of the buffer after every frame (quadratic with many small frames), treating a zero-length frame as "no frame", and trusting the length before checking it. A ring buffer or a read offset with occasional compaction avoids the copy in <code>erase</code>.</p>
+    <p class="rating">Estimated rating: ~1500 · simple state machine, but partial headers and hostile lengths are where solutions break</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>send_all(fd, p, n)</code> and <code>recv_exact(fd, p, n)</code> for a blocking stream socket. <code>send_all</code> must handle partial writes and <code>EINTR</code> and never raise <code>SIGPIPE</code>. <code>recv_exact</code> must return the number of bytes read, fewer than <code>n</code> only if the peer closed early, and −1 on error. Test by moving 1 MiB through a socket pair, which is far bigger than the socket buffer.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Both are loops that advance a pointer by whatever each call managed to transfer. <code>EINTR</code> means a signal interrupted the call before any data moved, so retry. <code>recv</code> returning 0 is end of stream. Because 1 MiB does not fit in the kernel buffer, the writer must run concurrently with the reader, so it gets its own thread.</p>
+<pre data-run="ch08-sendrecv" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cerrno&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">send_all</span><span class="hljs-params">(<span class="hljs-type">int</span> fd, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* p, <span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-keyword">while</span> (n &gt; <span class="hljs-number">0</span>) {
+        <span class="hljs-type">ssize_t</span> w = <span class="hljs-built_in">send</span>(fd, p, n, MSG_NOSIGNAL);
+        <span class="hljs-keyword">if</span> (w &lt; <span class="hljs-number">0</span>) {
+            <span class="hljs-keyword">if</span> (errno == EINTR) <span class="hljs-keyword">continue</span>;
+            <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        }
+        p += w;
+        n -= <span class="hljs-built_in">size_t</span>(w);
+    }
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">ssize_t</span> <span class="hljs-title">recv_exact</span><span class="hljs-params">(<span class="hljs-type">int</span> fd, <span class="hljs-type">char</span>* p, <span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-type">size_t</span> got = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">while</span> (got &lt; n) {
+        <span class="hljs-type">ssize_t</span> r = <span class="hljs-built_in">recv</span>(fd, p + got, n - got, <span class="hljs-number">0</span>);
+        <span class="hljs-keyword">if</span> (r == <span class="hljs-number">0</span>) <span class="hljs-keyword">break</span>;  <span class="hljs-comment">// peer closed</span>
+        <span class="hljs-keyword">if</span> (r &lt; <span class="hljs-number">0</span>) {
+            <span class="hljs-keyword">if</span> (errno == EINTR) <span class="hljs-keyword">continue</span>;
+            <span class="hljs-keyword">return</span> <span class="hljs-number">-1</span>;
+        }
+        got += <span class="hljs-built_in">size_t</span>(r);
+    }
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">ssize_t</span>(got);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> sv[<span class="hljs-number">2</span>];
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">socketpair</span>(AF_UNIX, SOCK_STREAM, <span class="hljs-number">0</span>, sv) &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">char</span>&gt; <span class="hljs-title">data</span><span class="hljs-params">(<span class="hljs-number">1</span> &lt;&lt; <span class="hljs-number">20</span>)</span></span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; data.<span class="hljs-built_in">size</span>(); ++i) data[i] = <span class="hljs-built_in">char</span>(i * <span class="hljs-number">31</span> + <span class="hljs-number">7</span>);
+    <span class="hljs-function">std::thread <span class="hljs-title">writer</span><span class="hljs-params">([&amp;data, fd = sv[<span class="hljs-number">0</span>]] {
+        send_all(fd, data.data(), data.size());
+        close(fd);  <span class="hljs-comment">// FIN: the reader will see end of stream</span>
+    })</span></span>;
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">char</span>&gt; <span class="hljs-title">in</span><span class="hljs-params">(data.size())</span></span>;
+    <span class="hljs-type">ssize_t</span> got = <span class="hljs-built_in">recv_exact</span>(sv[<span class="hljs-number">1</span>], in.<span class="hljs-built_in">data</span>(), in.<span class="hljs-built_in">size</span>());
+    <span class="hljs-type">char</span> extra;
+    <span class="hljs-type">ssize_t</span> tail = <span class="hljs-built_in">recv_exact</span>(sv[<span class="hljs-number">1</span>], &amp;extra, <span class="hljs-number">1</span>);
+    writer.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;received %zd bytes, match=%d, next read %zd (EOF)\n&quot;</span>, got, <span class="hljs-built_in">int</span>(in == data), tail);
+    <span class="hljs-built_in">close</span>(sv[<span class="hljs-number">1</span>]);
+}</code></pre>
+<pre class="out" data-out="ch08-sendrecv">received 1048576 bytes, match=1, next read 0 (EOF)</pre>
+    <p><b>Complexity and pitfalls.</b> O(n) bytes copied, in as many system calls as the buffers require (hundreds here). Pitfalls: not advancing the pointer (see the reading drills), treating 0 as an error or as "try again" (an infinite loop on a closed socket), retrying on <code>EAGAIN</code> in a busy loop on a non-blocking socket (wait with <code>poll</code> instead), and forgetting <code>MSG_NOSIGNAL</code>. The writer thread captures the descriptor by value, so the two threads share no mutable state and the program is clean under ThreadSanitizer.</p>
+    <p class="rating">Estimated rating: ~1200 · short loops, judged on error handling and EOF semantics</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a single-threaded TCP echo server that serves many clients at once with <code>poll</code> and non-blocking sockets. It must cope with partial writes (keep unsent bytes per client and wait for <code>POLLOUT</code>), clients that disconnect, and a clean shutdown request. Test it in-process: run the server on 127.0.0.1 with an ephemeral port in one thread, and two clients with receive timeouts in the main thread.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Keep a <code>pollfd</code> array: the listening socket, a pipe used as a stop signal, then one entry per client, with a parallel array of pending output. On readiness, accept all new clients, read each readable client until <code>EAGAIN</code> and append to its pending output, then write as much pending output as the socket takes. Ask for <code>POLLOUT</code> only while output is pending (otherwise <code>poll</code> returns at once forever). Close clients on EOF or error, and compact the arrays after each round.</p>
+<pre data-run="ch08-poll-echo" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;fcntl.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;netinet/in.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;poll.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/socket.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cerrno&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">set_nonblocking</span><span class="hljs-params">(<span class="hljs-type">int</span> fd)</span> </span>{ <span class="hljs-built_in">fcntl</span>(fd, F_SETFL, <span class="hljs-built_in">fcntl</span>(fd, F_GETFL, <span class="hljs-number">0</span>) | O_NONBLOCK); }
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">would_block</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR; }
+
+<span class="hljs-comment">// Echoes every byte back to its sender until stop_fd becomes readable.</span>
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">echo_server</span><span class="hljs-params">(<span class="hljs-type">int</span> lfd, <span class="hljs-type">int</span> stop_fd)</span> </span>{
+    std::vector&lt;pollfd&gt; fds = {{lfd, POLLIN, <span class="hljs-number">0</span>}, {stop_fd, POLLIN, <span class="hljs-number">0</span>}};
+    <span class="hljs-function">std::vector&lt;std::string&gt; <span class="hljs-title">out</span><span class="hljs-params">(<span class="hljs-number">2</span>)</span></span>;  <span class="hljs-comment">// pending output, parallel to fds</span>
+    <span class="hljs-keyword">for</span> (;;) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-built_in">poll</span>(fds.<span class="hljs-built_in">data</span>(), <span class="hljs-built_in">nfds_t</span>(fds.<span class="hljs-built_in">size</span>()), <span class="hljs-number">-1</span>) &lt; <span class="hljs-number">0</span>) {
+            <span class="hljs-keyword">if</span> (errno == EINTR) <span class="hljs-keyword">continue</span>;
+            <span class="hljs-keyword">break</span>;
+        }
+        <span class="hljs-keyword">if</span> (fds[<span class="hljs-number">1</span>].revents) <span class="hljs-keyword">break</span>;
+        <span class="hljs-keyword">if</span> (fds[<span class="hljs-number">0</span>].revents &amp; POLLIN) {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> c; (c = <span class="hljs-built_in">accept</span>(lfd, <span class="hljs-literal">nullptr</span>, <span class="hljs-literal">nullptr</span>)) &gt;= <span class="hljs-number">0</span>;) {
+                <span class="hljs-built_in">set_nonblocking</span>(c);
+                fds.<span class="hljs-built_in">push_back</span>({c, POLLIN, <span class="hljs-number">0</span>});
+                out.<span class="hljs-built_in">emplace_back</span>();
+            }
+        }
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">size_t</span> i = <span class="hljs-number">2</span>; i &lt; fds.<span class="hljs-built_in">size</span>(); ++i) {
+            <span class="hljs-type">bool</span> dead = <span class="hljs-literal">false</span>;
+            <span class="hljs-keyword">if</span> (fds[i].revents &amp; (POLLIN | POLLHUP | POLLERR)) {
+                <span class="hljs-type">char</span> buf[<span class="hljs-number">4096</span>];
+                <span class="hljs-keyword">for</span> (;;) {
+                    <span class="hljs-type">ssize_t</span> n = <span class="hljs-built_in">recv</span>(fds[i].fd, buf, <span class="hljs-keyword">sizeof</span> buf, <span class="hljs-number">0</span>);
+                    <span class="hljs-keyword">if</span> (n &gt; <span class="hljs-number">0</span>) { out[i].<span class="hljs-built_in">append</span>(buf, <span class="hljs-built_in">size_t</span>(n)); <span class="hljs-keyword">continue</span>; }
+                    <span class="hljs-keyword">if</span> (n == <span class="hljs-number">0</span> || !<span class="hljs-built_in">would_block</span>()) dead = <span class="hljs-literal">true</span>;  <span class="hljs-comment">// EOF or a real error</span>
+                    <span class="hljs-keyword">break</span>;
+                }
+            }
+            <span class="hljs-keyword">while</span> (!out[i].<span class="hljs-built_in">empty</span>()) {
+                <span class="hljs-type">ssize_t</span> w = <span class="hljs-built_in">send</span>(fds[i].fd, out[i].<span class="hljs-built_in">data</span>(), out[i].<span class="hljs-built_in">size</span>(), MSG_NOSIGNAL);
+                <span class="hljs-keyword">if</span> (w &gt; <span class="hljs-number">0</span>) { out[i].<span class="hljs-built_in">erase</span>(<span class="hljs-number">0</span>, <span class="hljs-built_in">size_t</span>(w)); <span class="hljs-keyword">continue</span>; }
+                <span class="hljs-keyword">if</span> (w &lt; <span class="hljs-number">0</span> &amp;&amp; !<span class="hljs-built_in">would_block</span>()) dead = <span class="hljs-literal">true</span>;
+                <span class="hljs-keyword">break</span>;
+            }
+            fds[i].events = <span class="hljs-built_in">short</span>(out[i].<span class="hljs-built_in">empty</span>() ? POLLIN : (POLLIN | POLLOUT));
+            <span class="hljs-keyword">if</span> (dead) {
+                <span class="hljs-built_in">close</span>(fds[i].fd);
+                fds[i].fd = <span class="hljs-number">-1</span>;
+            }
+        }
+        <span class="hljs-type">size_t</span> keep = <span class="hljs-number">2</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">size_t</span> i = <span class="hljs-number">2</span>; i &lt; fds.<span class="hljs-built_in">size</span>(); ++i) {
+            <span class="hljs-keyword">if</span> (fds[i].fd &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">continue</span>;
+            fds[keep] = fds[i];
+            out[keep] = std::<span class="hljs-built_in">move</span>(out[i]);
+            ++keep;
+        }
+        fds.<span class="hljs-built_in">resize</span>(keep);
+        out.<span class="hljs-built_in">resize</span>(keep);
+    }
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">size_t</span> i = <span class="hljs-number">2</span>; i &lt; fds.<span class="hljs-built_in">size</span>(); ++i) <span class="hljs-built_in">close</span>(fds[i].fd);
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string <span class="hljs-title">roundtrip</span><span class="hljs-params">(<span class="hljs-type">int</span> fd, <span class="hljs-type">const</span> std::string&amp; msg)</span> </span>{
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">send</span>(fd, msg.<span class="hljs-built_in">data</span>(), msg.<span class="hljs-built_in">size</span>(), <span class="hljs-number">0</span>) != <span class="hljs-built_in">ssize_t</span>(msg.<span class="hljs-built_in">size</span>())) <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;send failed&quot;</span>;
+    <span class="hljs-function">std::string <span class="hljs-title">got</span><span class="hljs-params">(msg.size(), <span class="hljs-string">&#x27;\0&#x27;</span>)</span></span>;
+    <span class="hljs-type">size_t</span> have = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">while</span> (have &lt; got.<span class="hljs-built_in">size</span>()) {
+        <span class="hljs-type">ssize_t</span> r = <span class="hljs-built_in">recv</span>(fd, got.<span class="hljs-built_in">data</span>() + have, got.<span class="hljs-built_in">size</span>() - have, <span class="hljs-number">0</span>);
+        <span class="hljs-keyword">if</span> (r &lt;= <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;timeout or error&quot;</span>;
+        have += <span class="hljs-built_in">size_t</span>(r);
+    }
+    <span class="hljs-keyword">return</span> got;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> lfd = <span class="hljs-built_in">socket</span>(AF_INET, SOCK_STREAM, <span class="hljs-number">0</span>);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = <span class="hljs-built_in">htonl</span>(INADDR_LOOPBACK);
+    addr.sin_port = <span class="hljs-number">0</span>;  <span class="hljs-comment">// let the kernel choose a free port</span>
+    <span class="hljs-type">socklen_t</span> len = <span class="hljs-keyword">sizeof</span> addr;
+    <span class="hljs-keyword">if</span> (lfd &lt; <span class="hljs-number">0</span> || <span class="hljs-built_in">bind</span>(lfd, <span class="hljs-built_in">reinterpret_cast</span>&lt;sockaddr*&gt;(&amp;addr), <span class="hljs-keyword">sizeof</span> addr) &lt; <span class="hljs-number">0</span> || <span class="hljs-built_in">listen</span>(lfd, <span class="hljs-number">16</span>) &lt; <span class="hljs-number">0</span> ||
+        <span class="hljs-built_in">getsockname</span>(lfd, <span class="hljs-built_in">reinterpret_cast</span>&lt;sockaddr*&gt;(&amp;addr), &amp;len) &lt; <span class="hljs-number">0</span>) {
+        std::<span class="hljs-built_in">perror</span>(<span class="hljs-string">&quot;setup&quot;</span>);
+        <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    }
+    <span class="hljs-built_in">set_nonblocking</span>(lfd);
+    <span class="hljs-type">int</span> stop[<span class="hljs-number">2</span>];
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">pipe</span>(stop) &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">server</span><span class="hljs-params">(echo_server, lfd, stop[<span class="hljs-number">0</span>])</span></span>;
+
+    <span class="hljs-keyword">auto</span> client = [&amp;addr] {
+        <span class="hljs-type">int</span> fd = <span class="hljs-built_in">socket</span>(AF_INET, SOCK_STREAM, <span class="hljs-number">0</span>);
+        timeval tv{<span class="hljs-number">2</span>, <span class="hljs-number">0</span>};
+        <span class="hljs-built_in">setsockopt</span>(fd, SOL_SOCKET, SO_RCVTIMEO, &amp;tv, <span class="hljs-keyword">sizeof</span> tv);  <span class="hljs-comment">// a broken server cannot hang the test</span>
+        <span class="hljs-built_in">connect</span>(fd, <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> sockaddr*&gt;(&amp;addr), <span class="hljs-keyword">sizeof</span> addr);
+        <span class="hljs-keyword">return</span> fd;
+    };
+    <span class="hljs-type">int</span> a = <span class="hljs-built_in">client</span>(), b = <span class="hljs-built_in">client</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a: %s\n&quot;</span>, <span class="hljs-built_in">roundtrip</span>(a, <span class="hljs-string">&quot;hello from a&quot;</span>).<span class="hljs-built_in">c_str</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;b: %s\n&quot;</span>, <span class="hljs-built_in">roundtrip</span>(b, <span class="hljs-string">&quot;hello from b&quot;</span>).<span class="hljs-built_in">c_str</span>());
+    <span class="hljs-function">std::string <span class="hljs-title">big</span><span class="hljs-params">(<span class="hljs-number">100000</span>, <span class="hljs-string">&#x27;x&#x27;</span>)</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a: %s\n&quot;</span>, <span class="hljs-built_in">roundtrip</span>(a, big) == big ? <span class="hljs-string">&quot;100000 bytes echoed&quot;</span> : <span class="hljs-string">&quot;mismatch&quot;</span>);
+    <span class="hljs-built_in">close</span>(a);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;b after a left: %s\n&quot;</span>, <span class="hljs-built_in">roundtrip</span>(b, <span class="hljs-string">&quot;still here&quot;</span>).<span class="hljs-built_in">c_str</span>());
+    <span class="hljs-built_in">close</span>(b);
+
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">write</span>(stop[<span class="hljs-number">1</span>], <span class="hljs-string">&quot;q&quot;</span>, <span class="hljs-number">1</span>) != <span class="hljs-number">1</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    server.<span class="hljs-built_in">join</span>();
+    <span class="hljs-built_in">close</span>(stop[<span class="hljs-number">0</span>]);
+    <span class="hljs-built_in">close</span>(stop[<span class="hljs-number">1</span>]);
+    <span class="hljs-built_in">close</span>(lfd);
+}</code></pre>
+<pre class="out" data-out="ch08-poll-echo">a: hello from a
+b: hello from b
+a: 100000 bytes echoed
+b after a left: still here</pre>
+    <p><b>Complexity and pitfalls.</b> Each <code>poll</code> costs O(clients); for tens of thousands of clients switch to <code>epoll</code> or <code>kqueue</code>, keeping the same structure. Pitfalls: a blocking listening socket (one spurious wakeup and <code>accept</code> blocks the whole server), always requesting <code>POLLOUT</code> (busy loop), dropping unsent bytes after a short write, erasing from <code>fds</code> while iterating, and unbounded pending output: a client that sends but never reads makes this server buffer forever. Production servers stop reading from a client while its output exceeds a limit, which pushes backpressure to the client through TCP flow control.</p>
+    <p class="rating">Estimated rating: ~1900 · event-loop bookkeeping with several subtle readiness rules</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Parse a complete HTTP/1.1 response held in a buffer: the status line, headers (case-insensitive names, trimmed values) and the body, using <code>Transfer-Encoding: chunked</code> if present, else <code>Content-Length</code>, else everything until the end. Return nothing for malformed or truncated input; never throw.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Split head and body at the first blank line (CRLF CRLF). Validate the status line by position: "HTTP/x.y", space, three digits, optional reason. Store header names lowercased. For chunked bodies loop: read a hex size line (ignoring extensions after ';'), copy that many bytes, require CRLF, stop at size 0. Parse numbers by hand, so bad input yields "invalid" instead of an exception.</p>
+<pre data-run="ch08-http-parse" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cctype&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Response</span> {
+    <span class="hljs-type">int</span> status = <span class="hljs-number">0</span>;
+    std::string reason;
+    std::vector&lt;std::pair&lt;std::string, std::string&gt;&gt; headers;  <span class="hljs-comment">// names lowercased</span>
+    std::string body;
+    <span class="hljs-function"><span class="hljs-type">const</span> std::string* <span class="hljs-title">header</span><span class="hljs-params">(std::string_view name)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; [k, v] : headers)
+            <span class="hljs-keyword">if</span> (k == name) <span class="hljs-keyword">return</span> &amp;v;
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string <span class="hljs-title">lower</span><span class="hljs-params">(std::string_view s)</span> </span>{
+    <span class="hljs-function">std::string <span class="hljs-title">r</span><span class="hljs-params">(s)</span></span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">char</span>&amp; c : r) c = <span class="hljs-built_in">char</span>(std::<span class="hljs-built_in">tolower</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(c)));
+    <span class="hljs-keyword">return</span> r;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string_view <span class="hljs-title">trim</span><span class="hljs-params">(std::string_view s)</span> </span>{
+    <span class="hljs-keyword">while</span> (!s.<span class="hljs-built_in">empty</span>() &amp;&amp; (s.<span class="hljs-built_in">front</span>() == <span class="hljs-string">&#x27; &#x27;</span> || s.<span class="hljs-built_in">front</span>() == <span class="hljs-string">&#x27;\t&#x27;</span>)) s.<span class="hljs-built_in">remove_prefix</span>(<span class="hljs-number">1</span>);
+    <span class="hljs-keyword">while</span> (!s.<span class="hljs-built_in">empty</span>() &amp;&amp; (s.<span class="hljs-built_in">back</span>() == <span class="hljs-string">&#x27; &#x27;</span> || s.<span class="hljs-built_in">back</span>() == <span class="hljs-string">&#x27;\t&#x27;</span>)) s.<span class="hljs-built_in">remove_suffix</span>(<span class="hljs-number">1</span>);
+    <span class="hljs-keyword">return</span> s;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::optional&lt;<span class="hljs-type">size_t</span>&gt; <span class="hljs-title">parse_num</span><span class="hljs-params">(std::string_view s, <span class="hljs-type">int</span> base)</span> </span>{
+    <span class="hljs-keyword">if</span> (s.<span class="hljs-built_in">empty</span>() || s.<span class="hljs-built_in">size</span>() &gt; <span class="hljs-number">12</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    <span class="hljs-type">size_t</span> v = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">char</span> c : s) {
+        <span class="hljs-type">int</span> d;
+        <span class="hljs-keyword">if</span> (c &gt;= <span class="hljs-string">&#x27;0&#x27;</span> &amp;&amp; c &lt;= <span class="hljs-string">&#x27;9&#x27;</span>) d = c - <span class="hljs-string">&#x27;0&#x27;</span>;
+        <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> (base == <span class="hljs-number">16</span> &amp;&amp; c &gt;= <span class="hljs-string">&#x27;a&#x27;</span> &amp;&amp; c &lt;= <span class="hljs-string">&#x27;f&#x27;</span>) d = c - <span class="hljs-string">&#x27;a&#x27;</span> + <span class="hljs-number">10</span>;
+        <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> (base == <span class="hljs-number">16</span> &amp;&amp; c &gt;= <span class="hljs-string">&#x27;A&#x27;</span> &amp;&amp; c &lt;= <span class="hljs-string">&#x27;F&#x27;</span>) d = c - <span class="hljs-string">&#x27;A&#x27;</span> + <span class="hljs-number">10</span>;
+        <span class="hljs-keyword">else</span> <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        v = v * <span class="hljs-built_in">size_t</span>(base) + <span class="hljs-built_in">size_t</span>(d);
+    }
+    <span class="hljs-keyword">return</span> v;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::optional&lt;std::string&gt; <span class="hljs-title">decode_chunked</span><span class="hljs-params">(std::string_view s)</span> </span>{
+    std::string body;
+    <span class="hljs-keyword">for</span> (;;) {
+        <span class="hljs-type">size_t</span> eol = s.<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;\r\n&quot;</span>);
+        <span class="hljs-keyword">if</span> (eol == std::string_view::npos) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        std::string_view line = s.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, eol);
+        <span class="hljs-keyword">auto</span> n = <span class="hljs-built_in">parse_num</span>(<span class="hljs-built_in">trim</span>(line.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, line.<span class="hljs-built_in">find</span>(<span class="hljs-string">&#x27;;&#x27;</span>))), <span class="hljs-number">16</span>);
+        <span class="hljs-keyword">if</span> (!n) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        s.<span class="hljs-built_in">remove_prefix</span>(eol + <span class="hljs-number">2</span>);
+        <span class="hljs-keyword">if</span> (*n == <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> body;  <span class="hljs-comment">// trailers (if any) are ignored here</span>
+        <span class="hljs-keyword">if</span> (s.<span class="hljs-built_in">size</span>() &lt; *n + <span class="hljs-number">2</span> || s.<span class="hljs-built_in">substr</span>(*n, <span class="hljs-number">2</span>) != <span class="hljs-string">&quot;\r\n&quot;</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        body.<span class="hljs-built_in">append</span>(s.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, *n));
+        s.<span class="hljs-built_in">remove_prefix</span>(*n + <span class="hljs-number">2</span>);
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::optional&lt;Response&gt; <span class="hljs-title">parse_response</span><span class="hljs-params">(std::string_view raw)</span> </span>{
+    <span class="hljs-type">size_t</span> end = raw.<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;\r\n\r\n&quot;</span>);
+    <span class="hljs-keyword">if</span> (end == std::string_view::npos) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    std::string_view head = raw.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, end), rest = raw.<span class="hljs-built_in">substr</span>(end + <span class="hljs-number">4</span>);
+    <span class="hljs-type">size_t</span> eol = head.<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;\r\n&quot;</span>);
+    std::string_view status = head.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, eol);
+    <span class="hljs-keyword">if</span> (status.<span class="hljs-built_in">size</span>() &lt; <span class="hljs-number">12</span> || status.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, <span class="hljs-number">5</span>) != <span class="hljs-string">&quot;HTTP/&quot;</span> || status[<span class="hljs-number">8</span>] != <span class="hljs-string">&#x27; &#x27;</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    <span class="hljs-keyword">auto</span> code = <span class="hljs-built_in">parse_num</span>(status.<span class="hljs-built_in">substr</span>(<span class="hljs-number">9</span>, <span class="hljs-number">3</span>), <span class="hljs-number">10</span>);
+    <span class="hljs-keyword">if</span> (!code || *code &lt; <span class="hljs-number">100</span> || *code &gt; <span class="hljs-number">599</span> || (status.<span class="hljs-built_in">size</span>() &gt; <span class="hljs-number">12</span> &amp;&amp; status[<span class="hljs-number">12</span>] != <span class="hljs-string">&#x27; &#x27;</span>)) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    Response r;
+    r.status = <span class="hljs-built_in">int</span>(*code);
+    r.reason = std::<span class="hljs-built_in">string</span>(status.<span class="hljs-built_in">size</span>() &gt; <span class="hljs-number">13</span> ? status.<span class="hljs-built_in">substr</span>(<span class="hljs-number">13</span>) : std::string_view{});
+    head = eol == std::string_view::npos ? std::string_view{} : head.<span class="hljs-built_in">substr</span>(eol + <span class="hljs-number">2</span>);
+    <span class="hljs-keyword">while</span> (!head.<span class="hljs-built_in">empty</span>()) {
+        <span class="hljs-type">size_t</span> e = head.<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;\r\n&quot;</span>);
+        std::string_view line = head.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, e);
+        head = e == std::string_view::npos ? std::string_view{} : head.<span class="hljs-built_in">substr</span>(e + <span class="hljs-number">2</span>);
+        <span class="hljs-type">size_t</span> colon = line.<span class="hljs-built_in">find</span>(<span class="hljs-string">&#x27;:&#x27;</span>);
+        <span class="hljs-keyword">if</span> (colon == std::string_view::npos || colon == <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        r.headers.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-built_in">lower</span>(line.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, colon)), std::<span class="hljs-built_in">string</span>(<span class="hljs-built_in">trim</span>(line.<span class="hljs-built_in">substr</span>(colon + <span class="hljs-number">1</span>))));
+    }
+    <span class="hljs-keyword">if</span> (<span class="hljs-type">const</span> std::string* te = r.<span class="hljs-built_in">header</span>(<span class="hljs-string">&quot;transfer-encoding&quot;</span>); te &amp;&amp; <span class="hljs-built_in">lower</span>(*te).<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;chunked&quot;</span>) != std::string::npos) {
+        <span class="hljs-keyword">auto</span> body = <span class="hljs-built_in">decode_chunked</span>(rest);
+        <span class="hljs-keyword">if</span> (!body) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        r.body = std::<span class="hljs-built_in">move</span>(*body);
+    } <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> (<span class="hljs-type">const</span> std::string* cl = r.<span class="hljs-built_in">header</span>(<span class="hljs-string">&quot;content-length&quot;</span>)) {
+        <span class="hljs-keyword">auto</span> n = <span class="hljs-built_in">parse_num</span>(*cl, <span class="hljs-number">10</span>);
+        <span class="hljs-keyword">if</span> (!n || rest.<span class="hljs-built_in">size</span>() &lt; *n) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        r.body = std::<span class="hljs-built_in">string</span>(rest.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, *n));
+    } <span class="hljs-keyword">else</span> {
+        r.body = std::<span class="hljs-built_in">string</span>(rest);  <span class="hljs-comment">// delimited by the server closing the connection</span>
+    }
+    <span class="hljs-keyword">return</span> r;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* tests[] = {
+        <span class="hljs-string">&quot;HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhelloEXTRA&quot;</span>,
+        <span class="hljs-string">&quot;HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\nMozilla\r\n11\r\nDeveloper Network\r\n0\r\n\r\n&quot;</span>,
+        <span class="hljs-string">&quot;HTTP/1.1 404 Not Found\r\ncontent-length:   9  \r\n\r\nnot found&quot;</span>,
+        <span class="hljs-string">&quot;HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort&quot;</span>,
+        <span class="hljs-string">&quot;HTP/1.1 200 OK\r\n\r\n&quot;</span>,
+    };
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* t : tests) {
+        <span class="hljs-keyword">auto</span> r = <span class="hljs-built_in">parse_response</span>(t);
+        <span class="hljs-keyword">if</span> (!r) {
+            std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;invalid\n&quot;</span>);
+            <span class="hljs-keyword">continue</span>;
+        }
+        <span class="hljs-type">const</span> std::string* type = r-&gt;<span class="hljs-built_in">header</span>(<span class="hljs-string">&quot;content-type&quot;</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %s type=%s body=\&quot;%s\&quot;\n&quot;</span>, r-&gt;status, r-&gt;reason.<span class="hljs-built_in">c_str</span>(), type ? type-&gt;<span class="hljs-built_in">c_str</span>() : <span class="hljs-string">&quot;-&quot;</span>, r-&gt;body.<span class="hljs-built_in">c_str</span>());
+    }
+}</code></pre>
+<pre class="out" data-out="ch08-http-parse">200 OK type=text/plain body="hello"
+200 OK type=- body="MozillaDeveloper Network"
+404 Not Found type=- body="not found"
+invalid
+invalid</pre>
+    <p><b>Complexity and pitfalls.</b> O(n). In the first test "EXTRA" is not part of the body: on a keep-alive connection it is the start of the next response, which is why Content-Length must be honoured exactly. Security pitfalls: a message with both Transfer-Encoding and Content-Length must use chunked (and proxies should reject it), because disagreeing parsers enable request smuggling; chunk sizes must be bounded; and headers must not be accepted without a colon. A streaming parser would also need to work incrementally, like the frame decoder above.</p>
+    <p class="rating">Estimated rating: ~1600 · careful string handling with a protocol state machine for chunked bodies</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Model TCP Reno's congestion window in segments at RTT granularity. Events: <code>R</code> (a round trip in which everything was acknowledged), <code>D</code> (three duplicate ACKs) and <code>T</code> (retransmission timeout). Start with cwnd 1 and ssthresh 16, print cwnd after each event, and report the send window for a given receive window.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Follow RFC 5681 with FlightSize approximated by cwnd. Per RTT: below ssthresh, double (capped at ssthresh, so slow start ends exactly there); otherwise add one. Triple duplicate ACK: ssthresh = max(cwnd/2, 2) and, after fast recovery completes, cwnd = ssthresh. Timeout: same ssthresh, cwnd = 1. The usable window is min(cwnd, rwnd).</p>
+<pre data-run="ch08-reno"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Reno</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Reno</span><span class="hljs-params">(<span class="hljs-type">int</span> ssthresh)</span> : ssthresh_(ssthresh) {</span>}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">on_rtt_all_acked</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (cwnd_ &lt; ssthresh_) cwnd_ = std::<span class="hljs-built_in">min</span>(cwnd_ * <span class="hljs-number">2</span>, ssthresh_);  <span class="hljs-comment">// slow start</span>
+        <span class="hljs-keyword">else</span> cwnd_ += <span class="hljs-number">1</span>;                                                <span class="hljs-comment">// congestion avoidance</span>
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">on_triple_dupack</span><span class="hljs-params">()</span> </span>{  <span class="hljs-comment">// fast retransmit, then fast recovery ends at ssthresh</span>
+        ssthresh_ = std::<span class="hljs-built_in">max</span>(cwnd_ / <span class="hljs-number">2</span>, <span class="hljs-number">2</span>);
+        cwnd_ = ssthresh_;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">on_timeout</span><span class="hljs-params">()</span> </span>{
+        ssthresh_ = std::<span class="hljs-built_in">max</span>(cwnd_ / <span class="hljs-number">2</span>, <span class="hljs-number">2</span>);
+        cwnd_ = <span class="hljs-number">1</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">cwnd</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> cwnd_; }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">ssthresh</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> ssthresh_; }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">send_window</span><span class="hljs-params">(<span class="hljs-type">int</span> rwnd)</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">min</span>(cwnd_, rwnd); }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">int</span> cwnd_ = <span class="hljs-number">1</span>;
+    <span class="hljs-type">int</span> ssthresh_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Reno <span class="hljs-title">r</span><span class="hljs-params">(<span class="hljs-number">16</span>)</span></span>;
+    <span class="hljs-type">const</span> std::string events = <span class="hljs-string">&quot;RRRRRRRRRRDRRRRRTRRRRR&quot;</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">char</span> e : events) {
+        <span class="hljs-keyword">if</span> (e == <span class="hljs-string">&#x27;R&#x27;</span>) r.<span class="hljs-built_in">on_rtt_all_acked</span>();
+        <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> (e == <span class="hljs-string">&#x27;D&#x27;</span>) r.<span class="hljs-built_in">on_triple_dupack</span>();
+        <span class="hljs-keyword">else</span> r.<span class="hljs-built_in">on_timeout</span>();
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%c:%d &quot;</span>, e, r.<span class="hljs-built_in">cwnd</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\nssthresh=%d, send window with rwnd=6: %d\n&quot;</span>, r.<span class="hljs-built_in">ssthresh</span>(), r.<span class="hljs-built_in">send_window</span>(<span class="hljs-number">6</span>));
+}</code></pre>
+<pre class="out" data-out="ch08-reno">R:2 R:4 R:8 R:16 R:17 R:18 R:19 R:20 R:21 R:22 D:11 R:12 R:13 R:14 R:15 R:16 T:1 R:2 R:4 R:8 R:9 R:10
+ssthresh=8, send window with rwnd=6: 6</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per event. This is exactly the sawtooth in the congestion control figure. Real stacks count in bytes and update per ACK (slow start adds one MSS per ACK, congestion avoidance adds MSS·MSS/cwnd), inflate cwnd by one MSS per duplicate ACK during fast recovery, and use CUBIC rather than Reno's linear growth by default on Linux. Interview follow-ups: why a timeout is punished harder than duplicate ACKs (the ACK clock has stopped), and why the final window is 6 here (flow control, the receiver's limit, wins over congestion control).</p>
+    <p class="rating">Estimated rating: ~1300 · simulation is easy once the rules are known; the test is knowing them</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a TCP receive-side reassembler. <code>on_segment(seq, data)</code> receives segments in any order, possibly duplicated, overlapping or outside the window, and appends bytes to the in-order stream as soon as they become contiguous. <code>ack()</code> returns the next expected sequence number. Sequence numbers are 32-bit and wrap around; test with an ISN just below 2<sup>32</sup>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Compare sequence numbers with serial arithmetic: the offset of a segment from the next expected byte is <code>int32_t(seq - next)</code>, which is correct across wrap-around while the window is below 2<sup>31</sup>. Trim the part of a segment we already have, drop it if nothing remains or it falls outside the window, then store it in an ordered map keyed by a 64-bit absolute stream offset (which never wraps). After each insert, drain map entries that start at or before the delivered offset.</p>
+<pre data-run="ch08-reassembly" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Reassembler</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Reassembler</span>(<span class="hljs-type">uint32_t</span> isn, <span class="hljs-type">uint32_t</span> window) : <span class="hljs-built_in">next_</span>(isn), <span class="hljs-built_in">window_</span>(window) {}
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">on_segment</span><span class="hljs-params">(<span class="hljs-type">uint32_t</span> seq, std::string data)</span> </span>{
+        <span class="hljs-type">int32_t</span> off = <span class="hljs-built_in">int32_t</span>(seq - next_);  <span class="hljs-comment">// serial number arithmetic</span>
+        <span class="hljs-keyword">if</span> (off &lt; <span class="hljs-number">0</span>) {
+            <span class="hljs-type">uint64_t</span> have = <span class="hljs-built_in">uint64_t</span>(-<span class="hljs-built_in">int64_t</span>(off));
+            <span class="hljs-keyword">if</span> (have &gt;= data.<span class="hljs-built_in">size</span>()) <span class="hljs-keyword">return</span>;  <span class="hljs-comment">// pure duplicate</span>
+            data.<span class="hljs-built_in">erase</span>(<span class="hljs-number">0</span>, <span class="hljs-built_in">size_t</span>(have));
+            off = <span class="hljs-number">0</span>;
+        }
+        <span class="hljs-keyword">if</span> (<span class="hljs-built_in">uint64_t</span>(off) + data.<span class="hljs-built_in">size</span>() &gt; window_) <span class="hljs-keyword">return</span>;  <span class="hljs-comment">// outside the receive window</span>
+        std::string&amp; slot = pending_[delivered_ + <span class="hljs-built_in">uint64_t</span>(off)];
+        <span class="hljs-keyword">if</span> (data.<span class="hljs-built_in">size</span>() &gt; slot.<span class="hljs-built_in">size</span>()) slot = std::<span class="hljs-built_in">move</span>(data);
+        <span class="hljs-keyword">while</span> (!pending_.<span class="hljs-built_in">empty</span>() &amp;&amp; pending_.<span class="hljs-built_in">begin</span>()-&gt;first &lt;= delivered_) {
+            <span class="hljs-keyword">auto</span> it = pending_.<span class="hljs-built_in">begin</span>();
+            <span class="hljs-type">uint64_t</span> skip = delivered_ - it-&gt;first;
+            <span class="hljs-keyword">if</span> (skip &lt; it-&gt;second.<span class="hljs-built_in">size</span>()) {
+                <span class="hljs-type">uint64_t</span> added = it-&gt;second.<span class="hljs-built_in">size</span>() - skip;
+                stream_.<span class="hljs-built_in">append</span>(it-&gt;second, <span class="hljs-built_in">size_t</span>(skip), std::string::npos);
+                delivered_ += added;
+                next_ += <span class="hljs-built_in">uint32_t</span>(added);
+            }
+            pending_.<span class="hljs-built_in">erase</span>(it);
+        }
+    }
+    <span class="hljs-function"><span class="hljs-type">uint32_t</span> <span class="hljs-title">ack</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> next_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> std::string&amp; <span class="hljs-title">stream</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> stream_; }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">uint32_t</span> next_;
+    <span class="hljs-type">uint32_t</span> window_;
+    <span class="hljs-type">uint64_t</span> delivered_ = <span class="hljs-number">0</span>;
+    std::map&lt;<span class="hljs-type">uint64_t</span>, std::string&gt; pending_;  <span class="hljs-comment">// keyed by absolute stream offset</span>
+    std::string stream_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">uint32_t</span> isn = <span class="hljs-number">0xFFFFFFF0</span>;  <span class="hljs-comment">// wraps after 16 bytes</span>
+    <span class="hljs-function">Reassembler <span class="hljs-title">r</span><span class="hljs-params">(isn, <span class="hljs-number">64</span>)</span></span>;
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Seg</span> { <span class="hljs-type">uint32_t</span> seq; <span class="hljs-type">const</span> <span class="hljs-type">char</span>* data; };
+    <span class="hljs-type">const</span> Seg segs[] = {{isn + <span class="hljs-number">10</span>, <span class="hljs-string">&quot;KLMNO&quot;</span>}, {isn, <span class="hljs-string">&quot;ABCDE&quot;</span>}, {isn + <span class="hljs-number">5</span>, <span class="hljs-string">&quot;FGHIJ&quot;</span>},
+                        {isn, <span class="hljs-string">&quot;ABC&quot;</span>}, {isn + <span class="hljs-number">13</span>, <span class="hljs-string">&quot;NOPQRSTU&quot;</span>}, {isn + <span class="hljs-number">500</span>, <span class="hljs-string">&quot;far&quot;</span>}};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Seg&amp; s : segs) {
+        r.<span class="hljs-built_in">on_segment</span>(s.seq, s.data);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;seg %08x %-8s -&gt; ack %08x stream %s\n&quot;</span>, s.seq, s.data, r.<span class="hljs-built_in">ack</span>(), r.<span class="hljs-built_in">stream</span>().<span class="hljs-built_in">c_str</span>());
+    }
+}</code></pre>
+<pre class="out" data-out="ch08-reassembly">seg fffffffa KLMNO    -&gt; ack fffffff0 stream
+seg fffffff0 ABCDE    -&gt; ack fffffff5 stream ABCDE
+seg fffffff5 FGHIJ    -&gt; ack ffffffff stream ABCDEFGHIJKLMNO
+seg fffffff0 ABC      -&gt; ack ffffffff stream ABCDEFGHIJKLMNO
+seg fffffffd NOPQRSTU -&gt; ack 00000005 stream ABCDEFGHIJKLMNOPQRSTU
+seg 000001e4 far      -&gt; ack 00000005 stream ABCDEFGHIJKLMNOPQRSTU</pre>
+    <p><b>Complexity and pitfalls.</b> O(log k) per segment for k buffered segments, plus copying. The decisive bug to avoid is comparing raw 32-bit sequence numbers with <code>&lt;</code>: after the wrap, 0x00000005 is "after" 0xfffffffd. Keying the map by raw sequence numbers fails the same way, hence the 64-bit offsets. The out-of-order "KLMNO" segment is held, and the cumulative ACK stays at the hole until "FGHIJ" fills it, which is when a real receiver would have been sending duplicate ACKs (and SACK blocks). Real TCP also trims segments to the window instead of dropping them, and bounds total buffered bytes.</p>
+    <p class="rating">Estimated rating: ~1800 · interval merging plus wrap-around arithmetic that most first attempts get wrong</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch05-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>TCP vs UDP:</b> TCP (RFC 9293) = connection, reliable, ordered byte stream, flow and congestion control, 20 to 60 B header. UDP (RFC 768) = datagrams, best effort, boundaries kept, 8 B header, multicast. QUIC builds TCP-like reliability on UDP.</li>
+<li><b>Handshake:</b> SYN(x), SYN+ACK(y, x+1), ACK(y+1). SYN and FIN each consume one sequence number. The kernel completes handshakes; <code>accept</code> just dequeues. Backlog = accept queue, capped by somaxconn.</li>
+<li><b>Teardown:</b> FIN, ACK, FIN, ACK; half-close with <code>shutdown(SHUT_WR)</code>. Active closer gets TIME_WAIT for 2·MSL (60 s on Linux) to re-ACK a lost FIN and let old segments die. Many CLOSE_WAIT = your app forgot <code>close</code>. Set SO_REUSEADDR before bind.</li>
+<li><b>Reliability:</b> cumulative ACKs, SACK, RTO = SRTT + 4·RTTVAR (RFC 6298) with backoff and Karn's rule, fast retransmit after 3 duplicate ACKs. Compare sequence numbers with <code>(int32_t)(a - b) &lt; 0</code>.</li>
+<li><b>Windows:</b> in flight ≤ min(rwnd, cwnd). rwnd = receiver buffer (flow control, window scale up to 1 GiB). cwnd: slow start doubles per RTT, congestion avoidance +1 MSS per RTT, 3 dup ACKs halve, timeout resets to 1 (RFC 5681). Linux default CUBIC.</li>
+<li><b>Latency:</b> Nagle + delayed ACK on write-write-read costs 40 to 200 ms; send each message in one call and set TCP_NODELAY. TCP HOL blocking remains in HTTP/2; HTTP/3 over QUIC removes it.</li>
+<li><b>Sockets:</b> socket, (setsockopt), bind, listen, accept (new fd) / connect; loop on send and recv; recv 0 = EOF; htons/htonl for ports and addresses; ignore SIGPIPE or use MSG_NOSIGNAL; frame messages (length prefix or delimiter); select nfds = max fd + 1; epoll for scale.</li>
+<li><b>HTTP and TLS:</b> HTTP/1.1 needs Host, keeps connections alive by default, bodies by Content-Length or chunked; idempotent = GET, HEAD, PUT, DELETE, OPTIONS. TLS 1.3 = 1 RTT, ephemeral key share in ClientHello, certificate encrypted, forward secrecy, 0-RTT replayable. A cold HTTPS fetch over TCP costs about 3 RTTs before the first byte.</li>
+</ul>
+</section>

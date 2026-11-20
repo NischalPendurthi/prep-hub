@@ -1,0 +1,1025 @@
+---
+title: Memory fragmentation
+part: Part C · Memory management
+lede: Fragmentation is memory you own but cannot use: bytes wasted inside blocks, or free space split into holes too small for the next request. This chapter explains where it comes from, how allocators fight it (fit policies, size classes, buddies, slabs, coalescing), why a process's RSS stays high after free, and what you can do about it in a long-running C++ service. Interviewers at HFT firms and systems teams ask about it because it explains real production incidents: latency spikes, slow memory growth and out-of-memory kills with plenty of "free" memory.
+desc: Internal vs external, allocator strategies, size classes, mitigation
+hours: 3
+prereqs: [Ch 7](#ch07) (how malloc works)
+---
+<section id="ch08-what" data-roles="th"><div class="sec-head"><h2>Internal vs external fragmentation</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> An allocator hands out blocks from a bigger region. <b>Internal fragmentation</b> is waste <i>inside</i> a block: you asked for 33 bytes and got a 48-byte block, so 15 bytes are allocated but useless. <b>External fragmentation</b> is waste <i>between</i> blocks: the free memory exists, but it is split into many small holes, so a large request fails even though the total free space would be enough.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 300" role="img" aria-label="Internal fragmentation wastes space inside rounded-up blocks; external fragmentation leaves free holes too small for a request">
+<text x="20" y="26" class="t-bold">Internal: requests rounded up to size classes</text>
+<rect x="20" y="40" width="130" height="40" class="d-acc"/><rect x="150" y="40" width="30" height="40" class="d-trap"/>
+<text x="85" y="65" text-anchor="middle" class="t-small">req 33</text><text x="165" y="65" text-anchor="middle" class="t-small t-trap">15</text>
+<rect x="200" y="40" width="90" height="40" class="d-acc"/><rect x="290" y="40" width="40" height="40" class="d-trap"/>
+<text x="245" y="65" text-anchor="middle" class="t-small">req 20</text><text x="310" y="65" text-anchor="middle" class="t-small t-trap">12</text>
+<rect x="350" y="40" width="230" height="40" class="d-acc"/><rect x="580" y="40" width="120" height="40" class="d-trap"/>
+<text x="465" y="65" text-anchor="middle" class="t-small">req 65 (class 96)</text><text x="640" y="65" text-anchor="middle" class="t-small t-trap">31 wasted</text>
+<text x="20" y="100" class="t-small t-muted">blue = bytes the program asked for, red = rounding waste that nobody can use until the block is freed</text>
+<text x="20" y="150" class="t-bold">External: enough free bytes in total, no hole big enough</text>
+<rect x="20" y="164" width="120" height="44" class="d-box"/><text x="80" y="190" text-anchor="middle" class="t-small">used</text>
+<rect x="140" y="164" width="60" height="44" class="d-key"/><text x="170" y="190" text-anchor="middle" class="t-small">free 20</text>
+<rect x="200" y="164" width="140" height="44" class="d-box"/><text x="270" y="190" text-anchor="middle" class="t-small">used</text>
+<rect x="340" y="164" width="60" height="44" class="d-key"/><text x="370" y="190" text-anchor="middle" class="t-small">free 20</text>
+<rect x="400" y="164" width="120" height="44" class="d-box"/><text x="460" y="190" text-anchor="middle" class="t-small">used</text>
+<rect x="520" y="164" width="60" height="44" class="d-key"/><text x="550" y="190" text-anchor="middle" class="t-small">free 20</text>
+<rect x="580" y="164" width="120" height="44" class="d-box"/><text x="640" y="190" text-anchor="middle" class="t-small">used</text>
+<rect x="240" y="236" width="180" height="40" rx="6" class="d-trap"/>
+<text x="330" y="261" text-anchor="middle" class="t-small t-trap">malloc(48) fails</text>
+<text x="440" y="252" class="t-small">60 bytes free in total,</text>
+<text x="440" y="268" class="t-small">largest hole only 20</text>
+</svg></div><figcaption><b>Two different wastes.</b> Internal fragmentation is decided at allocation time by rounding policy. External fragmentation builds up over time from the order of frees, and a non-moving allocator can only reduce it by merging neighbouring holes.</figcaption></figure>
+
+<h3 id="ch08-causes-of-internal">Sources of internal fragmentation</h3>
+<ul>
+<li><b>Alignment and minimum size.</b> glibc rounds every request up to a multiple of 16 bytes plus an 8-byte header, with a 32-byte minimum chunk on 64-bit, so <code>malloc(1)</code> occupies 32 bytes.</li>
+<li><b>Size classes.</b> Allocators that keep one free list per size round up to the class: jemalloc's spacing keeps the worst-case waste near 20% once sizes pass the first few tiny classes (a 17-byte request still takes a 32-byte slot), while a power-of-two scheme wastes up to 50% at every size.</li>
+<li><b>Pages.</b> The kernel maps memory in 4 KiB pages (or 2 MiB huge pages), so the last page of every mapping is on average half empty.</li>
+<li><b>Padding inside objects</b> (<a href="#ch01">Ch 1</a>) and container slack: a <code>std::vector</code> with capacity 1024 and size 513 wastes 511 elements.</li>
+</ul>
+<h3 id="ch08-causes-of-external">Sources of external fragmentation</h3>
+<p>External fragmentation needs two ingredients: <b>varying sizes</b> and <b>interleaved lifetimes</b>. If every block were the same size, any hole would fit any request. If everything were freed in reverse allocation order (a stack), holes would always merge back into the top. Real programs break both: a server allocates a 200-byte request object, then a 4 KiB buffer, then a 48-byte session entry that lives for an hour. When the short-lived neighbours are freed, the long-lived entry pins the middle of the region, and the space around it can only be reused by requests that fit exactly.</p>
+</section>
+
+<section id="ch08-long-running" data-roles="th"><div class="sec-head"><h2>How fragmentation builds up in long-running processes</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A fresh heap is one big free block. Every allocation that outlives its neighbours becomes a pin. After hours of traffic the heap looks like a car park after a busy day: many single empty spaces scattered between parked cars, and no room for a bus.</p>
+<p>The typical patterns behind production incidents:</p>
+<ul>
+<li><b>Mixed lifetimes in one heap.</b> Long-lived cache entries allocated between short-lived request buffers. Each cache entry prevents its neighbours from coalescing.</li>
+<li><b>Growing then shrinking containers.</b> A burst makes a <code>std::vector</code> or <code>std::string</code> grow through 1, 2, 4, ... 64 MB; the freed smaller buffers leave holes behind that only small requests can use.</li>
+<li><b>Size drift.</b> The workload changes from many 64-byte objects to many 80-byte objects. The free 64-byte chunks (or a size class's dedicated pages) cannot serve the new size, so the heap grows while old free memory sits idle.</li>
+<li><b>Per-thread caches and arenas.</b> Memory freed by thread A is cached for thread A. If thread B now does the allocating, the heap grows again. glibc's per-thread arenas make this visible as RSS that is several times the live data (<a href="#ch07">Ch 7</a>).</li>
+<li><b>Producer-consumer across threads.</b> One thread allocates messages, another frees them. Allocators with thread-local caches must ship the memory back, and some (older ptmalloc versions especially) do this badly.</li>
+</ul>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>C++ cannot compact the heap. Raw pointers and references are plain addresses, the language allows hiding them in integers, and nothing records where they are, so an allocator can never move a live block to close a hole. Fragmentation therefore only goes down when blocks next to each other are both freed. Java and .NET compacting collectors can move objects because the runtime knows every reference.</p></div>
+</section>
+
+<section id="ch08-placement" data-roles="th"><div class="sec-head"><h2>Placement policies: first, best, next and worst fit</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Given a list of free holes and a request, which hole do you carve the block from? The answer changes both speed and how the holes evolve.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Policy</th><th>Rule</th><th>Strength</th><th>Weakness</th></tr></thead>
+<tbody>
+<tr><td>First fit</td><td>Scan from the start, take the first hole that fits</td><td>Simple; address-ordered first fit keeps low addresses dense</td><td>Small leftovers pile up at the front, so scans get slower</td></tr>
+<tr><td>Next fit</td><td>Like first fit, but resume where the last search stopped</td><td>Spreads work across the list</td><td>Scatters long-lived blocks everywhere; measured fragmentation is worse than first fit</td></tr>
+<tr><td>Best fit</td><td>Take the smallest hole that fits</td><td>Keeps big holes intact for big requests</td><td>Leaves tiny slivers; needs an ordered structure to be fast</td></tr>
+<tr><td>Worst fit</td><td>Take the largest hole</td><td>Leftovers stay usable</td><td>Destroys large holes; performs badly in practice</td></tr>
+</tbody></table></div>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 260" role="img" aria-label="For a 25-byte request, first fit picks the first 100-byte hole while best fit picks the 30-byte hole">
+<defs><marker id="ch08-c10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="26" class="t-bold">Free list (address order), request = 25</text>
+<rect x="20" y="100" width="250" height="48" class="d-key"/><text x="145" y="129" text-anchor="middle" class="t-small">hole A: 100</text>
+<rect x="270" y="100" width="40" height="48" class="d-box"/><text x="290" y="129" text-anchor="middle" class="t-small">used</text>
+<rect x="310" y="100" width="80" height="48" class="d-key"/><text x="350" y="129" text-anchor="middle" class="t-small">hole B: 30</text>
+<rect x="390" y="100" width="40" height="48" class="d-box"/><text x="410" y="129" text-anchor="middle" class="t-small">used</text>
+<rect x="430" y="100" width="160" height="48" class="d-key"/><text x="510" y="129" text-anchor="middle" class="t-small">hole C: 60</text>
+<rect x="590" y="100" width="40" height="48" class="d-box"/><text x="610" y="129" text-anchor="middle" class="t-small">used</text>
+<line x1="80" y1="60" x2="80" y2="96" class="d-line-acc" marker-end="url(#ch10-c10a)"/>
+<text x="20" y="54" class="t-small t-acc">first fit → A (leaves 75)</text>
+<line x1="350" y1="60" x2="350" y2="96" class="d-line-key" marker-end="url(#ch10-c10a)"/>
+<text x="300" y="54" class="t-small t-key">best fit → B (leaves 5)</text>
+<line x1="510" y1="188" x2="510" y2="152" class="d-line-trap" marker-end="url(#ch10-c10a)"/>
+<text x="430" y="204" class="t-small t-trap">next fit → C if the last search</text>
+<text x="430" y="220" class="t-small t-trap">stopped after B</text>
+<text x="20" y="204" class="t-small">Then requests 55 and 90 arrive:</text>
+<text x="20" y="222" class="t-small">first fit: 55 → A, 90 fails (holes 20, 30, 60)</text>
+<text x="20" y="240" class="t-small">best fit: 55 → C, 90 → A (holes 10, 5, 5)</text>
+</svg></div><figcaption><b>The policy decides which hole survives.</b> In this sequence best fit serves all three requests and first fit fails the third. Other sequences favour first fit; there is no policy that wins on every input.</figcaption></figure>
+
+<h3 id="ch08-what-research-says">What measurements say</h3>
+<p>The classic survey by Wilson, Johnstone, Neely and Boles (1995) replayed real program traces and found that address-ordered first fit and best fit both fragment very little on real workloads, while next fit is noticeably worse. Two older results are interview favourites. <b>Knuth's fifty-percent rule:</b> in an allocator that always coalesces adjacent free blocks, at equilibrium with N allocated blocks there are about N/2 free holes, so roughly a third of all blocks are holes. (It is a statistical result under steady-state assumptions, and it says nothing about how big the holes are.) <b>Robson's bound:</b> for any allocator that cannot move blocks there exist adversarial request sequences that need memory proportional to M·log2 n, where M is the maximum live data and n the ratio of largest to smallest block size. Robson proved a lower bound of roughly ½·M·log2 n for every non-moving allocator and gave one that stays within about M·log2 n. No placement policy can prevent fragmentation in the worst case; the good ones exploit the fact that real programs are not adversarial.</p>
+</section>
+
+<section id="ch08-coalescing" data-roles="th"><div class="sec-head"><h2>Splitting and coalescing</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> <b>Splitting</b> carves the requested size off a larger hole and keeps the remainder as a smaller hole. <b>Coalescing</b> is the reverse: when a block is freed, merge it with a free neighbour on either side so that holes grow back. Without coalescing, a heap that has served many small requests can never serve a large one again.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 250" role="img" aria-label="Freeing a block between two free neighbours merges all three into one hole using boundary tags">
+<defs><marker id="ch08-c10b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="26" class="t-bold">Before free(B)</text>
+<rect x="20" y="40" width="120" height="48" class="d-box"/><text x="80" y="68" text-anchor="middle" class="t-small">used</text>
+<rect x="140" y="40" width="120" height="48" class="d-key"/><text x="200" y="62" text-anchor="middle" class="t-small">free 32</text><text x="200" y="78" text-anchor="middle" class="t-small t-muted">footer: 32</text>
+<rect x="260" y="40" width="200" height="48" class="d-acc"/><text x="360" y="68" text-anchor="middle" class="t-small">B: 64 (being freed)</text>
+<rect x="460" y="40" width="80" height="48" class="d-key"/><text x="500" y="68" text-anchor="middle" class="t-small">free 16</text>
+<rect x="540" y="40" width="160" height="48" class="d-box"/><text x="620" y="68" text-anchor="middle" class="t-small">used</text>
+<line x1="270" y1="100" x2="250" y2="100" class="d-line-acc" marker-end="url(#ch10-c10b)"/>
+<text x="140" y="118" class="t-small t-acc">read the word before B: the previous</text>
+<text x="140" y="134" class="t-small t-acc">block's footer gives its size and status</text>
+<line x1="450" y1="100" x2="470" y2="100" class="d-line-acc" marker-end="url(#ch10-c10b)"/>
+<text x="470" y="118" class="t-small t-acc">B's address + 64 = next header</text>
+<text x="20" y="176" class="t-bold">After coalescing</text>
+<rect x="20" y="190" width="120" height="48" class="d-box"/><text x="80" y="218" text-anchor="middle" class="t-small">used</text>
+<rect x="140" y="190" width="400" height="48" class="d-key"/><text x="340" y="218" text-anchor="middle" class="t-small">one free hole: 32 + 64 + 16 = 112</text>
+<rect x="540" y="190" width="160" height="48" class="d-box"/><text x="620" y="218" text-anchor="middle" class="t-small">used</text>
+</svg></div><figcaption><b>Boundary tags make coalescing O(1).</b> Knuth's trick stores the size at both ends of a free block. The header of the next block is at <code>B + size</code>; the footer of the previous block sits just before <code>B</code>. glibc keeps only one bit (PREV_INUSE) in each header and reuses the footer space when the previous block is in use.</figcaption></figure>
+
+<h3 id="ch08-immediate-deferred">Immediate vs deferred coalescing</h3>
+<p>Coalescing on every free costs time and can be wasted work if the program immediately asks for the same size again (free 64, malloc 64, free 64...). So allocators often defer it: glibc's tcache and fastbins keep small chunks unmerged and marked "in use", and coalesce the fastbins in bulk (<code>malloc_consolidate</code>) when a large-bin request arrives or when a free produces a merged chunk of 64 KiB or more. Chunks in the tcache are never coalesced while they sit there. The trade-off: deferred coalescing is faster for repeating sizes and worse for fragmentation when the size mix changes. Size-class allocators (next section) mostly avoid the question: blocks in a size-class page never merge with each other; the whole page becomes free when its last block is freed.</p>
+</section>
+
+<section id="ch08-size-classes" data-roles="th"><div class="sec-head"><h2>Segregated lists, size classes, buddies and slabs</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch08-segregated">Segregated free lists and size classes</h3>
+<p><b>Mental model.</b> Instead of one list of holes of every size, keep a separate free list per size class, and carve each class from its own pages. A request is rounded up to its class and popped from that list in O(1). Since every block on a list is the same size, any free block fits any request of that class: external fragmentation within the class disappears. The price is internal fragmentation from rounding, plus pages that belong to one class sitting half-empty when the program stops using that size.</p>
+<p>Class spacing is the main design knob. Powers of two are simple but waste up to 50%. jemalloc uses four classes per doubling (for example 80, 96, 112, 128, then 160, 192, 224, 256), capping waste at about 20% of the block (the request is rounded up by at most a quarter of the class's power of two). tcmalloc uses a hand-tuned table of roughly 60 to 90 classes (Google's documentation says 60 to 80, gperftools about 88), chosen from allocation profiles to keep rounding waste small; it publishes no single worst-case bound, so do not quote one.</p>
+
+<h3 id="ch08-buddy">The buddy system</h3>
+<p>The buddy allocator manages a power-of-two region. Every block has size 2<sup>k</sup> times a minimum unit, and every block (except the whole region) has a unique <i>buddy</i> of the same size: the other half of the block it was split from. The buddy's address is found with one XOR: <code>buddy = offset ^ size</code>. Allocation rounds up to a power of two, takes a free block of that order, or splits a larger one in halves repeatedly. Freeing checks whether the buddy is free; if so, merges and repeats one level up.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 270" role="img" aria-label="A 1024 KiB buddy region split to serve requests of 100, 200 and 60 KiB with blocks of 128, 256 and 64 KiB">
+<text x="20" y="22" class="t-bold">1024 KiB region, requests 100, 200, 60 KiB</text>
+<rect x="20" y="36" width="700" height="34" class="d-soft"/><text x="370" y="58" text-anchor="middle" class="t-small t-muted">1024 (split)</text>
+<rect x="20" y="80" width="350" height="34" class="d-soft"/><text x="195" y="102" text-anchor="middle" class="t-small t-muted">512 (split)</text>
+<rect x="370" y="80" width="350" height="34" class="d-key"/><text x="545" y="102" text-anchor="middle" class="t-small">512 free</text>
+<rect x="20" y="124" width="175" height="34" class="d-soft"/><text x="107" y="146" text-anchor="middle" class="t-small t-muted">256 (split)</text>
+<rect x="195" y="124" width="175" height="34" class="d-acc"/><text x="282" y="146" text-anchor="middle" class="t-small">256: req 200</text>
+<rect x="20" y="168" width="87" height="34" class="d-acc"/><text x="63" y="190" text-anchor="middle" class="t-small">128: 100</text>
+<rect x="107" y="168" width="88" height="34" class="d-soft"/><text x="151" y="190" text-anchor="middle" class="t-small t-muted">128 split</text>
+<rect x="107" y="212" width="44" height="34" class="d-acc"/><text x="129" y="234" text-anchor="middle" class="t-small">64</text>
+<rect x="151" y="212" width="44" height="34" class="d-key"/><text x="173" y="234" text-anchor="middle" class="t-small">free</text>
+<text x="400" y="160" class="t-small">waste inside blocks: 28 + 56 + 4 = 88 KiB</text>
+<text x="400" y="180" class="t-small">buddy of offset 128 (size 64) = 128 ^ 64 = 192</text>
+<text x="400" y="200" class="t-small">freeing 128 KiB block at 0: buddy at 128 is</text>
+<text x="400" y="216" class="t-small">split, so no merge yet</text>
+</svg></div><figcaption><b>Buddies split in halves and merge by XOR.</b> Splitting and merging are O(log n) and need no search, which is why the Linux kernel uses a buddy allocator for physical pages. The cost is internal fragmentation: a request just above a power of two wastes almost half its block.</figcaption></figure>
+<p>The Linux kernel's page allocator is a buddy system over physical page frames with orders 0 to 10 (4 KiB up to 4 MiB with 4 KiB pages). <code>cat /proc/buddyinfo</code> shows how many free blocks of each order every memory zone has; a machine with plenty of order-0 pages and no order-9 pages cannot satisfy a 2 MiB huge page without compaction.</p>
+
+<h3 id="ch08-slab">Slab allocation</h3>
+<p>A slab allocator (Bonwick, SunOS 1994; SLUB in today's Linux kernel) dedicates one or more pages to objects of a single type or size, for example all <code>struct inode</code> objects or all 64-byte <code>kmalloc</code> requests. Each slab is carved into equal slots tracked by a free list. Benefits: no external fragmentation within a slab, O(1) allocation, good cache behaviour, and (in the original design) objects kept in a constructed state so initialisation is not repeated. <code>/proc/slabinfo</code> or <code>slabtop</code> shows the caches. User-space equivalents are fixed-size pools (<a href="#ch13">Ch 13</a>) and object pools (<a href="#ch14">Ch 14</a>).</p>
+</section>
+
+<section id="ch08-metrics" data-roles="th"><div class="sec-head"><h2>Measuring fragmentation</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>There is no single number, so say which one you mean.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Metric</th><th>Formula</th><th>Reads as</th></tr></thead>
+<tbody>
+<tr><td>Internal fragmentation</td><td>(bytes allocated − bytes requested) / bytes allocated</td><td>Rounding and header waste</td></tr>
+<tr><td>External fragmentation</td><td>1 − largest free block / total free bytes</td><td>0 when all free space is one hole; near 1 when it is shattered</td></tr>
+<tr><td>Heap overhead ratio</td><td>heap size from the OS / live bytes requested</td><td>Everything together, plus allocator metadata</td></tr>
+<tr><td>RSS ratio (Redis <code>mem_fragmentation_ratio</code>)</td><td>RSS / live bytes requested</td><td>What operators see; above about 1.5 usually means fragmentation, below 1 means swapping</td></tr>
+<tr><td>Kernel: <code>/proc/buddyinfo</code>, <code>extfrag_index</code></td><td>Free blocks per order</td><td>Whether high-order (contiguous) allocations can succeed</td></tr>
+</tbody></table></div>
+<p>Tools: glibc <code>malloc_stats()</code> and <code>malloc_info(0, stdout)</code> print per-arena totals; <code>mallinfo2()</code> returns them as numbers. jemalloc has <code>malloc_stats_print</code> and the <code>stats.*</code> mallctl namespace, tcmalloc has <code>MallocExtension::GetStats</code>. For RSS, read <code>VmRSS</code> in <code>/proc/self/status</code> or use <code>smem</code>/<code>pmap</code>.</p>
+
+<h3 id="ch08-key-facts">Key facts</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Fact</th><th>Value (Linux, glibc, 64-bit)</th></tr></thead>
+<tbody>
+<tr><td>Minimum chunk / alignment</td><td>32 bytes / 16 bytes</td></tr>
+<tr><td>mmap threshold</td><td>128 KiB default, dynamic up to 32 MiB</td></tr>
+<tr><td>Trim threshold (top of heap returned with brk)</td><td>128 KiB default</td></tr>
+<tr><td>Max arenas</td><td>8 × cores (tunable <code>MALLOC_ARENA_MAX</code>)</td></tr>
+<tr><td>Page size / huge page</td><td>4 KiB / 2 MiB (x86-64)</td></tr>
+<tr><td>Kernel buddy orders</td><td>0 to 10 (4 KiB to 4 MiB)</td></tr>
+<tr><td>Power-of-two classes, worst internal waste</td><td>Just under 50%</td></tr>
+<tr><td>vector growth factor</td><td>2 (libstdc++, libc++), 1.5 (MSVC, folly)</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="ch08-rss" data-roles="th"><div class="sec-head"><h2>RSS, virtual memory and why free() does not shrink the process</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Three different numbers describe a process's memory. <b>Virtual size</b> (VSZ) is all mapped address space, including reserved and never-touched regions. <b>Resident set size</b> (RSS) is the physical pages currently mapped in. <b>Live heap</b> is what your program has allocated and not freed. free() lowers the third; whether RSS goes down depends on whether the allocator gives pages back to the kernel.</p>
+<h3 id="ch08-why-no-shrink">Why RSS stays high after free</h3>
+<ul>
+<li><b>brk can only shrink from the top.</b> The main glibc heap is one contiguous segment. If one live chunk sits near the top, nothing below it can be released with brk, however much is free. glibc trims automatically only when the free top chunk exceeds <code>M_TRIM_THRESHOLD</code> (128 KiB by default).</li>
+<li><b>Free chunks stay in caches and bins</b>, ready for reuse. That is the point of an allocator: going back to the kernel costs a system call and later page faults.</li>
+<li><b>Fragmentation inside pages.</b> A 4 KiB page that holds one live 32-byte chunk stays resident.</li>
+<li><b>Arenas.</b> Each thread's arena holds its own free memory.</li>
+<li><b>Lazy release.</b> Allocators that release pages with <code>madvise(MADV_FREE)</code> (Linux 4.5+; jemalloc's "muzzy" stage when it is enabled, some Go runtime versions) tell the kernel it may take the pages, but RSS only drops when the kernel actually reclaims them under memory pressure. Monitoring then shows "high" RSS that is in fact reclaimable.</li>
+</ul>
+<h3 id="ch08-malloc-trim">What you can do</h3>
+<pre><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;malloc.h&gt;</span>   <span class="hljs-comment">// glibc only</span></span>
+
+<span class="hljs-comment">// Return free memory to the kernel: trims the top of the main heap and, since</span>
+<span class="hljs-comment">// glibc 2.8, calls madvise(MADV_DONTNEED) on whole free pages inside every arena.</span>
+<span class="hljs-built_in">malloc_trim</span>(<span class="hljs-number">0</span>);
+
+<span class="hljs-comment">// Tune at startup (or with GLIBC_TUNABLES=glibc.malloc.trim_threshold=...).</span>
+<span class="hljs-built_in">mallopt</span>(M_MMAP_THRESHOLD, <span class="hljs-number">64</span> * <span class="hljs-number">1024</span>);   <span class="hljs-comment">// fixing it also disables the dynamic threshold</span>
+<span class="hljs-built_in">mallopt</span>(M_ARENA_MAX, <span class="hljs-number">2</span>);</code></pre>
+<p>Large allocations (above the mmap threshold) avoid the problem entirely: each one is its own mapping and <code>free</code> unmaps it at once. That is also why a program that frees one huge buffer sees RSS drop immediately, while one that frees a million small nodes does not.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"Our service leaks: RSS grows and never comes down." Before blaming a leak, check the live heap (allocator stats or a heap profiler). If live bytes are flat while RSS is high, the problem is fragmentation, arena count or retention policy, not a leak, and the fixes are different: fewer arenas, another allocator, <code>malloc_trim</code>, or changing allocation patterns.</p></div>
+</section>
+
+<section id="ch08-allocators" data-roles="th"><div class="sec-head"><h2>jemalloc, tcmalloc and mimalloc in brief</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>All three replace malloc and <code>operator new</code> (by linking or <code>LD_PRELOAD</code>), use size classes for small objects plus thread-local caches, and give memory back to the OS more actively than ptmalloc. The differences that come up in interviews:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Allocator</th><th>Small objects</th><th>Concurrency</th><th>Returning memory</th><th>Known for</th></tr></thead>
+<tbody>
+<tr><td>jemalloc (FreeBSD, Meta)</td><td>Size classes, 4 per doubling, in "slabs" within extents</td><td>Thread cache in front of several arenas (4 × cores)</td><td>Time-based decay purging with madvise (dirty pages, then optionally "muzzy" lazily freed ones; muzzy decay is off by default since 5.2)</td><td>Low fragmentation, rich statistics and profiling</td></tr>
+<tr><td>tcmalloc (Google)</td><td>About 60 to 90 hand-tuned size classes, spans of pages</td><td>Per-thread or per-CPU caches (per-CPU uses Linux restartable sequences), central free lists, page heap</td><td>Background release of free spans at a configurable rate</td><td>Very fast small allocations, huge-page aware design</td></tr>
+<tr><td>mimalloc (Microsoft)</td><td>Free-list sharding: a free list per page, not per size class</td><td>Pages owned by a thread; cross-thread frees go to a separate per-page list</td><td>Eager page reset and segment release</td><td>Small code base, consistently fast in benchmarks</td></tr>
+</tbody></table></div>
+<p>Switching allocators is a common production fix for RSS bloat in multithreaded C++ services. Measure first: each allocator wins on some workloads and loses on others, and the decision is usually made from a load test that records both RSS and tail latency.</p>
+</section>
+
+<section id="ch08-mitigation" data-roles="th"><div class="sec-head"><h2>Mitigation: pools, arenas, preallocation and growth policy</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Fragmentation comes from mixing sizes and lifetimes in one heap. Every mitigation separates them: same-size objects together, same-lifetime objects together, or no allocation at all on the hot path.</p>
+<ul>
+<li><b>Fixed-size pools</b> for hot objects (orders, nodes, messages): one size, so no external fragmentation, O(1) allocation (<a href="#ch13">Ch 13</a>, <a href="#ch14">Ch 14</a>).</li>
+<li><b>Arenas per lifetime</b>: everything allocated for one request or one frame goes into a bump allocator that is reset at the end; no individual frees, so no holes (<a href="#ch15">Ch 15</a>). <code>std::pmr::monotonic_buffer_resource</code> is the standard one.</li>
+<li><b>Preallocate at startup</b>: HFT systems size every buffer, ring and pool before the market opens, then never call malloc on the hot path. A heap that does not change cannot fragment.</li>
+<li><b>reserve()</b> for containers whose final size you know, so they never pass through the 1, 2, 4, 8... sequence of intermediate buffers.</li>
+<li><b>Reuse objects</b> instead of freeing and reallocating: <code>clear()</code> a vector or string and keep its capacity.</li>
+<li><b>Avoid node-based containers</b> on hot paths: <code>std::list</code> and <code>std::map</code> make one allocation per element; a sorted <code>std::vector</code> or a flat hash map makes a few large ones.</li>
+<li><b>Small-buffer optimisation</b> keeps short strings and small functors inside the object (<a href="#ch16">Ch 16</a>).</li>
+</ul>
+
+<h3 id="ch08-growth-factor">The vector growth factor</h3>
+<p>libstdc++ and libc++ double a vector's capacity on reallocation; MSVC and folly's <code>fbvector</code> multiply by 1.5. Both give amortised O(1) <code>push_back</code>. The fragmentation argument for 1.5: with factor <code>f</code>, can the new buffer ever fit in the space released by all the previous buffers? During reallocation the current buffer is still live (its elements are being moved), so the new size <code>f<sup>n+1</sup></code> must fit into the sum of the older blocks <code>1 + f + ... + f<sup>n−1</sup></code>. For <code>f = 2</code> that sum is <code>2<sup>n</sup> − 1</code>, always less than the old block alone, so the new buffer never fits in the old space and the vector keeps walking forward through memory. The condition can hold only when <code>f</code> is below the golden ratio, about 1.618; at 1.5 the old space becomes reusable after a few reallocations. The argument assumes the freed blocks are adjacent and get coalesced, which real allocators with size classes and mmap thresholds do not guarantee, so treat it as a tie-breaker, not a law.</p>
+<div class="callout tip"><p class="callout-title">Tip</p><p><code>clear()</code> keeps capacity and <code>shrink_to_fit()</code> is only a request. To really release a vector's buffer, swap with an empty one: <code>std::vector&lt;T&gt;().swap(v);</code>. In a long-running process, prefer keeping the capacity if the vector will grow again, since repeated grow-shrink cycles are a fragmentation source.</p></div>
+</section>
+
+<section id="ch08-paging" data-roles="th"><div class="sec-head"><h2>The paging angle: physical memory and huge pages</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Virtual memory solves external fragmentation of <i>physical</i> memory: the page table can map any free physical frame behind any virtual page, so a process that needs 1 GB of contiguous addresses gets them even if its frames are scattered all over RAM. What it does not solve:</p>
+<ul>
+<li><b>Internal fragmentation in pages.</b> Memory is mapped in whole pages, so every mapping wastes on average half a page at its end. With 2 MiB huge pages that average waste is 1 MiB per mapping, which is why huge pages suit big heaps and hurt programs with many small mappings.</li>
+<li><b>Fragmentation of the virtual address space.</b> On 32-bit systems a long-running process could fail to find 500 MB of contiguous virtual addresses with gigabytes of RAM free. On 64-bit with 47 bits of user address space it is rarely a problem.</li>
+<li><b>Physically contiguous requests.</b> Huge pages, DMA buffers for devices without an IOMMU and some kernel allocations need contiguous frames, which brings back external fragmentation at the physical level. Linux fights it with the buddy allocator, by grouping pages by mobility (movable user pages apart from unmovable kernel pages), and with <b>compaction</b> (<code>kcompactd</code>), which migrates movable pages to build large free blocks. Transparent huge pages depend on compaction succeeding; when it stalls, page faults can take milliseconds, a known cause of latency spikes in trading systems.</li>
+<li><b>Fragmentation inside the heap</b> (the rest of this chapter) happens in virtual addresses, above the page tables, and paging does nothing for it.</li>
+</ul>
+<p>So the accurate interview answer to "doesn't paging eliminate fragmentation?" is: it eliminates external fragmentation of physical memory for ordinary page-sized mappings, it introduces internal fragmentation at page granularity, and it does nothing about fragmentation inside your process's heap.</p>
+</section>
+
+<section id="ch08-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Define internal and external fragmentation and give one cause of each.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Internal: memory allocated to a block but not requested by the program (a 33-byte request served from a 48-byte class wastes 15). External: free memory split into holes too small to satisfy a request although the total would suffice. Internal comes from rounding (alignment, size classes, page granularity); external comes from mixed sizes with interleaved lifetimes.</p>
+    <p><b>Why.</b> The distinction matters because the fixes differ: finer size classes reduce internal waste, while separating lifetimes or sizes (pools, arenas) reduces external waste. A common slip is calling a leak "fragmentation": leaked memory is live from the allocator's point of view.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>A heap has free blocks of 64, 16, 16 and 32 bytes. Compute the external fragmentation metric and say whether <code>malloc(100)</code> can succeed without growing the heap.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Total free = 128, largest = 64, so external fragmentation = 1 − 64/128 = 0.5. A 100-byte request fails without growing the heap, even though 128 bytes are free.</p>
+    <p><b>Why.</b> A request needs one contiguous block. The metric is 0 when all free memory is a single hole and approaches 1 when it is shattered into tiny pieces. The heap would extend the top chunk (brk) or mmap, so RSS grows while free memory sits unused.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How does the buddy system find a block's buddy, and what is its worst-case internal fragmentation?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> For a block of size 2<sup>k</sup> at offset <code>off</code> (relative to the region start), the buddy is at <code>off ^ 2<sup>k</sup></code>. Worst-case internal fragmentation is just under 50%: a request of 2<sup>k</sup> + 1 units gets a 2<sup>k+1</sup> block.</p>
+    <p><b>Why.</b> Splitting a block of size 2<sup>k+1</sup> aligned to its size produces two halves that differ only in bit k of their offset, so flipping that bit finds the other half. That makes merging a constant-time check per level. Average waste for uniformly distributed sizes is about 25%.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is a slab allocator and why does the Linux kernel use one on top of its buddy allocator?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A slab allocator dedicates pages to objects of one size or type and hands out equal slots from them via a free list. The buddy allocator only deals in whole pages (4 KiB and up), so allocating a 64-byte kernel object from it directly would waste most of a page; SLUB carves pages from the buddy allocator into many small slots.</p>
+    <p><b>Why.</b> One size per slab means no external fragmentation within it and O(1) operations, and grouping same-type objects is cache friendly. The original Bonwick design also cached constructed objects to skip initialisation. User-space pools apply the same idea.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>A service's live heap is flat at 2 GB but its RSS has grown to 6 GB over a week. Give three likely causes and how you would confirm each.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> (1) Heap fragmentation: compare allocator stats (<code>malloc_info</code>, jemalloc stats) for free-but-retained bytes. (2) Too many glibc arenas holding per-thread free memory: count arenas in <code>malloc_info</code>, try <code>MALLOC_ARENA_MAX=2</code>. (3) Memory not returned to the kernel (no trim, or lazy <code>MADV_FREE</code>): call <code>malloc_trim(0)</code> in a test and watch RSS drop, or check <code>LazyFree</code> in <code>/proc/PID/smaps</code>.</p>
+    <p><b>Why.</b> A flat live heap rules out a classic leak. The usual production fixes are fewer arenas, a different allocator (jemalloc/tcmalloc), separating long-lived from short-lived allocations, or periodic trimming. Heap profilers (heaptrack, jemalloc prof) confirm which call sites dominate.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why do HFT and game engines preallocate everything at startup instead of trusting a good malloc?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Predictability. A hot-path malloc can take a lock, walk bins, call brk or mmap, take page faults on fresh memory, or trigger consolidation; the average is fast but the tail is not. A heap that does not change after startup cannot fragment and never needs the kernel.</p>
+    <p><b>Why.</b> Latency-sensitive code cares about the 99.9th percentile. Preallocation plus pools, arenas and rings turns allocation into a pointer bump or a free-list pop, and prefaulting (touching or <code>mlock</code>ing the memory) removes page faults too.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>"Paging eliminates fragmentation." True or false?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Partly false. Paging eliminates external fragmentation of physical memory for page-sized mappings, because any free frame can back any virtual page. It introduces internal fragmentation (on average half a page per mapping), does nothing about fragmentation inside a process's heap, and physical external fragmentation returns for anything that needs contiguous frames: huge pages, DMA buffers, high-order kernel allocations.</p>
+    <p><b>Why.</b> That is why Linux has compaction and groups pages by mobility, and why transparent huge pages can stall page faults on a fragmented machine. The one-word "true" is the answer the interviewer is fishing for.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Best fit picks the tightest hole. Does it always fragment less than first fit?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. Best fit tends to leave tiny unusable slivers, and for some request sequences first fit succeeds where best fit fails (and vice versa). On real program traces, address-ordered first fit and best fit perform similarly well; next fit is the one measurably worse.</p>
+    <p><b>Why.</b> Robson showed every non-moving policy has adversarial inputs, and Wilson et al. (1995) found trace behaviour, not the policy name, dominates. Example where first fit wins: holes 20 and 15, requests 10, 10, 15. First fit puts both 10s into the 20 hole and the 15 into the 15 hole. Best fit puts the first 10 into the 15 hole (leaving 5), the second into the 20 (leaving 10), and the 15 fails.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why can a C++ allocator not compact the heap the way the JVM does?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Moving a block requires updating every pointer to it, and in C++ nothing knows where those pointers are. They can live in registers, on the stack, inside other objects, be cast to <code>std::uintptr_t</code>, XOR-ed, or written to a file. The JVM's collector knows the exact location of every reference.</p>
+    <p><b>Why.</b> Without compaction, external fragmentation only shrinks through coalescing of adjacent free blocks. Systems that need compaction in C++ use handles (an index into a table that the allocator can update) instead of raw pointers, which is what some game engines and databases do.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why does MSVC grow vectors by 1.5 while libstdc++ uses 2, and is the "1.5 lets you reuse memory" argument actually true?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> With factor f, the new buffer can fit into the coalesced space of all earlier buffers only if f is below the golden ratio (about 1.618), because the current buffer is still live during the copy. At 2 the sum of earlier buffers (2<sup>n</sup> − 1) is always smaller than the next request, so memory is never reused by the vector itself. Factor 2 wins on fewer reallocations and copies.</p>
+    <p><b>Why.</b> The argument assumes the old buffers were adjacent, freed and merged, and that nothing else claimed them. Size-class allocators, the mmap threshold for big buffers and other allocations break those assumptions, so in practice the benefit is small. Both factors give amortised O(1) push_back; the trade-off is copies vs memory.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A program frees a 1 GB buffer and a million 1 KB nodes (another 1 GB). RSS drops by about 1 GB, not 2. Why?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The 1 GB buffer was above the mmap threshold, so it had its own mapping and free unmapped it immediately. The nodes came from the brk heap and arenas; their freed chunks stay in bins and caches, and the heap can only shrink from the top, so most of that memory stays resident until reused or until <code>malloc_trim</code> releases whole free pages.</p>
+    <p><b>Why.</b> glibc returns memory to the kernel automatically only for mmapped chunks and for a free top chunk above the trim threshold. People assume free means "give back to the OS"; for small blocks it almost never does.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does <code>std::list</code> fragment the heap more than <code>std::vector</code>? Does <code>reserve()</code> help with fragmentation or only with speed?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Usually yes: a list makes one small allocation per element, interleaved with everything else the program allocates, and freeing elements in arbitrary order leaves holes all over the heap. A vector makes O(log n) large allocations. <code>reserve()</code> helps both: it removes the reallocation copies and the trail of discarded intermediate buffers (1, 2, 4, ... n/2) that would otherwise become holes.</p>
+    <p><b>Why.</b> Each node also carries allocator overhead (header plus rounding: a 4-byte <code>int</code> in a list node uses a 32-byte chunk with glibc). The counter-argument is that list nodes are all the same size, so their holes are reusable by other nodes; mixed with other sizes, they still fragment.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>"Size-class allocators such as jemalloc and tcmalloc have no external fragmentation, because every block in a class is the same size." True?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> False. Within one class any free slot fits any request of that class, so there is no hole-too-small problem. But free slots are tied to their class and their page: a run of 64-byte slots with one live object cannot serve a 96-byte request and cannot go back to the OS. After a burst of 64-byte objects is mostly freed, those pages sit nearly empty while the 96-byte class asks for new pages. This is external fragmentation one level up, between classes and pages.</p>
+    <p><b>Why.</b> The allocator can only release a page (or span, or extent) when every slot on it is free, and a single long-lived object pins the whole page. That is why these allocators track per-page occupancy, prefer to allocate from the fullest pages so the emptier ones can drain, and report "fragmentation" as resident bytes in partly used runs. The common wrong answer is "size classes trade external for internal fragmentation completely": they only remove the within-class part.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch08-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Print a vector's capacity each time it changes during 17 push_backs.</p>
+<pre data-run="ch10-growth" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;<span class="hljs-type">int</span>&gt; v;
+    std::<span class="hljs-type">size_t</span> last = v.<span class="hljs-built_in">capacity</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu&quot;</span>, last);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">17</span>; ++i) {
+        v.<span class="hljs-built_in">push_back</span>(i);
+        <span class="hljs-keyword">if</span> (v.<span class="hljs-built_in">capacity</span>() != last) {
+            last = v.<span class="hljs-built_in">capacity</span>();
+            std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot; %zu&quot;</span>, last);
+        }
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch10-growth">0 1 2 4 8 16 32</pre>
+    <p><b>Answer.</b> libstdc++ and libc++ both start at 0 and double: 1, 2, 4, 8, 16, 32. The 17th push_back moves from 16 to 32.</p>
+    <p><b>Why.</b> The growth factor is unspecified; the standard only requires amortised constant time. MSVC would print 0 1 2 3 4 6 9 13 19 (factor 1.5, with a minimum growth of one). Each step allocates a new buffer and frees the old one, so without <code>reserve(17)</code> this loop performs six allocations and leaves five freed buffers behind.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What are size and capacity after <code>clear()</code>, after <code>shrink_to_fit()</code>, and after the swap trick?</p>
+<pre data-run="ch10-clear" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">double</span>&gt; <span class="hljs-title">v</span><span class="hljs-params">(<span class="hljs-number">1000</span>)</span></span>;
+    v.<span class="hljs-built_in">clear</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after clear: size=%zu capacity=%zu\n&quot;</span>, v.<span class="hljs-built_in">size</span>(), v.<span class="hljs-built_in">capacity</span>());
+    v.<span class="hljs-built_in">shrink_to_fit</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after shrink_to_fit: capacity=%zu\n&quot;</span>, v.<span class="hljs-built_in">capacity</span>());
+
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">double</span>&gt; <span class="hljs-title">w</span><span class="hljs-params">(<span class="hljs-number">1000</span>)</span></span>;
+    std::<span class="hljs-built_in">vector</span>&lt;<span class="hljs-type">double</span>&gt;().<span class="hljs-built_in">swap</span>(w);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after swap: capacity=%zu\n&quot;</span>, w.<span class="hljs-built_in">capacity</span>());
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch10-clear">after clear: size=0 capacity=1000
+after shrink_to_fit: capacity=0
+after swap: capacity=0</pre>
+    <p><b>Answer.</b> <code>clear()</code> destroys the elements but keeps the 8000-byte buffer. <code>shrink_to_fit()</code> releases it on both libstdc++ and libc++. The swap trick releases it on every implementation.</p>
+    <p><b>Why.</b> <code>shrink_to_fit</code> is a non-binding request (<code>[vector.capacity]</code>), so portable code that must release memory uses the swap idiom. Keeping capacity after <code>clear()</code> is deliberate: a vector that is refilled every iteration then never reallocates, which is a fragmentation and latency win in loops.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A size-class allocator with classes 16, 32, 48, 64, 96 and 128 serves five requests. What does it report?</p>
+<pre data-run="ch10-classes" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">int</span> kClasses[] = {<span class="hljs-number">16</span>, <span class="hljs-number">32</span>, <span class="hljs-number">48</span>, <span class="hljs-number">64</span>, <span class="hljs-number">96</span>, <span class="hljs-number">128</span>};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">class_for</span><span class="hljs-params">(<span class="hljs-type">int</span> n)</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> c : kClasses)
+        <span class="hljs-keyword">if</span> (n &lt;= c) <span class="hljs-keyword">return</span> c;
+    <span class="hljs-keyword">return</span> <span class="hljs-number">-1</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> requests[] = {<span class="hljs-number">1</span>, <span class="hljs-number">17</span>, <span class="hljs-number">33</span>, <span class="hljs-number">65</span>, <span class="hljs-number">100</span>};
+    <span class="hljs-type">int</span> asked = <span class="hljs-number">0</span>, given = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> r : requests) {
+        <span class="hljs-type">int</span> c = <span class="hljs-built_in">class_for</span>(r);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d-&gt;%d &quot;</span>, r, c);
+        asked += r;
+        given += c;
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\nrequested %d, allocated %d, internal waste %.1f%%\n&quot;</span>,
+                asked, given, <span class="hljs-number">100.0</span> * (given - asked) / given);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch10-classes">1-&gt;16 17-&gt;32 33-&gt;48 65-&gt;96 100-&gt;128
+requested 216, allocated 320, internal waste 32.5%</pre>
+    <p><b>Answer.</b> Each request rounds up to the next class; 104 of the 320 allocated bytes are waste, 32.5%.</p>
+    <p><b>Why.</b> Internal fragmentation is (allocated − requested) / allocated. The worst offenders are requests just above a class boundary (17, 33, 65). Finer class spacing reduces this at the cost of more free lists and more partly used pages, which is the trade-off every size-class allocator tunes.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Holes of 100, 30 and 60 bytes; requests of 25, 55 and 90. What do first fit and best fit do?</p>
+<pre data-run="ch10-fits" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">pick</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">int</span>&gt;&amp; holes, <span class="hljs-type">int</span> n, <span class="hljs-type">bool</span> best)</span> </span>{
+    <span class="hljs-type">int</span> chosen = <span class="hljs-number">-1</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(holes.<span class="hljs-built_in">size</span>()); ++i) {
+        <span class="hljs-keyword">if</span> (holes[i] &lt; n) <span class="hljs-keyword">continue</span>;
+        <span class="hljs-keyword">if</span> (!best) <span class="hljs-keyword">return</span> i;
+        <span class="hljs-keyword">if</span> (chosen &lt; <span class="hljs-number">0</span> || holes[i] &lt; holes[chosen]) chosen = i;
+    }
+    <span class="hljs-keyword">return</span> chosen;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">run</span><span class="hljs-params">(<span class="hljs-type">bool</span> best)</span> </span>{
+    std::vector&lt;<span class="hljs-type">int</span>&gt; holes = {<span class="hljs-number">100</span>, <span class="hljs-number">30</span>, <span class="hljs-number">60</span>};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s:&quot;</span>, best ? <span class="hljs-string">&quot;best &quot;</span> : <span class="hljs-string">&quot;first&quot;</span>);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> n : {<span class="hljs-number">25</span>, <span class="hljs-number">55</span>, <span class="hljs-number">90</span>}) {
+        <span class="hljs-type">int</span> i = <span class="hljs-built_in">pick</span>(holes, n, best);
+        <span class="hljs-keyword">if</span> (i &lt; <span class="hljs-number">0</span>) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot; %d-&gt;fail&quot;</span>, n); <span class="hljs-keyword">continue</span>; }
+        holes[i] -= n;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot; %d-&gt;hole%d&quot;</span>, n, i);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot; | left:&quot;</span>);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> h : holes) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot; %d&quot;</span>, h);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">run</span>(<span class="hljs-literal">false</span>);
+    <span class="hljs-built_in">run</span>(<span class="hljs-literal">true</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch10-fits">first: 25-&gt;hole0 55-&gt;hole0 90-&gt;fail | left: 20 30 60
+best : 25-&gt;hole1 55-&gt;hole2 90-&gt;hole0 | left: 10 5 5</pre>
+    <p><b>Answer.</b> First fit carves both small requests from the big hole and then cannot serve 90. Best fit puts them into the tight holes and keeps the big hole for 90.</p>
+    <p><b>Why.</b> This sequence favours best fit; others favour first fit (see the tricky drill on best fit). Note the cost: best fit leaves two 5-byte slivers, which are likely too small to ever be used, the classic best-fit weakness.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A bump arena aligns every allocation to 8 bytes. Two allocations later the program corrupts the heap. Why?</p>
+<pre data-run="ch10-bug-arena" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Arena</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Arena</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> cap)</span> : buf_(new char[cap]), cap_(cap) {</span>}
+    ~<span class="hljs-built_in">Arena</span>() { <span class="hljs-keyword">delete</span>[] buf_; }
+    <span class="hljs-built_in">Arena</span>(<span class="hljs-type">const</span> Arena&amp;) = <span class="hljs-keyword">delete</span>;
+    Arena&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Arena&amp;) = <span class="hljs-keyword">delete</span>;
+
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">alloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        std::<span class="hljs-type">size_t</span> start = (used_ + <span class="hljs-number">7</span>) &amp; ~std::<span class="hljs-built_in">size_t</span>(<span class="hljs-number">7</span>);
+        <span class="hljs-keyword">if</span> (used_ + n &gt; cap_) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        used_ = start + n;
+        <span class="hljs-keyword">return</span> buf_ + start;
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">char</span>* buf_;
+    std::<span class="hljs-type">size_t</span> cap_;
+    std::<span class="hljs-type">size_t</span> used_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Arena <span class="hljs-title">arena</span><span class="hljs-params">(<span class="hljs-number">64</span>)</span></span>;
+    <span class="hljs-type">char</span>* a = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(arena.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">5</span>));
+    <span class="hljs-type">char</span>* b = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(arena.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">58</span>));
+    <span class="hljs-keyword">if</span> (!a || !b) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;out of space&quot;</span>); <span class="hljs-keyword">return</span> <span class="hljs-number">0</span>; }
+    std::<span class="hljs-built_in">memset</span>(a, <span class="hljs-string">&#x27;a&#x27;</span>, <span class="hljs-number">5</span>);
+    std::<span class="hljs-built_in">memset</span>(b, <span class="hljs-string">&#x27;b&#x27;</span>, <span class="hljs-number">58</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;done&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The capacity check uses <code>used_</code> instead of the aligned <code>start</code>. The second call computes <code>start = 8</code> but checks <code>5 + 58 = 63 &lt;= 64</code>, so it returns <code>[8, 66)</code>, two bytes past the end of the buffer. Fix: <code>if (start + n &gt; cap_ || start + n &lt; start) return nullptr;</code> (the second test guards overflow).</p>
+    <p><b>Why.</b> Alignment padding is internal fragmentation that the bounds check must account for. ASan reports a heap-buffer-overflow in the second <code>memset</code>. Without ASan the two bytes land in the allocator's next chunk header, and the crash happens much later, in an unrelated free. Arenas are covered fully in <a href="#ch15">Ch 15</a>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The code keeps a reference to the first element while the vector grows.</p>
+<pre data-run="ch10-bug-ref" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;<span class="hljs-type">int</span>&gt; prices = {<span class="hljs-number">100</span>, <span class="hljs-number">101</span>, <span class="hljs-number">102</span>};
+    <span class="hljs-type">int</span>&amp; best = prices[<span class="hljs-number">0</span>];
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">10</span>; ++i) prices.<span class="hljs-built_in">push_back</span>(<span class="hljs-number">103</span> + i);
+    best = <span class="hljs-number">99</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, prices[<span class="hljs-number">0</span>]);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The fourth push_back exceeds capacity 3, so the vector moves to a new buffer and frees the old one. <code>best</code> still refers to the old buffer, and <code>best = 99</code> writes freed memory. Store an index, take the reference after the growth, or <code>reserve</code> enough first.</p>
+    <p><b>Why.</b> Reallocation invalidates all references, pointers and iterators (<code>[vector.modifiers]</code>). Under glibc the write lands in a freed chunk that may now be a tcache entry, corrupting the allocator's own list. ASan reports heap-use-after-free on the assignment.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This toy allocator should end with one free 128-byte block after everything is freed, but it prints something else. What is printed, and what is missing?</p>
+<pre data-run="ch10-bug-coalesce" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iterator&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Heap</span> {
+    std::map&lt;std::<span class="hljs-type">size_t</span>, std::<span class="hljs-type">size_t</span>&gt; free_blocks;   <span class="hljs-comment">// offset -&gt; size, address ordered</span>
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Heap</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{ free_blocks[<span class="hljs-number">0</span>] = n; }
+
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">alloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{                <span class="hljs-comment">// first fit, assumes success</span>
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> it = free_blocks.<span class="hljs-built_in">begin</span>(); it != free_blocks.<span class="hljs-built_in">end</span>(); ++it) {
+            <span class="hljs-keyword">if</span> (it-&gt;second &lt; n) <span class="hljs-keyword">continue</span>;
+            std::<span class="hljs-type">size_t</span> off = it-&gt;first, rest = it-&gt;second - n;
+            free_blocks.<span class="hljs-built_in">erase</span>(it);
+            <span class="hljs-keyword">if</span> (rest) free_blocks[off + n] = rest;
+            <span class="hljs-keyword">return</span> off;
+        }
+        <span class="hljs-keyword">return</span> SIZE_MAX;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> off, std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-keyword">auto</span> it = free_blocks.<span class="hljs-built_in">emplace</span>(off, n).first;
+        <span class="hljs-keyword">auto</span> next = std::<span class="hljs-built_in">next</span>(it);
+        <span class="hljs-keyword">if</span> (next != free_blocks.<span class="hljs-built_in">end</span>() &amp;&amp; off + n == next-&gt;first) {
+            it-&gt;second += next-&gt;second;
+            free_blocks.<span class="hljs-built_in">erase</span>(next);
+        }
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Heap <span class="hljs-title">h</span><span class="hljs-params">(<span class="hljs-number">128</span>)</span></span>;
+    std::<span class="hljs-type">size_t</span> a = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">32</span>), b = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">32</span>), c = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">32</span>);
+    h.<span class="hljs-built_in">release</span>(a, <span class="hljs-number">32</span>);
+    h.<span class="hljs-built_in">release</span>(b, <span class="hljs-number">32</span>);
+    h.<span class="hljs-built_in">release</span>(c, <span class="hljs-number">32</span>);
+    std::<span class="hljs-type">size_t</span> largest = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; [off, size] : h.free_blocks) largest = size &gt; largest ? size : largest;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;free blocks: %zu, largest: %zu\n&quot;</span>, h.free_blocks.<span class="hljs-built_in">size</span>(), largest);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch10-bug-coalesce">free blocks: 3, largest: 64</pre>
+    <p><b>Answer.</b> It prints three free blocks with the largest only 64. <code>release</code> merges with the following block but never with the preceding one. Freeing <code>a</code> then <code>b</code> leaves <code>[0,32)</code> and <code>[32,64)</code> separate; freeing <code>c</code> merges it only with the tail. Add the backward merge: if <code>it != begin</code> and <code>prev.offset + prev.size == off</code>, grow <code>prev</code> and erase <code>it</code>.</p>
+    <p><b>Why.</b> Coalescing must look both ways, or the heap slowly turns into slivers and large requests fail with plenty of free bytes, which is exactly external fragmentation. Real allocators use boundary tags so the previous block can be found in O(1); an address-ordered map gives O(log n).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A buddy allocator over 1024 KiB receives requests of 100, 200, 60 and 300 KiB. What block sizes are used and how much is wasted?</p>
+<pre data-run="ch10-buddy-sizes" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">unsigned</span> <span class="hljs-title">round_pow2</span><span class="hljs-params">(<span class="hljs-type">unsigned</span> n)</span> </span>{
+    <span class="hljs-type">unsigned</span> p = <span class="hljs-number">1</span>;
+    <span class="hljs-keyword">while</span> (p &lt; n) p &lt;&lt;= <span class="hljs-number">1</span>;
+    <span class="hljs-keyword">return</span> p;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">unsigned</span> requests[] = {<span class="hljs-number">100</span>, <span class="hljs-number">200</span>, <span class="hljs-number">60</span>, <span class="hljs-number">300</span>};
+    <span class="hljs-type">unsigned</span> total_req = <span class="hljs-number">0</span>, total_block = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">unsigned</span> r : requests) {
+        <span class="hljs-type">unsigned</span> b = <span class="hljs-built_in">round_pow2</span>(r);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%u KiB -&gt; %u KiB block (waste %u)\n&quot;</span>, r, b, b - r);
+        total_req += r;
+        total_block += b;
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;requested %u of 1024, blocks use %u, fits: %s\n&quot;</span>,
+                total_req, total_block, total_block &lt;= <span class="hljs-number">1024</span> ? <span class="hljs-string">&quot;maybe&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch10-buddy-sizes">100 KiB -&gt; 128 KiB block (waste 28)
+200 KiB -&gt; 256 KiB block (waste 56)
+60 KiB -&gt; 64 KiB block (waste 4)
+300 KiB -&gt; 512 KiB block (waste 212)
+requested 660 of 1024, blocks use 960, fits: maybe</pre>
+    <p><b>Answer.</b> Blocks of 128, 256, 64 and 512 KiB; 300 KiB wastes 212 KiB because it sits just above 256. The blocks total 960 KiB, so they fit, but only because their placement works out: 512 + 256 + 128 + 64 can all be carved from one 1024 region.</p>
+    <p><b>Why.</b> Buddy allocation trades internal fragmentation (here 300 of 960 KiB, 31%) for O(log n) splits and merges with no searching. "Maybe" is the honest answer for total ≤ capacity in general: a buddy system can also fail on external fragmentation if the free blocks are not buddies of each other.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch08-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>First-fit allocator simulation with splitting and coalescing. Manage a region of <code>N</code> bytes by offset. <code>alloc(n)</code> rounds <code>n</code> up to 8, uses first fit and returns an offset or <code>std::nullopt</code>. <code>release(off)</code> frees the block and merges it with both neighbours. Expose total free bytes, largest free block and the external fragmentation metric.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Keep free blocks in an address-ordered <code>std::map&lt;offset, size&gt;</code> and live blocks in another map so <code>release</code> knows the size. Allocation scans in address order (first fit) and splits. Release inserts the block, then merges with the successor and the predecessor if they touch.</p>
+<pre data-run="ch10-code-firstfit" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iterator&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">FirstFit</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">FirstFit</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> size)</span> </span>{ free_[<span class="hljs-number">0</span>] = size; }
+
+    <span class="hljs-function">std::optional&lt;std::<span class="hljs-type">size_t</span>&gt; <span class="hljs-title">alloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        n = (n + <span class="hljs-number">7</span>) &amp; ~std::<span class="hljs-built_in">size_t</span>(<span class="hljs-number">7</span>);
+        <span class="hljs-keyword">if</span> (n == <span class="hljs-number">0</span>) n = <span class="hljs-number">8</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> it = free_.<span class="hljs-built_in">begin</span>(); it != free_.<span class="hljs-built_in">end</span>(); ++it) {
+            <span class="hljs-keyword">if</span> (it-&gt;second &lt; n) <span class="hljs-keyword">continue</span>;
+            std::<span class="hljs-type">size_t</span> off = it-&gt;first, rest = it-&gt;second - n;
+            free_.<span class="hljs-built_in">erase</span>(it);
+            <span class="hljs-keyword">if</span> (rest) free_[off + n] = rest;
+            used_[off] = n;
+            <span class="hljs-keyword">return</span> off;
+        }
+        <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> off)</span> </span>{
+        <span class="hljs-keyword">auto</span> u = used_.<span class="hljs-built_in">find</span>(off);
+        <span class="hljs-keyword">if</span> (u == used_.<span class="hljs-built_in">end</span>()) <span class="hljs-keyword">return</span>;                    <span class="hljs-comment">// unknown or double free</span>
+        std::<span class="hljs-type">size_t</span> n = u-&gt;second;
+        used_.<span class="hljs-built_in">erase</span>(u);
+        <span class="hljs-keyword">auto</span> it = free_.<span class="hljs-built_in">emplace</span>(off, n).first;
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> next = std::<span class="hljs-built_in">next</span>(it); next != free_.<span class="hljs-built_in">end</span>() &amp;&amp; it-&gt;first + it-&gt;second == next-&gt;first) {
+            it-&gt;second += next-&gt;second;
+            free_.<span class="hljs-built_in">erase</span>(next);
+        }
+        <span class="hljs-keyword">if</span> (it != free_.<span class="hljs-built_in">begin</span>()) {
+            <span class="hljs-keyword">auto</span> prev = std::<span class="hljs-built_in">prev</span>(it);
+            <span class="hljs-keyword">if</span> (prev-&gt;first + prev-&gt;second == it-&gt;first) {
+                prev-&gt;second += it-&gt;second;
+                free_.<span class="hljs-built_in">erase</span>(it);
+            }
+        }
+    }
+
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">total_free</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        std::<span class="hljs-type">size_t</span> t = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; [off, size] : free_) t += size;
+        <span class="hljs-keyword">return</span> t;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">largest_free</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        std::<span class="hljs-type">size_t</span> m = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; [off, size] : free_) m = size &gt; m ? size : m;
+        <span class="hljs-keyword">return</span> m;
+    }
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">external_frag</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        std::<span class="hljs-type">size_t</span> t = <span class="hljs-built_in">total_free</span>();
+        <span class="hljs-keyword">return</span> t ? <span class="hljs-number">1.0</span> - <span class="hljs-built_in">double</span>(<span class="hljs-built_in">largest_free</span>()) / <span class="hljs-built_in">double</span>(t) : <span class="hljs-number">0.0</span>;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">holes</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> free_.<span class="hljs-built_in">size</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    std::map&lt;std::<span class="hljs-type">size_t</span>, std::<span class="hljs-type">size_t</span>&gt; free_, used_;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* label, <span class="hljs-type">const</span> FirstFit&amp; h)</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%-12s holes=%zu free=%zu largest=%zu frag=%.2f\n&quot;</span>, label,
+                h.<span class="hljs-built_in">holes</span>(), h.<span class="hljs-built_in">total_free</span>(), h.<span class="hljs-built_in">largest_free</span>(), h.<span class="hljs-built_in">external_frag</span>());
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">FirstFit <span class="hljs-title">h</span><span class="hljs-params">(<span class="hljs-number">256</span>)</span></span>;
+    <span class="hljs-keyword">auto</span> a = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">64</span>), b = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">64</span>), c = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">64</span>), d = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">30</span>);
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;4 allocs&quot;</span>, h);
+    h.<span class="hljs-built_in">release</span>(*a);
+    h.<span class="hljs-built_in">release</span>(*c);
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;free a, c&quot;</span>, h);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;alloc(100): %s\n&quot;</span>, h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">100</span>) ? <span class="hljs-string">&quot;ok&quot;</span> : <span class="hljs-string">&quot;fails&quot;</span>);
+    h.<span class="hljs-built_in">release</span>(*b);
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;free b&quot;</span>, h);
+    <span class="hljs-keyword">auto</span> e = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">100</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;alloc(100): at %zu\n&quot;</span>, *e);
+    h.<span class="hljs-built_in">release</span>(*e);
+    h.<span class="hljs-built_in">release</span>(*d);
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;free all&quot;</span>, h);
+}</code></pre>
+<pre class="out" data-out="ch10-code-firstfit">4 allocs     holes=1 free=32 largest=32 frag=0.00
+free a, c    holes=3 free=160 largest=64 frag=0.60
+alloc(100): fails
+free b       holes=2 free=224 largest=192 frag=0.14
+alloc(100): at 0
+free all     holes=1 free=256 largest=256 frag=0.00</pre>
+    <p><b>Complexity and pitfalls.</b> Allocation is O(h) in the number of holes (first fit scans), release is O(log h). The <code>d = alloc(30)</code> request rounds to 32, so only 32 bytes remain at first. With <code>a</code> and <code>c</code> free there are 160 free bytes and the 100-byte request still fails: external fragmentation in action. After freeing <code>b</code>, three adjacent blocks merge into one 192-byte hole. Pitfalls: forgetting the backward merge, double free (handled by the <code>used_</code> lookup), and taking iterators after <code>erase</code>.</p>
+    <p class="rating">Estimated rating: ~1500 · ordered-map bookkeeping with careful two-sided merging</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Buddy allocator. Manage 2<sup>K</sup> units. <code>alloc(units)</code> rounds up to a power of two, takes the smallest free block that fits, and splits it; <code>release(off)</code> merges with free buddies all the way up. Show the free lists after a few operations.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> One <code>std::set</code> of offsets per order. To allocate order k, find the smallest order j ≥ k with a free block, remove it, and split down: each split puts the upper half (<code>off + 2<sup>j−1</sup></code>) on list j−1. Remember the order of each live block. To free, repeatedly check whether <code>off ^ 2<sup>k</sup></code> is on list k; if so remove it, take the lower offset and go up one order.</p>
+<pre data-run="ch10-code-buddy" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;set&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Buddy</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Buddy</span><span class="hljs-params">(<span class="hljs-type">int</span> max_order)</span> : max_(max_order), free_(max_order + <span class="hljs-number">1</span>) {</span>
+        free_[max_].<span class="hljs-built_in">insert</span>(<span class="hljs-number">0</span>);
+    }
+
+    <span class="hljs-function">std::optional&lt;std::<span class="hljs-type">size_t</span>&gt; <span class="hljs-title">alloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> units)</span> </span>{
+        <span class="hljs-type">int</span> k = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">while</span> ((std::<span class="hljs-built_in">size_t</span>(<span class="hljs-number">1</span>) &lt;&lt; k) &lt; units) ++k;
+        <span class="hljs-type">int</span> j = k;
+        <span class="hljs-keyword">while</span> (j &lt;= max_ &amp;&amp; free_[j].<span class="hljs-built_in">empty</span>()) ++j;
+        <span class="hljs-keyword">if</span> (j &gt; max_) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        std::<span class="hljs-type">size_t</span> off = *free_[j].<span class="hljs-built_in">begin</span>();
+        free_[j].<span class="hljs-built_in">erase</span>(free_[j].<span class="hljs-built_in">begin</span>());
+        <span class="hljs-keyword">while</span> (j &gt; k) {
+            --j;
+            free_[j].<span class="hljs-built_in">insert</span>(off + (std::<span class="hljs-built_in">size_t</span>(<span class="hljs-number">1</span>) &lt;&lt; j));   <span class="hljs-comment">// upper half stays free</span>
+        }
+        order_of_[off] = k;
+        <span class="hljs-keyword">return</span> off;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> off)</span> </span>{
+        <span class="hljs-keyword">auto</span> it = order_of_.<span class="hljs-built_in">find</span>(off);
+        <span class="hljs-keyword">if</span> (it == order_of_.<span class="hljs-built_in">end</span>()) <span class="hljs-keyword">return</span>;
+        <span class="hljs-type">int</span> k = it-&gt;second;
+        order_of_.<span class="hljs-built_in">erase</span>(it);
+        <span class="hljs-keyword">while</span> (k &lt; max_) {
+            std::<span class="hljs-type">size_t</span> buddy = off ^ (std::<span class="hljs-built_in">size_t</span>(<span class="hljs-number">1</span>) &lt;&lt; k);
+            <span class="hljs-keyword">auto</span> b = free_[k].<span class="hljs-built_in">find</span>(buddy);
+            <span class="hljs-keyword">if</span> (b == free_[k].<span class="hljs-built_in">end</span>()) <span class="hljs-keyword">break</span>;
+            free_[k].<span class="hljs-built_in">erase</span>(b);
+            off = off &lt; buddy ? off : buddy;
+            ++k;
+        }
+        free_[k].<span class="hljs-built_in">insert</span>(off);
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">dump</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* label)</span> <span class="hljs-type">const</span> </span>{
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%-10s&quot;</span>, label);
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> k = <span class="hljs-number">0</span>; k &lt;= max_; ++k)
+            <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> off : free_[k]) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot; [%zu:%zu]&quot;</span>, off, std::<span class="hljs-built_in">size_t</span>(<span class="hljs-number">1</span>) &lt;&lt; k);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">int</span> max_;
+    std::vector&lt;std::set&lt;std::<span class="hljs-type">size_t</span>&gt;&gt; free_;
+    std::map&lt;std::<span class="hljs-type">size_t</span>, <span class="hljs-type">int</span>&gt; order_of_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Buddy <span class="hljs-title">b</span><span class="hljs-params">(<span class="hljs-number">10</span>)</span></span>;                         <span class="hljs-comment">// 1024 units, think KiB</span>
+    <span class="hljs-keyword">auto</span> x = b.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">100</span>);               <span class="hljs-comment">// 128</span>
+    <span class="hljs-keyword">auto</span> y = b.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">200</span>);               <span class="hljs-comment">// 256</span>
+    <span class="hljs-keyword">auto</span> z = b.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">60</span>);                <span class="hljs-comment">// 64</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;x=%zu y=%zu z=%zu\n&quot;</span>, *x, *y, *z);
+    b.<span class="hljs-built_in">dump</span>(<span class="hljs-string">&quot;allocated&quot;</span>);
+    b.<span class="hljs-built_in">release</span>(*x);
+    b.<span class="hljs-built_in">dump</span>(<span class="hljs-string">&quot;free x&quot;</span>);
+    b.<span class="hljs-built_in">release</span>(*z);
+    b.<span class="hljs-built_in">dump</span>(<span class="hljs-string">&quot;free z&quot;</span>);
+    b.<span class="hljs-built_in">release</span>(*y);
+    b.<span class="hljs-built_in">dump</span>(<span class="hljs-string">&quot;free y&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch10-code-buddy">x=0 y=256 z=128
+allocated  [192:64] [512:512]
+free x     [192:64] [0:128] [512:512]
+free z     [0:256] [512:512]
+free y     [0:1024]</pre>
+    <p><b>Complexity and pitfalls.</b> O(K log n) per operation with sets (O(K) with intrusive lists and a bitmap of free blocks, as the kernel does). Freeing <code>x</code> cannot merge because its buddy at 128 is split; freeing <code>z</code> (64 units at 128) merges it with its free buddy at 192 into a 128-unit block at 128, which then merges with <code>x</code>'s block at 0 into 256 at 0. Pitfalls: computing the buddy with <code>+</code> instead of XOR, merging with a buddy that is free but of a different order (the per-order set prevents it), and forgetting to keep the lower offset after a merge.</p>
+    <p class="rating">Estimated rating: ~1700 · split/merge invariants and XOR buddy addressing</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Best fit in O(log n) with coalescing. Same interface as the first-fit drill, but choose the smallest hole that fits using an index by size. Create holes of 100, 30 and 60 bytes and serve 25, 55, 90.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Keep two indexes over the same free blocks: <code>by_addr</code> (offset to size) for coalescing, and <code>by_size</code>, a <code>std::set</code> of (size, offset) pairs for best fit via <code>lower_bound({n, 0})</code>. Every insertion and removal updates both. No rounding here so the numbers match the reading drill.</p>
+<pre data-run="ch10-code-bestfit" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iterator&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;set&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">BestFit</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">BestFit</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> size)</span> </span>{ <span class="hljs-built_in">add</span>(<span class="hljs-number">0</span>, size); }
+
+    <span class="hljs-function">std::optional&lt;std::<span class="hljs-type">size_t</span>&gt; <span class="hljs-title">alloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-keyword">auto</span> it = by_size_.<span class="hljs-built_in">lower_bound</span>({n, <span class="hljs-number">0</span>});
+        <span class="hljs-keyword">if</span> (it == by_size_.<span class="hljs-built_in">end</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        <span class="hljs-keyword">auto</span> [size, off] = *it;
+        <span class="hljs-built_in">remove</span>(off, size);
+        <span class="hljs-keyword">if</span> (size &gt; n) <span class="hljs-built_in">add</span>(off + n, size - n);
+        used_[off] = n;
+        <span class="hljs-keyword">return</span> off;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> off)</span> </span>{
+        <span class="hljs-keyword">auto</span> u = used_.<span class="hljs-built_in">find</span>(off);
+        <span class="hljs-keyword">if</span> (u == used_.<span class="hljs-built_in">end</span>()) <span class="hljs-keyword">return</span>;
+        std::<span class="hljs-type">size_t</span> n = u-&gt;second;
+        used_.<span class="hljs-built_in">erase</span>(u);
+        <span class="hljs-keyword">auto</span> next = by_addr_.<span class="hljs-built_in">lower_bound</span>(off);
+        <span class="hljs-keyword">if</span> (next != by_addr_.<span class="hljs-built_in">end</span>() &amp;&amp; off + n == next-&gt;first) {
+            std::<span class="hljs-type">size_t</span> ns = next-&gt;second;
+            <span class="hljs-built_in">remove</span>(next-&gt;first, ns);
+            n += ns;
+        }
+        <span class="hljs-keyword">auto</span> after = by_addr_.<span class="hljs-built_in">lower_bound</span>(off);
+        <span class="hljs-keyword">if</span> (after != by_addr_.<span class="hljs-built_in">begin</span>()) {
+            <span class="hljs-keyword">auto</span> prev = std::<span class="hljs-built_in">prev</span>(after);
+            <span class="hljs-keyword">if</span> (prev-&gt;first + prev-&gt;second == off) {
+                std::<span class="hljs-type">size_t</span> po = prev-&gt;first, ps = prev-&gt;second;
+                <span class="hljs-built_in">remove</span>(po, ps);
+                off = po;
+                n += ps;
+            }
+        }
+        <span class="hljs-built_in">add</span>(off, n);
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">dump</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; [off, size] : by_addr_) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot; [%zu:%zu]&quot;</span>, off, size);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">add</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> off, std::<span class="hljs-type">size_t</span> size)</span> </span>{ by_addr_[off] = size; by_size_.<span class="hljs-built_in">insert</span>({size, off}); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">remove</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> off, std::<span class="hljs-type">size_t</span> size)</span> </span>{ by_addr_.<span class="hljs-built_in">erase</span>(off); by_size_.<span class="hljs-built_in">erase</span>({size, off}); }
+
+    std::map&lt;std::<span class="hljs-type">size_t</span>, std::<span class="hljs-type">size_t</span>&gt; by_addr_, used_;
+    std::set&lt;std::pair&lt;std::<span class="hljs-type">size_t</span>, std::<span class="hljs-type">size_t</span>&gt;&gt; by_size_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">BestFit <span class="hljs-title">h</span><span class="hljs-params">(<span class="hljs-number">220</span>)</span></span>;
+    <span class="hljs-keyword">auto</span> a = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">100</span>); h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">10</span>);
+    <span class="hljs-keyword">auto</span> c = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">30</span>);  h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">10</span>);
+    <span class="hljs-keyword">auto</span> e = h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">60</span>);  h.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">10</span>);
+    h.<span class="hljs-built_in">release</span>(*a); h.<span class="hljs-built_in">release</span>(*c); h.<span class="hljs-built_in">release</span>(*e);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;holes:&quot;</span>); h.<span class="hljs-built_in">dump</span>();
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> n : {<span class="hljs-number">25</span>, <span class="hljs-number">55</span>, <span class="hljs-number">90</span>}) {
+        <span class="hljs-keyword">auto</span> off = h.<span class="hljs-built_in">alloc</span>(n);
+        <span class="hljs-keyword">if</span> (off) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;alloc(%zu) -&gt; %zu\n&quot;</span>, n, *off);
+        <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;alloc(%zu) -&gt; fail\n&quot;</span>, n);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;holes:&quot;</span>); h.<span class="hljs-built_in">dump</span>();
+}</code></pre>
+<pre class="out" data-out="ch10-code-bestfit">holes: [0:100] [110:30] [150:60]
+alloc(25) -&gt; 110
+alloc(55) -&gt; 150
+alloc(90) -&gt; 0
+holes: [90:10] [135:5] [205:5]</pre>
+    <p><b>Complexity and pitfalls.</b> O(log n) allocate and free. The 10-byte separators keep the three holes from merging. Pitfalls: updating one index and forgetting the other (the private <code>add</code>/<code>remove</code> pair prevents that), using a <code>std::multimap</code> by size and then erasing the wrong block with the same size (the (size, offset) pair makes keys unique), and invalidated iterators after <code>remove</code> (the code re-queries <code>lower_bound</code>). Note the two 5-byte slivers: best fit's characteristic leftover.</p>
+    <p class="rating">Estimated rating: ~1700 · two synchronised ordered indexes with merge in both directions</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Segregated size-class allocator. Over a fixed 4096-byte arena, serve requests up to 128 bytes from classes 16, 32, 64 and 128. Each class has an intrusive free list; when empty it carves a 512-byte run from the arena. Larger requests return null (they would go to a different path). Track requested and allocated bytes to report internal fragmentation, and show that a freed block is reused by the next request of the same class.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Map size to class index with a loop over four classes. A free block stores the next pointer in its first bytes. Refill carves a run of <code>512 / class</code> blocks from the arena's bump pointer and threads them onto the list. <code>free</code> needs the size (as with sized delete) to find the class.</p>
+<pre data-run="ch10-code-classes" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">SizeClassHeap</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kClass[] = {<span class="hljs-number">16</span>, <span class="hljs-number">32</span>, <span class="hljs-number">64</span>, <span class="hljs-number">128</span>};
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> kNum = <span class="hljs-number">4</span>;
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kRun = <span class="hljs-number">512</span>;
+
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">alloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-type">int</span> c = <span class="hljs-built_in">class_of</span>(n);
+        <span class="hljs-keyword">if</span> (c &lt; <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        <span class="hljs-keyword">if</span> (!lists_[c] &amp;&amp; !<span class="hljs-built_in">refill</span>(c)) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        Free* f = lists_[c];
+        lists_[c] = f-&gt;next;
+        requested_ += n;
+        allocated_ += kClass[c];
+        <span class="hljs-keyword">return</span> f;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">free</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-type">int</span> c = <span class="hljs-built_in">class_of</span>(n);
+        lists_[c] = ::<span class="hljs-built_in">new</span> (p) Free{lists_[c]};
+        requested_ -= n;
+        allocated_ -= kClass[c];
+    }
+
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">offset</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">void</span>* p)</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">char</span>*&gt;(p) - arena_; }
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">internal_frag</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> allocated_ ? <span class="hljs-number">1.0</span> - <span class="hljs-built_in">double</span>(requested_) / <span class="hljs-built_in">double</span>(allocated_) : <span class="hljs-number">0.0</span>; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">arena_used</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> bump_; }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Free</span> { Free* next; };
+
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">class_of</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> c = <span class="hljs-number">0</span>; c &lt; kNum; ++c)
+            <span class="hljs-keyword">if</span> (n &lt;= kClass[c]) <span class="hljs-keyword">return</span> c;
+        <span class="hljs-keyword">return</span> <span class="hljs-number">-1</span>;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">refill</span><span class="hljs-params">(<span class="hljs-type">int</span> c)</span> </span>{
+        <span class="hljs-keyword">if</span> (bump_ + kRun &gt; <span class="hljs-keyword">sizeof</span> arena_) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        <span class="hljs-type">char</span>* run = arena_ + bump_;
+        bump_ += kRun;
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> off = kRun; off &gt;= kClass[c]; off -= kClass[c])
+            lists_[c] = ::<span class="hljs-built_in">new</span> (run + off - kClass[c]) Free{lists_[c]};
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+
+    <span class="hljs-built_in">alignas</span>(<span class="hljs-number">16</span>) <span class="hljs-type">char</span> arena_[<span class="hljs-number">4096</span>];
+    std::<span class="hljs-type">size_t</span> bump_ = <span class="hljs-number">0</span>;
+    Free* lists_[kNum] = {};
+    std::<span class="hljs-type">size_t</span> requested_ = <span class="hljs-number">0</span>, allocated_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">static</span> SizeClassHeap heap;
+    <span class="hljs-type">void</span>* a = heap.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">10</span>);      <span class="hljs-comment">// class 16</span>
+    <span class="hljs-type">void</span>* b = heap.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">20</span>);      <span class="hljs-comment">// class 32, new run</span>
+    <span class="hljs-type">void</span>* c = heap.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">100</span>);     <span class="hljs-comment">// class 128, new run</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a@%zu b@%zu c@%zu, arena used %zu\n&quot;</span>,
+                heap.<span class="hljs-built_in">offset</span>(a), heap.<span class="hljs-built_in">offset</span>(b), heap.<span class="hljs-built_in">offset</span>(c), heap.<span class="hljs-built_in">arena_used</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;internal fragmentation: %.3f\n&quot;</span>, heap.<span class="hljs-built_in">internal_frag</span>());
+    heap.<span class="hljs-built_in">free</span>(b, <span class="hljs-number">20</span>);
+    <span class="hljs-type">void</span>* d = heap.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">30</span>);      <span class="hljs-comment">// same class as b</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;d reuses b: %d\n&quot;</span>, d == b);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;too big: %s\n&quot;</span>, heap.<span class="hljs-built_in">alloc</span>(<span class="hljs-number">200</span>) ? <span class="hljs-string">&quot;served&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>);
+    heap.<span class="hljs-built_in">free</span>(a, <span class="hljs-number">10</span>); heap.<span class="hljs-built_in">free</span>(c, <span class="hljs-number">100</span>); heap.<span class="hljs-built_in">free</span>(d, <span class="hljs-number">30</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after freeing all: arena used %zu (runs are kept)\n&quot;</span>, heap.<span class="hljs-built_in">arena_used</span>());
+}</code></pre>
+<pre class="out" data-out="ch10-code-classes">a@0 b@512 c@1024, arena used 1536
+internal fragmentation: 0.261
+d reuses b: 1
+too big: null
+after freeing all: arena used 1536 (runs are kept)</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) allocate and free after refill. The three live requests total 10 + 20 + 100 = 130 bytes in blocks of 16 + 32 + 128 = 176 bytes, so internal fragmentation is 1 − 130/176 = 0.261. Each class owns its own 512-byte run, so the arena is 1536 bytes used for 176 bytes of blocks: unused slots in a class's run are the size-class version of external fragmentation, and freeing every block does not give the runs back. Pitfalls: <code>free</code> with the wrong size puts the block on the wrong list (sized delete has the same contract), class sizes must be multiples of the alignment you promise, and the free-list pointer overwrites the first bytes of a freed block, so use-after-free bugs corrupt the list.</p>
+    <p class="rating">Estimated rating: ~1600 · intrusive free lists plus run carving and per-class accounting</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Growth factor experiment. Model a vector that starts at capacity 1000 and grows by factor <code>f</code> (new capacity = <code>max(old + 1, floor(old · f))</code>). Old buffers are freed after the copy and coalesce into one region at the start of memory; the current buffer is live while the next one is allocated. For f = 1.5, 1.6, 1.7 and 2.0, report the first reallocation whose new buffer fits into the freed region, within 40 reallocations.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Track <code>freed</code> (sum of all buffers before the current one) and <code>cur</code>. At each step compute <code>next</code>; if <code>next &lt;= freed</code> the allocator could place it in the old space. Otherwise the current buffer joins the freed region after the copy and <code>cur</code> becomes <code>next</code>. The golden-ratio argument predicts reuse for f below about 1.618 and never for f above it.</p>
+<pre data-run="ch10-code-growth" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cmath&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">first_reuse</span><span class="hljs-params">(<span class="hljs-type">double</span> f, <span class="hljs-type">long</span> <span class="hljs-type">long</span>* at_capacity)</span> </span>{
+    <span class="hljs-type">long</span> <span class="hljs-type">long</span> cur = <span class="hljs-number">1000</span>, freed = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> step = <span class="hljs-number">1</span>; step &lt;= <span class="hljs-number">40</span>; ++step) {
+        <span class="hljs-type">long</span> <span class="hljs-type">long</span> next = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;(std::<span class="hljs-built_in">floor</span>(cur * f));
+        <span class="hljs-keyword">if</span> (next &lt; cur + <span class="hljs-number">1</span>) next = cur + <span class="hljs-number">1</span>;
+        <span class="hljs-keyword">if</span> (next &lt;= freed) { *at_capacity = next; <span class="hljs-keyword">return</span> step; }
+        freed += cur;          <span class="hljs-comment">// the old buffer is released after the copy</span>
+        cur = next;
+    }
+    <span class="hljs-keyword">return</span> <span class="hljs-number">-1</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">double</span> f : {<span class="hljs-number">1.5</span>, <span class="hljs-number">1.6</span>, <span class="hljs-number">1.7</span>, <span class="hljs-number">2.0</span>}) {
+        <span class="hljs-type">long</span> <span class="hljs-type">long</span> cap = <span class="hljs-number">0</span>;
+        <span class="hljs-type">int</span> step = <span class="hljs-built_in">first_reuse</span>(f, &amp;cap);
+        <span class="hljs-keyword">if</span> (step &gt; <span class="hljs-number">0</span>) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;f=%.1f: reuse at reallocation %d (capacity %lld)\n&quot;</span>, f, step, cap);
+        <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;f=%.1f: never within 40 reallocations\n&quot;</span>, f);
+    }
+}</code></pre>
+<pre class="out" data-out="ch10-code-growth">f=1.5: reuse at reallocation 5 (capacity 7593)
+f=1.6: reuse at reallocation 8 (capacity 42940)
+f=1.7: never within 40 reallocations
+f=2.0: never within 40 reallocations</pre>
+    <p><b>Complexity and pitfalls.</b> O(steps). The result matches the theory: below the golden ratio the freed prefix eventually catches up (after 5 reallocations at 1.5, after 8 at 1.6, and later the closer f gets to 1.618), above it never does. For f = 1.5 the condition is 2(1.5<sup>n</sup> − 1) ≥ 1.5<sup>n+1</sup>, which first holds at n = 4 previous buffers, the fifth reallocation. Starting at 1000 keeps integer rounding out of the way: from capacity 1 the forced minimum growth (1, 2, 3, 4, 6...) produces early "reuse" that is an artefact of rounding, not of the factor. The model ignores size classes, other allocations and the mmap threshold, so real allocators show a weaker effect; say so when you quote it.</p>
+    <p class="rating">Estimated rating: ~1300 · simple simulation, the insight is in setting up the invariant correctly</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch08-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>Internal</b> = waste inside blocks (rounding, headers, pages). <b>External</b> = free memory split into holes too small to use. External frag metric: 1 − largest free / total free.</li>
+<li>Fragmentation needs <b>mixed sizes and interleaved lifetimes</b>. C++ cannot compact, so only coalescing adjacent free blocks reduces it.</li>
+<li><b>Fit policies:</b> first and best fit both do well on real traces; next fit is worse; none is safe against adversarial sequences (Robson). Best fit leaves slivers.</li>
+<li><b>Coalescing</b> with boundary tags is O(1); allocators defer it for small sizes (tcache, fastbins) for speed. <b>Size classes</b> remove external frag per class at the cost of rounding; <b>buddy</b> splits and merges by XOR with up to 50% internal waste; <b>slab</b> = pages per object size.</li>
+<li><b>RSS stays high after free</b> because brk only shrinks from the top, free chunks are cached, pages are partly used, threads have their own arenas, and MADV_FREE is lazy. Large blocks (above 128 KiB by default) are mmapped and returned at once. <code>malloc_trim(0)</code> and <code>MALLOC_ARENA_MAX</code> are the glibc levers.</li>
+<li><b>Mitigate</b> by separating sizes and lifetimes: pools, arenas, preallocation, <code>reserve</code>, reusing capacity, flat containers instead of node-based ones, or a different allocator (jemalloc, tcmalloc, mimalloc).</li>
+<li><b>Growth factor:</b> 2 in libstdc++/libc++, 1.5 in MSVC; only factors below about 1.618 can ever reuse their own freed buffers.</li>
+<li><b>Paging</b> removes external fragmentation of physical memory, adds internal fragmentation per page, and brings external fragmentation back for contiguous needs (huge pages, DMA), which the kernel handles with buddy lists and compaction.</li>
+</ul>
+</section>

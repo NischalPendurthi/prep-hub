@@ -5,7 +5,7 @@ One site for placement and interview prep, published at **https://nischalpendurt
 | Path | Tool | Source |
 |---|---|---|
 | `/` | Hub landing page with progress from each tool | `index.html` |
-| `/guide/` | C++ / OS / Networks interview guide | `guide/index.html` |
+| `/guide/` | C++ guide (`/guide/cpp/`) and OS & Networks guide (`/guide/os/`) | `guide/` (built from `guide/content/`) |
 | `/langs/` | Language internals: Python, Java, Go, Rust | `langs/` (built from `langs/content/`) |
 | `/topics/` | Role-based roadmaps and topic guides: embedded, compilers, ML, system design, aptitude | `topics/` (built from `topics/content/`) |
 | `/mcq/` | Placement MCQ Prep (2,363 questions) | `mcq/` |
@@ -34,6 +34,10 @@ Push to `main`. `.github/workflows/pages.yml` checks the atlas templates, runs `
 ## Language internals guides
 
 `langs/` holds the Python, Java, Go and Rust guides, built from Markdown by `node langs/build.mjs`, which runs every example and records its output. See `langs/README.md` for the chapter format.
+
+## C++ and OS guides
+
+`guide/` holds the C++ guide and the OS & Networks guide: `node langs/build.mjs --root guide`. See `guide/README.md`.
 
 ## Topic guides
 

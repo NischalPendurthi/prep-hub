@@ -361,7 +361,7 @@ function renderDrill(b, ctx) {
 // ---------------------------------------------------------------- chapters
 function loadLang(lang) {
   const dir = path.join(CONTENT, lang);
-  const files = fs.readdirSync(dir).filter((f) => /^\d\d-.*\.md$/.test(f)).sort();
+  const files = fs.readdirSync(dir).filter((f) => /^\d\d-.*\.(md|html)$/.test(f)).sort();
   if (!files.length || !files[0].startsWith("00-")) fail(lang, "needs 00-overview.md");
   const seen = new Set();
   const overview = { ...frontMatter(fs.readFileSync(path.join(dir, files[0]), "utf8"), `${lang}/${files[0]}`), file: files[0] };
@@ -370,12 +370,27 @@ function loadLang(lang) {
     const { meta, body } = frontMatter(fs.readFileSync(path.join(dir, f), "utf8"), where);
     for (const k of ["title", "part", "lede", "desc"]) if (!meta[k]) fail(where, `front matter needs ${k}`);
     const num = f.slice(0, 2);
-    return { lang, num, id: `ch${num}`, where, meta, body };
+    return { lang, num, id: `ch${num}`, where, meta, body, raw: f.endsWith(".html") };
   });
   return { lang, overview, chapters, seen };
 }
 
+// A pre-rendered chapter (NN-slug.html): front matter, then its <section> elements as finished HTML.
+// Its outputs are already in the HTML, so nothing runs; roles, drills and "On this page" are read off the markup.
+function rawSections(ch) {
+  const toc = [], roles = new Set();
+  const re = /<section id="([^"]+)" data-roles="([^"]*)"><div class="sec-head"><h2>([\s\S]*?)<\/h2>|<h3 id="([^"]+)">([\s\S]*?)<\/h3>/g;
+  for (const m of ch.body.matchAll(re)) {
+    if (m[1]) { toc.push(`<a href="#${m[1]}">${m[3]}</a>`); for (const r of m[2].split(/\s+/)) if (ROLE[r]) roles.add(r); }
+    else toc.push(`<a class="h3" href="#${m[4]}">${m[5]}</a>`);
+  }
+  if (!toc.length) fail(ch.where, "no <section> elements");
+  for (const m of ch.body.matchAll(/\bid="([^"]+)"/g)) if (!m[1].startsWith(ch.id)) fail(ch.where, `id ${m[1]} does not start with ${ch.id}`);
+  return { secHtml: ch.body.trim(), toc, roles: [...roles], drills: (ch.body.match(/<div class="drill"/g) || []).length };
+}
+
 function renderChapter(L, ch, idx) {
+  if (ch.raw) return chapterPage(L, ch, idx, rawSections(ch));
   const ctx = makeCtx(L.lang, ch.id, ch.where, L.seen);
   const blocks = parseBlocks(ch.body.split("\n"), ch.where);
   const sections = [];
@@ -398,9 +413,13 @@ function renderChapter(L, ch, idx) {
     toc.push(`<a href="#${s.id}">${inline(s.title)}</a>`, ...ctx.h3s.map((h) => `<a class="h3" href="#${h.id}">${inline(h.text)}</a>`));
     return `<section id="${s.id}" data-roles="${s.roles.join(" ")}"><div class="sec-head"><h2>${inline(s.title)}</h2><div class="sec-tools">${s.roles.map((r) => `<span class="role ${r}">${ROLE[r]}</span>`).join("")}</div></div>\n${inner}\n</section>`;
   }).join("\n\n");
-  const roles = [...new Set(sections.flatMap((s) => s.roles))].sort((a, b) => Object.keys(ROLE).indexOf(a) - Object.keys(ROLE).indexOf(b));
+  return chapterPage(L, ch, idx, { secHtml, toc, roles: [...new Set(sections.flatMap((s) => s.roles))], drills: ctx.drills || 0 });
+}
+
+function chapterPage(L, ch, idx, { secHtml, toc, roles, drills }) {
+  roles = roles.sort((a, b) => Object.keys(ROLE).indexOf(a) - Object.keys(ROLE).indexOf(b));
   ch.roles = roles;
-  ch.drills = ctx.drills || 0;
+  ch.drills = drills;
   const prev = L.chapters[idx - 1], next = L.chapters[idx + 1];
   const pager = `<nav class="pager" aria-label="Chapter navigation">${prev ? `<a href="#${prev.id}"><small>Previous · ${prev.num}</small><span>${inline(prev.meta.title)}</span></a>` : ""}${next ? `<a class="next" href="#${next.id}"><small>Next · ${next.num}</small><span>${inline(next.meta.title)}</span></a>` : ""}</nav>`;
   const meta = [`${roles.map((r) => `<span class="role ${r}">${ROLE[r]}</span>`).join("")}`, ch.meta.hours ? `<span>· about ${esc(ch.meta.hours)} hours</span>` : "", ch.meta.prereqs ? `<span>· prerequisites: ${inline(ch.meta.prereqs)}</span>` : ""].join("");
@@ -599,11 +618,11 @@ footer { padding: 20px 0 36px; border-top: 1px solid var(--hub-line); color: var
   </section>
   <section class="grid" aria-label="Guides">
     ${cards}
-    <a class="card t-cpp" href="../guide/">
-      <div class="card-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg></span><div><h2>C++ / OS Guide</h2><div class="kind">C++20 · GCC and Clang</div></div></div>
-      <p>The original guide: objects and vtables, threads and locks, networking, memory management and move semantics.</p>
-      <div class="chips"><span class="chip">OOP</span><span class="chip">Threads</span><span class="chip">Memory</span><span class="chip">Moves</span></div>
-      <div class="stat">26 chapters · 847 drills</div>
+    <a class="card t-cpp" href="../guide/cpp/">
+      <div class="card-top"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></svg></span><div><h2>C++ Guide</h2><div class="kind">C++20 · GCC and Clang</div></div></div>
+      <p>Objects and vtables, namespaces and exceptions, memory management, move semantics, templates and lambdas, and C++ concurrency.</p>
+      <div class="chips"><span class="chip">OOP</span><span class="chip">Memory</span><span class="chip">Moves</span><span class="chip">Templates</span></div>
+      <div class="stat">30 chapters</div>
       <span class="open">Open guide →</span>
     </a>
   </section>

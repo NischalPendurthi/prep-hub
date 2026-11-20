@@ -264,7 +264,7 @@ Conditions change during a call, so real buffers adapt. They estimate a high per
 
 ## UDP vs TCP for media {#ch02-udp .th}
 
-The C++ guide's [TCP and UDP chapter](../../guide/#ch08) covers the protocols: handshakes, retransmission, congestion control and the sockets API. This chapter only deals with what they mean for live audio.
+The C++ guide's [TCP and UDP chapter](../../guide/os/#ch05) covers the protocols: handshakes, retransmission, congestion control and the sockets API. This chapter only deals with what they mean for live audio.
 
 TCP delivers bytes in order. If one segment is lost, all later data waits in the kernel until the retransmission arrives, even though that data is already on the machine. This is **head-of-line blocking**. In this simulation, each packet has a 2% chance of being lost, and a retransmission costs 200 ms. That number is an example. A fast retransmit on a steady stream can be quicker, and the effect has the same shape.
 
@@ -769,7 +769,7 @@ Packet 2 arrives at 150. It is late at 20 and at 60 ms depth, and plays at 100 m
 - Barge-in: stop playback, drop queued TTS, cancel the LLM, fix history. Tag everything with a turn ID.
 - Queueing: latency stays flat and then rises sharply near capacity. Keep a margin and watch queue depth.
 - Jitter buffer: depth trades lateness against delay. Adapt to conditions. PLC covers the rest.
-- UDP for media, since late audio is useless and TCP's head-of-line blocking turns small loss into stalls. Protocol details are in the [C++ guide](../../guide/#ch08).
+- UDP for media, since late audio is useless and TCP's head-of-line blocking turns small loss into stalls. Protocol details are in the [C++ guide](../../guide/os/#ch05).
 - WebRTC: signalling and SDP, ICE with host, srflx and relay candidates, STUN for address discovery, TURN as a relay, DTLS-SRTP for encryption, RTP and RTCP, Opus, AEC, data channels.
 - WebSocket: simple, TCP, no media features. Good for clean server-to-server links.
 - Debugging: follow counters hop by hop. One-way: permissions, sent, received, direction, playout. Echo: AEC reference. Clipping: level or front/back. Chipmunk: sample-rate mismatch. Growing delay: queues, RTF, drift.

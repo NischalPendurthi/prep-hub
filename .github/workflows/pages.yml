@@ -38,13 +38,14 @@ jobs:
             echo "changed since $base:"; echo "$files"
           fi
           has() { [[ "$files" == ALL ]] || grep -qE "$1" <<<"$files"; }
-          atlas=false; langs=false; topics=false
+          atlas=false; langs=false; topics=false; guide=false
           has '^\.github/workflows/' && files=ALL
           has '^atlas/' && atlas=true
           has '^langs/' && langs=true
           has '^(topics/|langs/(build\.mjs|reader/|toolchains\.json))' && topics=true
-          any=false; [[ $atlas == true || $langs == true || $topics == true ]] && any=true
-          printf 'atlas=%s\nlangs=%s\ntopics=%s\nany=%s\n' $atlas $langs $topics $any | tee -a "$GITHUB_OUTPUT"
+          has '^(guide/|langs/(build\.mjs|reader/|toolchains\.json))' && guide=true
+          any=false; [[ $atlas == true || $langs == true || $topics == true || $guide == true ]] && any=true
+          printf 'atlas=%s\nlangs=%s\ntopics=%s\nguide=%s\nany=%s\n' $atlas $langs $topics $guide $any | tee -a "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12.3"
@@ -75,6 +76,9 @@ jobs:
       - name: Topic guides - every example runs and matches its recorded output
         if: steps.changed.outputs.topics == 'true'
         run: node langs/build.mjs --root topics --verify
+      - name: C++ and OS guides - every example runs and matches its recorded output
+        if: steps.changed.outputs.guide == 'true'
+        run: node langs/build.mjs --root guide --verify
       - name: Build site
         run: ./build.sh
       - uses: actions/upload-pages-artifact@v3

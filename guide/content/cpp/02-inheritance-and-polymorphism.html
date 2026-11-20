@@ -1,0 +1,1476 @@
+---
+title: Inheritance and polymorphism
+part: Part A · Object-oriented programming
+lede: How C++ decides which function runs: inheritance access, static and dynamic binding, the vtable and vptr, and the rules around destructors, slicing, construction, name hiding and multiple inheritance. Interviewers love it because every rule has a sharp edge that compiles cleanly and then misbehaves, and "draw the object layout" separates memorised keywords from understanding.
+desc: Virtual functions, vtable and vptr, slicing, virtual destructors, diamond
+hours: 6
+prereqs: [Ch 1](#ch01) (constructors, destructors, rule of 3/5/0)
+---
+<section id="ch02-inherit" data-roles="th"><div class="sec-head"><h2>Inheritance, is-a and access</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A derived class object contains a complete base class object (the <i>base subobject</i>) followed by the derived class's own members. Public inheritance promises <i>is-a</i>: anywhere code expects a <code>Base&amp;</code>, a <code>Derived</code> must work and keep every promise the base makes. If that promise does not hold, use composition (see <a href="#ch03">Ch 3</a> for the Liskov substitution principle and the square/rectangle trap).</p>
+
+<h3 id="ch02-access-table">Public, protected and private inheritance</h3>
+<p>The inheritance access specifier caps the access of inherited members as seen <i>through the derived class</i>, and it controls who may convert <code>Derived*</code> to <code>Base*</code>. It never changes what the derived class itself can see: a derived class can always use the base's public and protected members, and never its private ones.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Base member</th><th><code>: public Base</code></th><th><code>: protected Base</code></th><th><code>: private Base</code></th></tr></thead>
+<tbody>
+<tr><td>public</td><td>public</td><td>protected</td><td>private</td></tr>
+<tr><td>protected</td><td>protected</td><td>protected</td><td>private</td></tr>
+<tr><td>private</td><td>not accessible</td><td>not accessible</td><td>not accessible</td></tr>
+<tr><td><code>Derived*</code> → <code>Base*</code> allowed for</td><td>everyone</td><td>Derived, its friends and its derived classes</td><td>Derived and its friends only</td></tr>
+</tbody></table></div>
+<p>The default is <code>private</code> for <code>class</code> and <code>public</code> for <code>struct</code>, so <code>class D : B {}</code> is private inheritance. That catches people out when the upcast suddenly fails to compile.</p>
+<p><b>Private inheritance means is-implemented-in-terms-of.</b> It is composition with three extras: the derived class can override the base's virtual functions, can reach its protected members, and gets the empty base optimisation (an empty base takes no space, while an empty member takes at least one byte). C++20's <code>[[no_unique_address]]</code> gives the space saving to members too, so private inheritance is now rarely needed for that reason alone.</p>
+
+<h3 id="ch02-protected-rule">The protected access rule</h3>
+<p>A derived class may access a protected member of its base only through an object of its own type (or a type derived from it). It may not reach into an arbitrary <code>Base</code>:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">class</span> <span class="hljs-title class_">Account</span> {
+<span class="hljs-keyword">protected</span>:
+    <span class="hljs-type">long</span> balance_ = <span class="hljs-number">0</span>;
+};
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Savings</span> : <span class="hljs-keyword">public</span> Account {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">ok</span><span class="hljs-params">(Savings&amp; other)</span> </span>{ other.balance_ = <span class="hljs-number">0</span>; }   <span class="hljs-comment">// fine: other is a Savings</span>
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">bad</span><span class="hljs-params">(Account&amp; other)</span> </span>{ other.balance_ = <span class="hljs-number">0</span>; }  <span class="hljs-comment">// error: other may be a Current account</span>
+};</code></pre>
+<p>The rule exists so that one derived class cannot break the invariants of a sibling class by going through the shared base. ([class.protected])</p>
+
+<h3 id="ch02-ctor-order-inherit">Construction order with bases</h3>
+<p>Virtual bases first, then direct bases in base-specifier order (never initialiser-list order), then members in declaration order, then the body; destruction is the exact reverse (<a href="#ch01">Ch 1</a>). <code>-Wreorder</code> warns when the initialiser list disagrees.</p>
+</section>
+
+<section id="ch02-binding" data-roles="th"><div class="sec-head"><h2>Static and dynamic binding</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Every expression that names an object has a <i>static type</i> (what the compiler sees in the declaration) and the object it refers to has a <i>dynamic type</i> (what was actually constructed). A call to a non-virtual function is bound at compile time using the static type. A call to a virtual function through a pointer or reference is bound at run time using the dynamic type.</p>
+<pre data-run="ch02-binding"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">hello</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Base::hello\n&quot;</span>; }
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">speak</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Base::speak\n&quot;</span>; }
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Base</span>() = <span class="hljs-keyword">default</span>;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Base {
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">hello</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Derived::hello\n&quot;</span>; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">speak</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Derived::speak\n&quot;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Derived d;
+    Base&amp; r = d;
+    Base* p = &amp;d;
+    r.<span class="hljs-built_in">hello</span>();         <span class="hljs-comment">// non-virtual: static type Base</span>
+    r.<span class="hljs-built_in">speak</span>();         <span class="hljs-comment">// virtual: dynamic type Derived</span>
+    p-&gt;Base::<span class="hljs-built_in">speak</span>();  <span class="hljs-comment">// qualified name: dispatch is suppressed</span>
+    Base b = d;        <span class="hljs-comment">// copy: b is a brand new Base object</span>
+    b.<span class="hljs-built_in">speak</span>();
+}</code></pre>
+<pre class="out" data-out="ch02-binding">Base::hello
+Derived::speak
+Base::speak
+Base::speak</pre>
+<p>Three conditions must hold for a virtual call: the function is virtual in the static type, the call goes through a pointer or reference (or <code>this</code>, implicitly), and the name is not qualified. A call on an object by value (<code>b.speak()</code>) always knows the exact type, so the compiler binds it statically.</p>
+
+<h3 id="ch02-override-rules">What counts as an override</h3>
+<p>A function in a derived class overrides a base virtual function when it has the same name, the same parameter types, the same cv-qualifiers and the same ref-qualifier. The return type must be the same or <i>covariant</i> (see <a href="#ch02-rtti">covariant returns</a> below). If any of these differ, you get a new, unrelated function that hides the base one, and nothing warns you unless you wrote <code>override</code>.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> { <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">int</span>)</span> <span class="hljs-type">const</span></span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">D1</span> : Base { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">int</span>)</span></span>; };                  <span class="hljs-comment">// missing const: hides, does not override</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">D2</span> : Base { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">long</span>)</span> <span class="hljs-type">const</span></span>; };           <span class="hljs-comment">// different parameter: hides</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">D3</span> : Base { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">int</span>)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span></span>; };   <span class="hljs-comment">// overrides</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">D4</span> : Base { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">int</span>)</span> <span class="hljs-keyword">override</span></span>; };         <span class="hljs-comment">// error: marks the bug at compile time</span></code></pre>
+<ul>
+<li><code>virtual</code> is implied on an override; repeating it is legal but adds nothing.</li>
+<li><code>override</code> changes no behaviour. It only asks the compiler to check that the function really overrides something. Clang's <code>-Winconsistent-missing-override</code> and GCC's <code>-Wsuggest-override</code> help enforce it.</li>
+<li><code>final</code> on a function forbids further overriding. On a class it forbids deriving from it. Both let the compiler devirtualise calls (see <a href="#ch02-virtual-cost">the cost of a virtual call</a>).</li>
+<li><code>override</code> and <code>final</code> are contextual keywords, so old code with a variable called <code>final</code> still compiles.</li>
+</ul>
+</section>
+
+<section id="ch02-vtable" data-roles="th"><div class="sec-head"><h2>The vtable and vptr</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> The standard does not mention vtables, but every mainstream compiler implements virtual functions the same way. Each polymorphic class has one table of function pointers (the <i>vtable</i>), stored once in read-only data. Each object of that class carries a hidden pointer to its class's table (the <i>vptr</i>). A virtual call loads the vptr, indexes the table at a fixed slot chosen at compile time, and calls through the pointer it finds.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="Two Derived objects each hold a vptr at offset 0 that points into the single Derived vtable, whose slots point to function code">
+<defs><marker id="ch02-c02a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="60" y="42" class="t-bold" font-size="12">d1 (on the stack)</text>
+<text x="44" y="71" class="t-muted t-small t-mono" font-size="11" text-anchor="end">+0</text>
+<text x="44" y="105" class="t-muted t-small t-mono" font-size="11" text-anchor="end">+8</text>
+<text x="44" y="139" class="t-muted t-small t-mono" font-size="11" text-anchor="end">+16</text>
+<rect x="50" y="50" width="170" height="34" class="d-acc"/><text x="135" y="71" class="t-mono" font-size="12" text-anchor="middle">vptr</text>
+<rect x="50" y="84" width="170" height="34" class="d-box"/><text x="135" y="105" class="t-mono" font-size="12" text-anchor="middle">Base::id_</text>
+<rect x="50" y="118" width="170" height="34" class="d-box"/><text x="135" y="139" class="t-mono" font-size="12" text-anchor="middle">Derived::legs_</text>
+<text x="60" y="192" class="t-bold" font-size="12">d2 (on the heap)</text>
+<rect x="50" y="200" width="170" height="34" class="d-acc"/><text x="135" y="221" class="t-mono" font-size="12" text-anchor="middle">vptr</text>
+<rect x="50" y="234" width="170" height="34" class="d-box"/><text x="135" y="255" class="t-mono" font-size="12" text-anchor="middle">Base::id_, legs_</text>
+<text x="300" y="22" class="t-bold" font-size="12">vtable for Derived (.rodata, one per class)</text>
+<rect x="300" y="30" width="220" height="30" class="d-soft"/><text x="410" y="49" class="t-mono t-muted" font-size="11" text-anchor="middle">offset-to-top = 0</text>
+<rect x="300" y="60" width="220" height="30" class="d-soft"/><text x="410" y="79" class="t-mono t-muted" font-size="11" text-anchor="middle">&#38;typeinfo for Derived</text>
+<rect x="300" y="90" width="220" height="30" class="d-key"/><text x="410" y="109" class="t-mono" font-size="11" text-anchor="middle">[0] ~Derived (complete)</text>
+<rect x="300" y="120" width="220" height="30" class="d-key"/><text x="410" y="139" class="t-mono" font-size="11" text-anchor="middle">[1] ~Derived (deleting)</text>
+<rect x="300" y="150" width="220" height="30" class="d-key"/><text x="410" y="169" class="t-mono" font-size="11" text-anchor="middle">[2] Derived::speak</text>
+<rect x="300" y="180" width="220" height="30" class="d-key"/><text x="410" y="199" class="t-mono" font-size="11" text-anchor="middle">[3] Base::move (inherited)</text>
+<path d="M220,67 L298,103" class="d-line-acc" marker-end="url(#ch02-c02a)"/>
+<path d="M220,217 L298,107" class="d-line-acc" marker-end="url(#ch02-c02a)"/>
+<text x="232" y="236" class="t-small t-acc" font-size="11">both point to the</text>
+<text x="232" y="250" class="t-small t-acc" font-size="11">address point, slot [0]</text>
+<text x="560" y="122" class="t-bold" font-size="12">.text</text>
+<rect x="560" y="130" width="150" height="30" class="d-box"/><text x="635" y="149" class="t-mono" font-size="11" text-anchor="middle">Derived::speak code</text>
+<rect x="560" y="200" width="150" height="30" class="d-box"/><text x="635" y="219" class="t-mono" font-size="11" text-anchor="middle">Base::move code</text>
+<path d="M520,165 L558,147" class="d-line" marker-end="url(#ch02-c02a)"/>
+<path d="M520,195 L558,213" class="d-line" marker-end="url(#ch02-c02a)"/>
+<text x="300" y="236" class="t-small t-muted" font-size="11">Slot numbers are fixed at compile time.</text>
+<text x="300" y="252" class="t-small t-muted" font-size="11">p->speak() compiles to: load [p], load [vptr+16], call.</text>
+<text x="300" y="268" class="t-small t-muted" font-size="11">Each slot is 8 bytes on a 64-bit target.</text>
+</svg></div><figcaption><b>Objects carry one pointer; classes carry the table.</b> Every <code>Derived</code> object stores a vptr at offset 0 (Itanium C++ ABI, used by GCC and Clang on Linux and macOS). The vptr points past two header words, offset-to-top and the RTTI pointer, to the first function slot. An inherited function that is not overridden simply reuses the base's code address.</figcaption></figure>
+
+<h3 id="ch02-vtable-details">What the Itanium ABI puts in a vtable</h3>
+<ul>
+<li><b>Virtual function slots</b> in declaration order, base class slots first. A derived class appends slots for its new virtual functions after the inherited ones, so a <code>Base*</code> call to slot 2 works on every derived class.</li>
+<li><b>Two destructor slots</b> for a virtual destructor: the complete object destructor (runs the destructor chain) and the deleting destructor (runs it and then calls <code>operator delete</code> with the right size). <code>delete p</code> on a <code>Base*</code> calls the deleting destructor of the dynamic type, which is why it frees the right number of bytes.</li>
+<li><b>RTTI pointer</b> to the <code>std::type_info</code> object, used by <code>typeid</code> and <code>dynamic_cast</code>.</li>
+<li><b>Offset-to-top</b>: how far this subobject is from the start of the complete object. It is zero except in multiple inheritance, and <code>dynamic_cast&lt;void*&gt;</code> uses it.</li>
+<li><b>Virtual base offsets</b> when the class has virtual bases (see <a href="#ch02-multiple">multiple inheritance</a>).</li>
+</ul>
+<p><b>Where is the vtable emitted?</b> In the translation unit that defines the class's <i>key function</i>: the first virtual function that is not pure and not defined inline. If you never define the key function, the linker reports <code>undefined reference to `vtable for X'</code>, which confuses people because the missing thing is a function, not the table. A class whose virtual functions are all inline gets a copy of the vtable in every TU that needs it, merged by the linker.</p>
+
+<pre data-run="ch02-sizeof"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Empty</span> {};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">EmptyVirtual</span> { <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">EmptyVirtual</span>() = <span class="hljs-keyword">default</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Plain</span> { <span class="hljs-type">int</span> x; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">OneVirtual</span> { <span class="hljs-type">int</span> x; <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">()</span> </span>{} };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">ManyVirtual</span> { <span class="hljs-type">int</span> x; <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">()</span> </span>{} <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">g</span><span class="hljs-params">()</span> </span>{} <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">h</span><span class="hljs-params">()</span> </span>{} };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::cout &lt;&lt; <span class="hljs-built_in">sizeof</span>(Empty) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; <span class="hljs-built_in">sizeof</span>(EmptyVirtual) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span>
+              &lt;&lt; <span class="hljs-built_in">sizeof</span>(Plain) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; <span class="hljs-built_in">sizeof</span>(OneVirtual) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span>
+              &lt;&lt; <span class="hljs-built_in">sizeof</span>(ManyVirtual) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch02-sizeof">1 8 4 16 16</pre>
+<p>On a 64-bit target, the first virtual function adds an 8-byte vptr, and padding rounds <code>OneVirtual</code> up to 16 for alignment. More virtual functions make the shared vtable longer but leave every object the same size.</p>
+
+<h3 id="ch02-virtual-cost">The cost of a virtual call</h3>
+<p>A virtual call is two dependent loads (the vptr, then the slot) and an indirect call. When the branch predictor has seen the target before and the vtable is in cache, that is a few cycles more than a direct call. The real costs are elsewhere:</p>
+<ul>
+<li><b>No inlining.</b> The compiler cannot inline a function it cannot name, so it also loses everything inlining enables: constant propagation, vectorisation of the loop around the call, and dead code removal. For a tiny function such as <code>area()</code> in a hot loop, this dominates.</li>
+<li><b>Misprediction.</b> If a loop over a mixed container calls a different target each time, the indirect branch mispredicts, costing about 15 to 20 cycles on a modern core. Sorting objects by type, or keeping one container per type, restores predictability.</li>
+<li><b>Size and cache.</b> Every object grows by 8 bytes, and objects usually live behind pointers, which costs a cache miss per element. This is often worse than the call itself (see <a href="#ch17">Ch 17</a>).</li>
+</ul>
+<p><b>Devirtualisation.</b> The compiler turns a virtual call into a direct call when it can prove the dynamic type: the object is a local by value, the class or function is <code>final</code>, or link-time optimisation sees the whole hierarchy. GCC also devirtualises speculatively: it compares the loaded function pointer with the likely target and, if they match, runs an inlined copy of that target. Low-latency code often prefers compile-time polymorphism (templates, CRTP in <a href="#ch03">Ch 3</a>, <code>std::variant</code>) on the hot path for these reasons.</p>
+
+<div class="table-wrap"><table>
+<thead><tr><th>Key fact</th><th>Value or rule</th></tr></thead>
+<tbody>
+<tr><td>vptr location (Itanium ABI)</td><td>offset 0 of each polymorphic subobject</td></tr>
+<tr><td>vtables per class</td><td>one, shared by all objects, in read-only data</td></tr>
+<tr><td>Object size cost</td><td>one pointer per polymorphic base subobject, independent of the number of virtual functions</td></tr>
+<tr><td>Virtual call</td><td>load vptr, load slot, indirect call; blocks inlining unless devirtualised</td></tr>
+<tr><td>Dispatch needs</td><td>virtual function, pointer or reference (or <code>this</code>), unqualified name</td></tr>
+<tr><td>Inside constructors and destructors</td><td>dispatch uses the class currently being built or destroyed</td></tr>
+<tr><td>Default arguments</td><td>taken from the static type, never the dynamic type</td></tr>
+<tr><td>Cannot be virtual</td><td>constructors, static member functions, member function templates</td></tr>
+<tr><td>Can be virtual</td><td>destructors (including pure), operators, private functions, inline functions</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="ch02-abstract" data-roles="th"><div class="sec-head"><h2>Pure virtual functions and abstract classes</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A pure virtual function (<code>= 0</code>) says "every concrete derived class must provide this". A class with at least one pure virtual function, declared or inherited and not overridden, is <i>abstract</i>: you cannot create an object of it, but you can have pointers and references to it, and it can have constructors, data members and non-virtual functions.</p>
+<p>Two facts people miss:</p>
+<ul>
+<li><b>A pure virtual function can have a definition.</b> Derived classes can call it with a qualified name, for example to share default behaviour while still forcing every class to opt in. The definition must be outside the class.</li>
+<li><b>A pure virtual destructor must have a definition</b>, because every derived destructor calls the base destructor. Declaring the destructor pure is a way to make a class abstract when it has no other natural pure function.</li>
+</ul>
+<pre data-run="ch02-pure"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Shape</span> {
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">double</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Shape</span>() = <span class="hljs-number">0</span>;
+};
+Shape::~<span class="hljs-built_in">Shape</span>() {}                          <span class="hljs-comment">// required: derived destructors call it</span>
+<span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">Shape::area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">0.0</span>; }  <span class="hljs-comment">// optional default, reachable by name</span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Square</span> : Shape {
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Square</span><span class="hljs-params">(<span class="hljs-type">double</span> s)</span> : side(s) {</span>}
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> side * side; }
+    <span class="hljs-type">double</span> side;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Dot</span> : Shape {
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> Shape::<span class="hljs-built_in">area</span>(); }  <span class="hljs-comment">// opt in to the default</span>
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::unique_ptr&lt;Shape&gt; shapes[] = {std::<span class="hljs-built_in">make_unique</span>&lt;Square&gt;(<span class="hljs-number">3</span>), std::<span class="hljs-built_in">make_unique</span>&lt;Dot&gt;()};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; s : shapes) std::cout &lt;&lt; s-&gt;<span class="hljs-built_in">area</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-comment">// Shape s;  // error: Shape is abstract</span>
+}</code></pre>
+<pre class="out" data-out="ch02-pure">9
+0</pre>
+<p><b>Pure virtual call.</b> If a pure virtual function is called through dispatch while the object's dynamic type is still the abstract class (in practice: indirectly from the abstract class's constructor or destructor), behaviour is undefined ([class.abstract]). GCC and Clang put <code>__cxa_pure_virtual</code> in the slot, which prints <code>pure virtual method called</code> and calls <code>std::terminate</code>. A reading drill below shows it.</p>
+</section>
+
+<section id="ch02-vdtor" data-roles="th"><div class="sec-head"><h2>Virtual destructors and object slicing</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch02-why-vdtor">Why delete through a base pointer needs a virtual destructor</h3>
+<p><code>delete p</code> where <code>p</code> is a <code>Base*</code> but the object is a <code>Derived</code> is undefined behaviour unless <code>Base</code> has a virtual destructor ([expr.delete]/3). In practice, without the virtual destructor the compiler calls <code>Base::~Base</code> directly: <code>Derived</code>'s destructor never runs (its members leak, its locks stay held), and <code>operator delete</code> receives the wrong size. With a virtual destructor, <code>delete</code> calls the deleting destructor through the vtable, which runs the whole chain and frees the right size.</p>
+<pre data-run="ch02-vdtor" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Base</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;~Base\n&quot;</span>; }
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Base {
+    std::string name = <span class="hljs-string">&quot;a string long enough to live on the heap&quot;</span>;
+    ~<span class="hljs-built_in">Derived</span>() <span class="hljs-keyword">override</span> { std::cout &lt;&lt; <span class="hljs-string">&quot;~Derived\n&quot;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::unique_ptr&lt;Base&gt; p = std::<span class="hljs-built_in">make_unique</span>&lt;Derived&gt;();
+    p.<span class="hljs-built_in">reset</span>();  <span class="hljs-comment">// calls Derived&#x27;s deleting destructor through the vtable</span>
+}</code></pre>
+<pre class="out" data-out="ch02-vdtor">~Derived
+~Base</pre>
+<p><b>The guideline</b> (C++ Core Guidelines C.35): a base class destructor should be either <b>public and virtual</b> (you may delete through a base pointer) or <b>protected and non-virtual</b> (you may not, so the compiler rejects <code>delete base_ptr</code> outside the hierarchy). A class marked <code>final</code>, or a class never used polymorphically, needs neither.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p>
+<p>"<code>shared_ptr&lt;Base&gt;</code> works without a virtual destructor, so virtual destructors are not needed with smart pointers." Half true. <code>std::shared_ptr&lt;Base&gt; p = std::make_shared&lt;Derived&gt;()</code> (and <code>shared_ptr&lt;Base&gt;(new Derived)</code>) records a deleter for <code>Derived</code> in the control block when it is created, so the right destructor runs. <code>std::unique_ptr&lt;Base&gt;</code> uses <code>default_delete&lt;Base&gt;</code>, which is a plain <code>delete</code> on a <code>Base*</code>, so it needs the virtual destructor. See <a href="#ch09">Ch 9</a>.</p></div>
+<p>Arrays are the second exception people miss: <code>Base* p = new Derived[4]; delete[] p;</code> is undefined behaviour <i>even with</i> a virtual destructor, because <code>delete[]</code> needs the static and dynamic types to match. Indexing such an array through a <code>Base*</code> is also broken, because <code>p[1]</code> steps by <code>sizeof(Base)</code>.</p>
+
+<h3 id="ch02-slicing">Object slicing</h3>
+<p>Slicing happens when a derived object is copied into a base object <i>by value</i>. The base copy constructor copies only the base subobject, and the new object is a genuine <code>Base</code> with <code>Base</code>'s vptr. Nothing derived survives, and later virtual calls go to <code>Base</code>.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 220" role="img" aria-label="Copying a Derived into a Base copies only the base subobject; the derived members are dropped and the copy gets the Base vptr">
+<defs><marker id="ch02-c02b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="40" y="30" class="t-bold" font-size="12">Derived d</text>
+<rect x="40" y="40" width="230" height="36" class="d-acc"/><text x="155" y="63" class="t-mono" font-size="12" text-anchor="middle">vptr → vtable for Derived</text>
+<rect x="40" y="76" width="230" height="36" class="d-key"/><text x="155" y="99" class="t-mono" font-size="12" text-anchor="middle">Base part: id_ = 7</text>
+<rect x="40" y="112" width="230" height="36" class="d-trap"/><text x="155" y="135" class="t-mono" font-size="12" text-anchor="middle">Derived part: legs_ = 4</text>
+<text x="450" y="30" class="t-bold" font-size="12">Base b = d;</text>
+<rect x="450" y="40" width="230" height="36" class="d-acc"/><text x="565" y="63" class="t-mono" font-size="12" text-anchor="middle">vptr → vtable for Base</text>
+<rect x="450" y="76" width="230" height="36" class="d-key"/><text x="565" y="99" class="t-mono" font-size="12" text-anchor="middle">id_ = 7 (copied)</text>
+<path d="M270,94 L448,94" class="d-line-key" marker-end="url(#ch02-c02b)"/>
+<text x="360" y="86" class="t-small t-key" font-size="11" text-anchor="middle">Base(const Base&#38;)</text>
+<path d="M270,130 L400,130" class="d-line-trap d-dash"/>
+<text x="410" y="134" class="t-small t-trap" font-size="11">dropped</text>
+<text x="360" y="58" class="t-small t-muted" font-size="11" text-anchor="middle">set by Base's constructor,</text>
+<text x="360" y="72" class="t-small t-muted" font-size="11" text-anchor="middle">never copied</text>
+<text x="40" y="180" class="t-small t-muted" font-size="11">Same thing happens for: pass by value to f(Base), return Base from a Derived, push_back into vector&#60;Base&#62;,</text>
+<text x="40" y="196" class="t-small t-muted" font-size="11">and catch (Base e). Assignment through Base&#38; (r = other) is the partial-assignment variant: only Base fields change.</text>
+</svg></div><figcaption><b>Slicing keeps the base part and resets the type.</b> The vptr is never copied: each constructor writes its own class's vptr. That is why a sliced copy behaves as a plain <code>Base</code> for ever after.</figcaption></figure>
+<p><b>How to prevent it.</b> Pass and store polymorphic objects by reference or (smart) pointer, catch exceptions by <code>const&amp;</code>, and make polymorphic bases non-copyable (delete or protect the copy operations) so the compiler rejects accidental slicing. When you genuinely need a copy of an unknown dynamic type, add a virtual <code>clone()</code> (the "virtual constructor" idiom, drilled in <a href="#ch02-coding">Write the code</a>).</p>
+</section>
+
+<section id="ch02-ctor-virtual" data-roles="th"><div class="sec-head"><h2>Virtual calls in constructors and destructors</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> While <code>Base</code>'s constructor runs, the <code>Derived</code> part does not exist yet, so calling a <code>Derived</code> override would read uninitialised members. C++ prevents that: during a constructor or destructor, the object's dynamic type is the class whose constructor or destructor is running ([class.cdtor]). Under the hood, each constructor writes its own class's vptr into the object before running its body, and each destructor writes it back before running its body.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 200" role="img" aria-label="Timeline of the vptr: it points to Base's vtable during Base's constructor and destructor, and to Derived's vtable in between">
+<defs><marker id="ch02-c02c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<path d="M20,28 L700,28" class="d-line" marker-end="url(#ch02-c02c)"/>
+<text x="690" y="20" class="t-small t-muted" font-size="11" text-anchor="end">time</text>
+<rect x="20" y="44" width="124" height="40" class="d-box"/><text x="82" y="68" class="t-mono" font-size="11" text-anchor="middle">Base() body</text>
+<rect x="160" y="44" width="124" height="40" class="d-box"/><text x="222" y="68" class="t-mono" font-size="11" text-anchor="middle">Derived() body</text>
+<rect x="300" y="44" width="124" height="40" class="d-box"/><text x="362" y="68" class="t-mono" font-size="11" text-anchor="middle">object in use</text>
+<rect x="440" y="44" width="124" height="40" class="d-box"/><text x="502" y="68" class="t-mono" font-size="11" text-anchor="middle">~Derived() body</text>
+<rect x="580" y="44" width="124" height="40" class="d-box"/><text x="642" y="68" class="t-mono" font-size="11" text-anchor="middle">~Base() body</text>
+<rect x="20" y="104" width="124" height="36" class="d-trap"/><text x="82" y="126" class="t-mono" font-size="11" text-anchor="middle">vptr → Base</text>
+<rect x="160" y="104" width="404" height="36" class="d-acc"/><text x="362" y="126" class="t-mono" font-size="11" text-anchor="middle">vptr → Derived</text>
+<rect x="580" y="104" width="124" height="36" class="d-trap"/><text x="642" y="126" class="t-mono" font-size="11" text-anchor="middle">vptr → Base</text>
+<text x="82" y="162" class="t-small t-trap" font-size="11" text-anchor="middle">who() → Base::who</text>
+<text x="362" y="162" class="t-small t-acc" font-size="11" text-anchor="middle">who() → Derived::who</text>
+<text x="642" y="162" class="t-small t-trap" font-size="11" text-anchor="middle">who() → Base::who</text>
+<text x="20" y="188" class="t-small t-muted" font-size="11">Each constructor stores its own vptr before its body runs; each destructor restores its own vptr before its body runs.</text>
+</svg></div><figcaption><b>The dynamic type grows and shrinks.</b> Dispatch is always correct for the part of the object that is alive. A call that would reach a pure virtual function at the Base stage is undefined behaviour and, with GCC or Clang, aborts with "pure virtual method called".</figcaption></figure>
+<pre data-run="ch02-cdtor"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-built_in">Base</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;Base(): &quot;</span>; <span class="hljs-built_in">who</span>(); }
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Base</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;~Base(): &quot;</span>; <span class="hljs-built_in">who</span>(); }
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">who</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Base\n&quot;</span>; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">call</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-built_in">who</span>(); }
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Base {
+    <span class="hljs-built_in">Derived</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;Derived(): &quot;</span>; <span class="hljs-built_in">who</span>(); }
+    ~<span class="hljs-built_in">Derived</span>() <span class="hljs-keyword">override</span> { std::cout &lt;&lt; <span class="hljs-string">&quot;~Derived(): &quot;</span>; <span class="hljs-built_in">who</span>(); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">who</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Derived\n&quot;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Derived d;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;main: &quot;</span>;
+    d.<span class="hljs-built_in">call</span>();
+}</code></pre>
+<pre class="out" data-out="ch02-cdtor">Base(): Base
+Derived(): Derived
+main: Derived
+~Derived(): Derived
+~Base(): Base</pre>
+<p><b>Fixes</b> when the base needs derived-specific data at construction time: pass the data up as a constructor argument, use a factory function that constructs and then calls an <code>init()</code>, or make the base a template on the derived type (CRTP, <a href="#ch03">Ch 3</a>). Java and C# dispatch to the derived override from a base constructor, so candidates with that background often give the wrong answer here.</p>
+</section>
+
+<section id="ch02-hiding" data-roles="th"><div class="sec-head"><h2>Name hiding, using-declarations and default arguments</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch02-name-hiding">Name hiding</h3>
+<p>Name lookup happens before overload resolution, and it stops at the first scope that contains the name. If a derived class declares any member named <code>f</code>, every base member named <code>f</code> is hidden, whatever their parameters and whether or not they are virtual. Overload resolution then picks among the derived <code>f</code>s only, using conversions if it must.</p>
+<pre data-run="ch02-hiding"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">int</span>)</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Base::f(int)\n&quot;</span>; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>*)</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Base::f(const char*)\n&quot;</span>; }
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Hides</span> : Base {
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">double</span>)</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Hides::f(double)\n&quot;</span>; }
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Unhides</span> : Base {
+    <span class="hljs-keyword">using</span> Base::f;  <span class="hljs-comment">// brings every Base::f overload into this scope</span>
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">double</span>)</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Unhides::f(double)\n&quot;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Hides h;
+    h.<span class="hljs-built_in">f</span>(<span class="hljs-number">1</span>);       <span class="hljs-comment">// finds only Hides::f, converts 1 to double</span>
+    <span class="hljs-comment">// h.f(&quot;x&quot;);  // error: no Hides::f takes a const char*</span>
+    h.Base::<span class="hljs-built_in">f</span>(<span class="hljs-number">1</span>); <span class="hljs-comment">// qualified lookup still reaches the base</span>
+    Unhides u;
+    u.<span class="hljs-built_in">f</span>(<span class="hljs-number">1</span>);
+    u.<span class="hljs-built_in">f</span>(<span class="hljs-string">&quot;x&quot;</span>);
+    u.<span class="hljs-built_in">f</span>(<span class="hljs-number">2.5</span>);
+}</code></pre>
+<pre class="out" data-out="ch02-hiding">Hides::f(double)
+Base::f(int)
+Base::f(int)
+Base::f(const char*)
+Unhides::f(double)</pre>
+<p>A using-declaration brings all overloads of the name and can also change their access (a <code>public: using Base::f;</code> in a privately derived class re-exposes <code>f</code>). If the derived class declares a function with the same signature as one brought in by <code>using</code>, the derived one wins. <code>using Base::Base;</code> is the related C++11 feature for inheriting constructors.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p>
+<p>Overriding one overload of a virtual function hides the other overloads. If <code>Base</code> has <code>virtual void draw(int)</code> and <code>virtual void draw(double)</code> and <code>Derived</code> overrides only <code>draw(int)</code>, then <code>derived.draw(2.5)</code> calls <code>draw(int)</code> with a truncated argument. Calls through a <code>Base&amp;</code> still see both. Add <code>using Base::draw;</code>. GCC's <code>-Woverloaded-virtual</code> warns about this.</p></div>
+
+<h3 id="ch02-default-args">Default arguments are statically bound</h3>
+<p>The function body is chosen at run time, but default arguments are pasted in at compile time from the declaration the compiler sees, which is the one in the static type ([dcl.fct.default]/10). So an override with a different default produces a call that mixes the derived body with the base default.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span>    { <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">draw</span><span class="hljs-params">(<span class="hljs-type">int</span> width = <span class="hljs-number">1</span>)</span> <span class="hljs-type">const</span></span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Base { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">draw</span><span class="hljs-params">(<span class="hljs-type">int</span> width = <span class="hljs-number">5</span>)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span></span>; };
+Derived d; Base&amp; b = d;
+b.<span class="hljs-built_in">draw</span>();   <span class="hljs-comment">// Derived::draw(1): derived body, base default</span>
+d.<span class="hljs-built_in">draw</span>();   <span class="hljs-comment">// Derived::draw(5)</span></code></pre>
+<p>The rule: never redefine a default argument in an override (Scott Meyers, Effective C++ item 37). If defaults are needed, use the non-virtual interface idiom: a public non-virtual function with the default calls a private virtual one without.</p>
+
+<h3 id="ch02-access-virtual">Access and virtual functions</h3>
+<p>Access is checked at the call site using the static type, while the function that runs comes from the dynamic type ([class.access.virt]). So a private override is reachable through a public base function, which is what makes the <b>non-virtual interface (NVI)</b> idiom work: public non-virtual functions fix the policy and call private virtual hooks.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">class</span> <span class="hljs-title class_">Logger</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">log</span><span class="hljs-params">(std::string_view msg)</span> </span>{ <span class="hljs-keyword">if</span> (!msg.<span class="hljs-built_in">empty</span>()) <span class="hljs-built_in">write</span>(msg); }  <span class="hljs-comment">// fixed policy</span>
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Logger</span>() = <span class="hljs-keyword">default</span>;
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">write</span><span class="hljs-params">(std::string_view msg)</span> </span>= <span class="hljs-number">0</span>;  <span class="hljs-comment">// derived classes override a private hook</span>
+};</code></pre>
+</section>
+
+<section id="ch02-multiple" data-roles="th"><div class="sec-head"><h2>Multiple inheritance, the diamond and virtual inheritance</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch02-mi-layout">Layout and pointer adjustment</h3>
+<p>With <code>struct File : Readable, Writable</code>, a <code>File</code> object contains a complete <code>Readable</code> subobject, then a complete <code>Writable</code> subobject, then <code>File</code>'s own members. Each polymorphic subobject has its own vptr. Converting a <code>File*</code> to a <code>Writable*</code> therefore <i>changes the address</i>: the compiler adds the offset of the <code>Writable</code> subobject (and checks for null first). A virtual call through the <code>Writable*</code> to a function that <code>File</code> overrides goes through a small <i>thunk</i> that subtracts the offset again before jumping to <code>File</code>'s function.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="Layouts: a File with two base subobjects and two vptrs, and a diamond D with one shared virtual base A at the end">
+<defs><marker id="ch02-c02d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="110" y="24" class="t-bold" font-size="12">struct File : Readable, Writable</text>
+<rect x="110" y="34" width="200" height="30" class="d-acc"/><text x="210" y="53" class="t-mono" font-size="11" text-anchor="middle">vptr (Readable-in-File)</text>
+<rect x="110" y="64" width="200" height="30" class="d-box"/><text x="210" y="83" class="t-mono" font-size="11" text-anchor="middle">Readable::r</text>
+<rect x="110" y="94" width="200" height="30" class="d-acc"/><text x="210" y="113" class="t-mono" font-size="11" text-anchor="middle">vptr (Writable-in-File)</text>
+<rect x="110" y="124" width="200" height="30" class="d-box"/><text x="210" y="143" class="t-mono" font-size="11" text-anchor="middle">Writable::w</text>
+<rect x="110" y="154" width="200" height="30" class="d-key"/><text x="210" y="173" class="t-mono" font-size="11" text-anchor="middle">File::f</text>
+<text x="102" y="53" class="t-small t-mono t-muted" font-size="11" text-anchor="end">+0</text>
+<text x="102" y="113" class="t-small t-mono t-muted" font-size="11" text-anchor="end">+16</text>
+<text x="102" y="173" class="t-small t-mono t-muted" font-size="11" text-anchor="end">+28</text>
+<text x="20" y="214" class="t-small" font-size="11">File* and Readable* point to +0.</text>
+<text x="20" y="230" class="t-small" font-size="11">Writable* points to +16: the upcast adds 16.</text>
+<text x="20" y="246" class="t-small t-muted" font-size="11">f reuses the tail padding of Writable,</text>
+<text x="20" y="262" class="t-small t-muted" font-size="11">so sizeof(File) is 32, not 40.</text>
+<path d="M60,113 L106,109" class="d-line-key" marker-end="url(#ch02-c02d)"/>
+<text x="20" y="104" class="t-small t-key t-mono" font-size="11">Writable*</text>
+<text x="420" y="24" class="t-bold" font-size="12">struct D : B, C (B, C : virtual A)</text>
+<rect x="440" y="34" width="220" height="30" class="d-acc"/><text x="550" y="53" class="t-mono" font-size="11" text-anchor="middle">vptr (B-in-D)</text>
+<rect x="440" y="64" width="220" height="30" class="d-box"/><text x="550" y="83" class="t-mono" font-size="11" text-anchor="middle">B::b</text>
+<rect x="440" y="94" width="220" height="30" class="d-acc"/><text x="550" y="113" class="t-mono" font-size="11" text-anchor="middle">vptr (C-in-D)</text>
+<rect x="440" y="124" width="220" height="30" class="d-box"/><text x="550" y="143" class="t-mono" font-size="11" text-anchor="middle">C::c</text>
+<rect x="440" y="154" width="220" height="30" class="d-box"/><text x="550" y="173" class="t-mono" font-size="11" text-anchor="middle">D::d</text>
+<rect x="440" y="184" width="220" height="30" class="d-key"/><text x="550" y="203" class="t-mono" font-size="11" text-anchor="middle">A::a (one shared copy)</text>
+<path d="M440,49 C400,80 400,170 438,196" class="d-line-acc d-dash" marker-end="url(#ch02-c02d)"/>
+<path d="M660,109 C700,140 700,180 662,198" class="d-line-acc d-dash" marker-end="url(#ch02-c02d)"/>
+<text x="420" y="240" class="t-small" font-size="11">B and C do not know where A is: the distance</text>
+<text x="420" y="256" class="t-small" font-size="11">differs in a B, a C and a D. Each vtable stores</text>
+<text x="420" y="272" class="t-small" font-size="11">a vbase offset; reaching a.a costs an extra load.</text>
+</svg></div><figcaption><b>Every polymorphic base gets its own vptr; a virtual base gets one shared slot.</b> Offsets are for the Itanium ABI on a 64-bit target with <code>int</code> members. With non-virtual inheritance the diamond would hold two separate <code>A</code> subobjects, one inside <code>B</code> and one inside <code>C</code>.</figcaption></figure>
+<pre data-run="ch02-mi-offsets"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Readable</span> { <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Readable</span>() = <span class="hljs-keyword">default</span>; <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">int</span> <span class="hljs-title">read</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>; } <span class="hljs-type">int</span> r = <span class="hljs-number">0</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Writable</span> { <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Writable</span>() = <span class="hljs-keyword">default</span>; <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">int</span> <span class="hljs-title">write</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">2</span>; } <span class="hljs-type">int</span> w = <span class="hljs-number">0</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">File</span> : Readable, Writable { <span class="hljs-type">int</span> f = <span class="hljs-number">0</span>; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    File file;
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* base = <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">char</span>*&gt;(&amp;file);
+    Readable* rp = &amp;file;
+    Writable* wp = &amp;file;  <span class="hljs-comment">// implicit upcast adjusts the pointer</span>
+    std::cout &lt;&lt; <span class="hljs-string">&quot;Readable at +&quot;</span> &lt;&lt; <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">char</span>*&gt;(rp) - base &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;Writable at +&quot;</span> &lt;&lt; <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">char</span>*&gt;(wp) - base &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;wp == &amp;file: &quot;</span> &lt;&lt; (wp == &amp;file) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;           <span class="hljs-comment">// compares after converting &amp;file</span>
+    std::cout &lt;&lt; <span class="hljs-string">&quot;most derived: &quot;</span> &lt;&lt; (<span class="hljs-built_in">dynamic_cast</span>&lt;<span class="hljs-type">void</span>*&gt;(wp) == <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">void</span>*&gt;(&amp;file)) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;sizeof(File) = &quot;</span> &lt;&lt; <span class="hljs-built_in">sizeof</span>(File) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch02-mi-offsets">Readable at +0
+Writable at +16
+wp == &amp;file: 1
+most derived: 1
+sizeof(File) = 32</pre>
+<p>This is also why casting a <code>File*</code> to <code>void*</code> and then to <code>Writable*</code> is wrong: <code>void*</code> erases the type, so no adjustment happens and the result points at the <code>Readable</code> subobject. Always cast back to exactly the type you converted from.</p>
+
+<h3 id="ch02-diamond">The diamond and virtual inheritance</h3>
+<p>If <code>B</code> and <code>C</code> both derive from <code>A</code> normally and <code>D</code> derives from both, a <code>D</code> holds two <code>A</code> subobjects. <code>d.a</code> and the conversion <code>D*</code> → <code>A*</code> are ambiguous and fail to compile; you must say <code>d.B::a</code>. Declaring the inheritance <code>virtual</code> (<code>struct B : virtual A</code>) makes all virtual <code>A</code> bases in a complete object share one subobject.</p>
+<p>Rules that come with virtual inheritance:</p>
+<ul>
+<li><b>The most derived class initialises the virtual base.</b> <code>D</code>'s constructor calls <code>A</code>'s constructor directly, before any non-virtual base. The <code>A(...)</code> initialisers in <code>B</code>'s and <code>C</code>'s constructors are ignored when they run as part of a <code>D</code>. If <code>D</code> does not name <code>A</code>, <code>A</code> is default-constructed, which fails to compile if <code>A</code> has no default constructor.</li>
+<li><b>Virtual bases are constructed first</b>, in depth-first, left-to-right order of the class graph, and destroyed last.</li>
+<li><b>Cost:</b> access to a virtual base's members goes through a vbase offset in the vtable, and <code>static_cast</code> from a virtual base down to a derived class is ill-formed, because the offset is not a compile-time constant. Use <code>dynamic_cast</code>.</li>
+<li>The standard library uses it in iostreams: <code>std::iostream</code> derives from <code>std::istream</code> and <code>std::ostream</code>, which both derive virtually from <code>std::basic_ios</code>.</li>
+</ul>
+<p>In practice, keep multiple inheritance for <i>interfaces</i>: classes with only pure virtual functions and no data, where the diamond has nothing to duplicate. The design side of this is in <a href="#ch03">Ch 3</a>.</p>
+</section>
+
+<section id="ch02-rtti" data-roles="th"><div class="sec-head"><h2>Covariant returns, dynamic_cast and RTTI</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch02-covariant">Covariant return types</h3>
+<p>An override may return a pointer or reference to a class derived from the base function's return type (with the same or fewer cv-qualifiers). The classic use is <code>clone()</code>: callers holding a <code>Circle</code> get a <code>Circle*</code> back without a cast, and callers holding a <code>Shape</code> get a <code>Shape*</code>. When the override is called through the base, the compiler adjusts the returned pointer if the base subobject is not at offset 0 (another thunk). Covariance works only for raw pointers and references, so <code>std::unique_ptr&lt;Circle&gt;</code> cannot override a function returning <code>std::unique_ptr&lt;Shape&gt;</code>; the usual workaround is a public non-virtual <code>clone()</code> that wraps a private virtual one returning a raw pointer.</p>
+<pre data-run="ch02-covariant" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Shape</span> {
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Shape</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> Shape* <span class="hljs-title">clone</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">name</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Circle</span> : Shape {
+    <span class="hljs-type">double</span> r = <span class="hljs-number">2</span>;
+    <span class="hljs-function">Circle* <span class="hljs-title">clone</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-keyword">new</span> <span class="hljs-built_in">Circle</span>(*<span class="hljs-keyword">this</span>); }  <span class="hljs-comment">// covariant</span>
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">name</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;circle&quot;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Circle c;
+    <span class="hljs-function">std::unique_ptr&lt;Circle&gt; <span class="hljs-title">c2</span><span class="hljs-params">(c.clone())</span></span>;  <span class="hljs-comment">// Circle*, no cast needed</span>
+    <span class="hljs-type">const</span> Shape&amp; s = c;
+    <span class="hljs-function">std::unique_ptr&lt;Shape&gt; <span class="hljs-title">s2</span><span class="hljs-params">(s.clone())</span></span>;   <span class="hljs-comment">// through the base: Shape*</span>
+    std::cout &lt;&lt; c2-&gt;r &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; s2-&gt;<span class="hljs-built_in">name</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch02-covariant">2 circle</pre>
+
+<h3 id="ch02-dynamic-cast">dynamic_cast</h3>
+<p><code>dynamic_cast</code> asks the run-time type information (RTTI) whether the object really has the requested type. It requires a polymorphic source type (at least one virtual function) for downcasts and cross-casts. Its results:</p>
+<ul>
+<li><code>dynamic_cast&lt;Dog*&gt;(animal_ptr)</code> returns <code>nullptr</code> on failure.</li>
+<li><code>dynamic_cast&lt;Dog&amp;&gt;(animal_ref)</code> throws <code>std::bad_cast</code> on failure, because there is no null reference.</li>
+<li><code>dynamic_cast&lt;void*&gt;(p)</code> returns the address of the most derived object.</li>
+<li>Cross-casts work: with <code>File : Readable, Writable</code>, a <code>Readable*</code> can be <code>dynamic_cast</code> to <code>Writable*</code> when the object is a <code>File</code>.</li>
+<li>Upcasts need no RTTI and compile to the same code as <code>static_cast</code>.</li>
+</ul>
+<p><b>Cost.</b> With GCC and Clang, a downcast reads the <code>type_info</code> from the vtable and walks the class hierarchy description, comparing type names or pointers. That costs tens of nanoseconds for deep or multiple hierarchies, much more than a virtual call. When the target class is <code>final</code>, a compiler is allowed to replace the hierarchy walk with a single vtable-pointer comparison (recent Clang does this as an optimisation), but do not rely on it. Frequent <code>dynamic_cast</code> is usually a design smell: a virtual function or the visitor pattern expresses the same thing.</p>
+<p><b><code>static_cast</code> downcasts</b> are unchecked. If the object is not really a <code>Dog</code>, using the result is undefined behaviour. They are fine when the type is known by construction (CRTP does exactly this).</p>
+
+<h3 id="ch02-typeid">typeid and type_info</h3>
+<p><code>typeid(expr)</code> returns a <code>const std::type_info&amp;</code>. For a glvalue of polymorphic type it evaluates the expression and reports the dynamic type; for anything else it reports the static type at compile time. <code>typeid(*p)</code> with a null polymorphic <code>p</code> throws <code>std::bad_typeid</code>. <code>type_info::name()</code> is implementation-defined (GCC and Clang return the mangled name such as <code>3Dog</code>), so compare <code>type_info</code> objects or use <code>std::type_index</code> as a map key rather than printing names. <code>-fno-rtti</code> disables <code>typeid</code> and <code>dynamic_cast</code> (except upcasts) and is common in embedded and some game and trading codebases.</p>
+<pre data-run="ch02-rtti"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;typeinfo&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Animal</span> { <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Animal</span>() = <span class="hljs-keyword">default</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Dog</span> : Animal { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">bark</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;woof\n&quot;</span>; } };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Cat</span> : Animal {};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">poke</span><span class="hljs-params">(Animal&amp; a)</span> </span>{
+    <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span>* d = <span class="hljs-built_in">dynamic_cast</span>&lt;Dog*&gt;(&amp;a)) d-&gt;<span class="hljs-built_in">bark</span>();
+    <span class="hljs-keyword">else</span> std::cout &lt;&lt; <span class="hljs-string">&quot;not a dog\n&quot;</span>;
+    <span class="hljs-keyword">try</span> {
+        (<span class="hljs-type">void</span>)<span class="hljs-built_in">dynamic_cast</span>&lt;Cat&amp;&gt;(a);
+        std::cout &lt;&lt; <span class="hljs-string">&quot;a cat\n&quot;</span>;
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_cast&amp;) {
+        std::cout &lt;&lt; <span class="hljs-string">&quot;bad_cast\n&quot;</span>;
+    }
+    std::cout &lt;&lt; (<span class="hljs-built_in">typeid</span>(a) == <span class="hljs-built_in">typeid</span>(Dog)) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;  <span class="hljs-comment">// dynamic type</span>
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Dog d;
+    Cat c;
+    <span class="hljs-built_in">poke</span>(d);
+    <span class="hljs-built_in">poke</span>(c);
+}</code></pre>
+<pre class="out" data-out="ch02-rtti">woof
+bad_cast
+1
+not a dog
+a cat
+0</pre>
+</section>
+
+<section id="ch02-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Walk through what the machine does for <code>p-&gt;speak()</code> when <code>p</code> is a <code>Base*</code> pointing at a <code>Derived</code>.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Load the vptr from offset 0 of <code>*p</code>, load the function pointer from the fixed slot for <code>speak</code> in that vtable, then make an indirect call with <code>p</code> (possibly adjusted) as <code>this</code>.</p>
+    <p><b>Why.</b> The compiler knows from <code>Base</code>'s definition which slot <code>speak</code> occupies, and every derived class keeps that slot at the same index, so the only run-time work is finding which table this object uses. Under multiple inheritance the slot may hold a thunk that adjusts <code>this</code> before jumping to the real override. A common wrong answer is "the runtime searches for the function by name": nothing is looked up by name, and the cost is constant regardless of hierarchy depth.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why can a constructor not be virtual, and how do you get the effect of one?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Virtual dispatch needs an existing object whose vptr names its dynamic type, and the constructor is what creates the object and writes the vptr. To create an object of a type known only at run time, use a factory function, or for copies, a virtual <code>clone()</code> (the "virtual constructor" idiom).</p>
+    <p><b>Why.</b> <code>new T</code> requires the exact type at compile time so it knows the size and which constructor to call. A virtual function selects behaviour based on an object that already exists. <code>clone()</code> works because it is called on an existing object, which then constructs a copy of its own type. Candidates sometimes answer "because constructors have no name": that is a grammar detail, not the reason.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the difference between overloading, overriding and hiding? Which are decided at compile time?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <i>Overloading</i> is several functions with the same name and different parameter lists in the <b>same scope</b>; overload resolution picks one at compile time from the static types of the arguments. <i>Overriding</i> is a derived class redeclaring a base <b>virtual</b> function with the same parameter types, cv-qualifiers and ref-qualifier; the body is picked at run time from the dynamic type of the object. <i>Hiding</i> is what happens when a derived class declares any member with the same name that does not override: every base member of that name disappears from lookup in the derived scope, decided at compile time.</p>
+    <p><b>Why.</b> The textbook line "overloading is compile-time polymorphism, overriding is run-time polymorphism" is right but incomplete, and interviewers probe the gap. Overloading never crosses scopes, so a <code>Derived::f(double)</code> does not add an overload to <code>Base::f(int)</code>: it hides it, and <code>d.f(1)</code> converts 1 to <code>double</code>. Writing <code>override</code> turns an accidental hide into a compile error, and <code>using Base::f;</code> turns a deliberate one back into overloading. Return types play no part in overloading, and only covariant changes are allowed when overriding.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can a pure virtual function have a body? Does a pure virtual destructor need one? Must a class derived from a base with a pure virtual destructor declare its own destructor to be concrete?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes, yes, and no. A pure virtual function may have a definition, written outside the class (<code>virtual void f() = 0 {}</code> is ill-formed), and derived classes can call it as <code>Base::f()</code>. A pure virtual destructor <b>must</b> be defined, or the link fails with <code>undefined reference to Base::~Base()</code>. A derived class is concrete without writing a destructor, because its implicit destructor overrides the pure one.</p>
+    <p><b>Why.</b> <code>= 0</code> means "derived classes must override this", not "this has no code". Every derived destructor calls the base destructor directly (not through the vtable), so that call needs a body. The pure virtual destructor is the idiom for making a class abstract when no other function is a natural candidate. The common wrong answer, from Java and C# abstract methods, is "pure means no implementation, so a body is a compile error".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can a virtual function be <code>inline</code>? <code>static</code>? A member function template?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Inline: yes. Static: no. Template: no (although a virtual function inside a class template is fine).</p>
+    <p><b>Why.</b> <code>inline</code> is about linkage (multiple definitions allowed); the compiler inlines the body wherever it can devirtualise the call, and still emits an out-of-line copy for the vtable slot. A static member function has no <code>this</code> and is called without an object, so there is no vptr to dispatch on. A member function template can be instantiated with any number of types in any translation unit, so the vtable size and slot numbers could not be fixed when the class is defined. A class template's virtual functions are fine because each instantiation is a separate class with a fixed set of functions.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A class has one <code>char</code> member and ten virtual functions. What is its <code>sizeof</code> on x86-64 Linux?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> 16.</p>
+    <p><b>Why.</b> The object holds one vptr (8 bytes) whatever the number of virtual functions; the ten function pointers live in the single shared vtable. The <code>char</code> sits at offset 8 and the size rounds up to the 8-byte alignment of the vptr. The common wrong answer is 88 (ten pointers plus a padded char), which confuses the per-class table with the per-object pointer. The answer changes with multiple inheritance, where each polymorphic base subobject brings its own vptr.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When does a base class <i>not</i> need a virtual destructor?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> When no one deletes a derived object through a pointer to it. The standard way to enforce that is a protected non-virtual destructor. Classes that are never used polymorphically, and <code>final</code> classes, also do not need one.</p>
+    <p><b>Why.</b> [expr.delete]/3 makes <code>delete base_ptr</code> undefined only when the dynamic type differs and the destructor is not virtual. A protected destructor turns that misuse into a compile error, so you save the vptr and keep the class trivially destructible where possible. This is C++ Core Guidelines C.35: "public and virtual, or protected and non-virtual". Saying "every class with inheritance needs one" is safe advice but wrong as a rule: mixins and CRTP bases (<a href="#ch03">Ch 3</a>) deliberately use protected non-virtual destructors.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span><code>Base</code> has a virtual destructor. Is <code>Base* p = new Derived[3]; delete[] p;</code> correct?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. It is undefined behaviour even with the virtual destructor.</p>
+    <p><b>Why.</b> [expr.delete]/3: for <code>delete[]</code>, the dynamic type must be the same as the static type. <code>delete[]</code> walks the array using <code>sizeof</code> of the static type to find each element, and <code>sizeof(Base)</code> is not <code>sizeof(Derived)</code>, so it would call destructors at the wrong addresses. The same stride problem breaks <code>p[1]</code>. The virtual destructor fixes single-object <code>delete</code> only. Use <code>std::vector&lt;std::unique_ptr&lt;Base&gt;&gt;</code> for a polymorphic collection.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can a derived class override a <code>private</code> virtual function of its base? Why would anyone do that?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes. Access controls who may <i>call</i> a name; overriding is not a call. It is the basis of the non-virtual interface (NVI) idiom.</p>
+    <p><b>Why.</b> The base has a public non-virtual function that checks preconditions, takes locks, logs or times the operation, and then calls a private virtual hook. Derived classes customise the hook but cannot skip the fixed policy, and outside code cannot call the hook directly. Many candidates think private members are "not inherited": they are inherited and present in the object, just not accessible by name from the derived class. The C++ standard library uses this pattern in <code>std::streambuf</code> (public <code>sputc</code>, protected virtual <code>overflow</code>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span><code>Base::run()</code> is public and virtual. <code>Derived</code> overrides it in a <code>private:</code> section. Which calls compile: <code>base_ref.run()</code> or <code>derived_ref.run()</code>? Which function executes?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>base_ref.run()</code> compiles and runs <code>Derived::run</code>. <code>derived_ref.run()</code> does not compile.</p>
+    <p><b>Why.</b> [class.access.virt]: access is checked at the call site using the static type of the object expression, while the function executed comes from the dynamic type. Through <code>Base&amp;</code> the name is public. Through <code>Derived&amp;</code> it is private. This surprises people who expect the override's access to "win" at run time; access is purely a compile-time property.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When would you choose private inheritance over a data member?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> When you need to override a virtual function of the class you are using, access its protected members, or (before C++20) get the empty base optimisation. Otherwise prefer a member.</p>
+    <p><b>Why.</b> Both model "implemented in terms of" without an is-a relationship, since outside code cannot convert to the private base. A member is simpler, has a name and allows several instances, while a private base's names enter your scope and can hide or clash. C++20 <code>[[no_unique_address]]</code> gives an empty member zero size, which removes the main historical reason (storing an empty deleter or allocator for free).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A constructor does <code>std::memset(this, 0, sizeof(*this));</code> to clear all members. The class has a virtual function. What happens?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The vptr is overwritten with zero, so the next virtual call jumps through a null table and crashes. Formally it is undefined behaviour, because a polymorphic class is not trivially copyable.</p>
+    <p><b>Why.</b> The vptr is written by the constructor <i>before</i> the body runs, so the memset in the body wipes it. The same applies to <code>memcpy</code> between polymorphic objects, <code>calloc</code> plus a cast instead of construction, and writing polymorphic objects to a file and reading them back (the stored vptr is meaningless in another run, especially with ASLR). The fix is to use member initialisers (<code>int x = 0;</code>) or value initialisation. <code>std::is_trivially_copyable_v&lt;T&gt;</code> tells you whether byte copies are allowed.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>The link fails with <code>undefined reference to `vtable for Widget'</code>. Every function you call is defined. What is the likely cause?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Some non-pure virtual function of <code>Widget</code> is declared but never defined, most often the first one out of line (the <i>key function</i>), or the <code>.cpp</code> that defines it is not linked in.</p>
+    <p><b>Why.</b> GCC and Clang emit the vtable only in the translation unit that defines the key function: the first virtual function that is not pure and not inline. Every constructor references the vtable, so the error appears wherever an object is constructed, even if nobody calls the missing function. Common culprits: a declared but undefined virtual destructor, forgetting to add a file to the build, or (with Qt) a missing moc step. A pure virtual function does not cause this; the slot simply holds <code>__cxa_pure_virtual</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does marking a class <code>final</code> make all virtual calls on it faster?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Only calls made through a pointer, reference or object whose <i>static</i> type is the final class (or that otherwise prove the type). Calls through a <code>Base*</code> still dispatch.</p>
+    <p><b>Why.</b> If the static type is <code>Leaf&amp;</code> and <code>Leaf</code> is <code>final</code>, the dynamic type must be exactly <code>Leaf</code>, so the compiler can call <code>Leaf::f</code> directly and inline it. A <code>Base*</code> could point at any class, so <code>final</code> on <code>Leaf</code> tells the compiler nothing at that call site (unless whole-program devirtualisation can see the entire hierarchy). <code>final</code> also lets <code>dynamic_cast&lt;Leaf*&gt;</code> become a vptr comparison.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Compare compile-time and run-time polymorphism in C++. What does each one cost, and when would you choose each?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Compile-time (static) polymorphism is overloading, templates constrained by concepts, and CRTP: the call target is fixed during compilation, so it is a direct, inlinable call with no per-object overhead. Run-time (dynamic) polymorphism is virtual functions called through a pointer or reference: one vptr per object, two dependent loads and an indirect call, usually no inlining. Choose static dispatch when the set of types is known at build time and the call is hot; choose virtual functions when the type is picked at run time, objects of different types share one container, or the implementation must stay behind a library boundary.</p>
+    <p><b>Why.</b> Static polymorphism pays in other currencies: one instantiation per type (code size and instruction cache), longer compile times, implementation in headers, and no heterogeneous containers. <code>std::variant</code> with <code>std::visit</code> sits between the two: a closed set of types, value storage and a jump table instead of a vtable. The usual wrong answer is "virtual calls are slow because of the vtable lookup". The lookup costs a few cycles when predicted; the real costs are the lost inlining and mispredicted branches on mixed targets (see <a href="#ch02-virtual-cost">the cost of a virtual call</a>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>With a diamond using virtual inheritance, who constructs the shared base, and when?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The most derived class constructs it, first, before any non-virtual base. Initialisers for the virtual base written in intermediate classes are ignored when those classes are not the most derived.</p>
+    <p><b>Why.</b> There is only one virtual base subobject, so exactly one constructor call must initialise it; letting either intermediate class do it would be arbitrary. If the most derived class does not name the virtual base in its initialiser list, the virtual base is default-constructed, which is a compile error if it has no default constructor. The reading drill on virtual bases below shows the order.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When must you use <code>dynamic_cast</code> for a downcast, and when is <code>static_cast</code> fine?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Use <code>static_cast</code> when you know the dynamic type by construction (it is free). Use <code>dynamic_cast</code> when you need to ask, when you cast across branches of a hierarchy, or when the base is virtual.</p>
+    <p><b>Why.</b> <code>static_cast&lt;Derived*&gt;(base_ptr)</code> just subtracts a compile-time offset; if the object is not a <code>Derived</code>, using the result is undefined behaviour. <code>dynamic_cast</code> consults RTTI and returns null (or throws <code>std::bad_cast</code> for references). From a virtual base, <code>static_cast</code> is ill-formed because the offset depends on the most derived type and is known only at run time. Cross-casts (<code>Readable*</code> to <code>Writable*</code>) are only possible with <code>dynamic_cast</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>You have <code>void collide(const Shape&amp;)</code> and <code>void collide(const Circle&amp;)</code>. Given <code>Shape&amp; s</code> that refers to a <code>Circle</code>, which one does <code>collide(s)</code> call? How would you make it choose by dynamic type?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>collide(const Shape&amp;)</code>. Overload resolution is done at compile time on static types. To select on the dynamic type, make the operation a virtual member, and for two dynamic types use double dispatch (the visitor pattern) or <code>std::variant</code> with <code>std::visit</code>.</p>
+    <p><b>Why.</b> C++ virtual functions give <i>single dispatch</i>: only the object the function is called on is examined at run time. Arguments are never examined. The visitor pattern makes two virtual calls, one on each object, to recover both types; it is the coding drill on double dispatch below. Candidates coming from languages with multimethods sometimes expect the runtime to pick the more specific overload.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch02-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Default arguments on a virtual function. What does this print?</p>
+<pre data-run="ch02-defarg"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(<span class="hljs-type">int</span> n = <span class="hljs-number">1</span>)</span> <span class="hljs-type">const</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Base &quot;</span> &lt;&lt; n &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Base</span>() = <span class="hljs-keyword">default</span>;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Base {
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(<span class="hljs-type">int</span> n = <span class="hljs-number">2</span>)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;Derived &quot;</span> &lt;&lt; n &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Derived d;
+    Base&amp; b = d;
+    Base* p = &amp;d;
+    b.<span class="hljs-built_in">show</span>();
+    p-&gt;<span class="hljs-built_in">show</span>();
+    d.<span class="hljs-built_in">show</span>();
+    <span class="hljs-built_in">static_cast</span>&lt;Base&gt;(d).<span class="hljs-built_in">show</span>();
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch02-defarg">Derived 1
+Derived 1
+Derived 2
+Base 1</pre>
+    <p><b>Why.</b> The body is chosen by the dynamic type, the default argument by the static type ([dcl.fct.default]/10). Through <code>Base&amp;</code> and <code>Base*</code> the compiler inserts <code>1</code>, then dispatch runs <code>Derived::show</code>. Through <code>d</code> the static type is <code>Derived</code>, so the default is <code>2</code>. The last line creates a temporary <code>Base</code> by slicing, so it is a real <code>Base</code> object. Rule: never change a default argument in an override.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Four ways to hold a dog. What does this print?</p>
+<pre data-run="ch02-zoo"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Animal</span> {
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> std::string <span class="hljs-title">sound</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;...&quot;</span>; }
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Animal</span>() = <span class="hljs-keyword">default</span>;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Dog</span> : Animal {
+    <span class="hljs-function">std::string <span class="hljs-title">sound</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;woof&quot;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Animal&gt; zoo;
+    zoo.<span class="hljs-built_in">push_back</span>(Dog{});
+    std::vector&lt;std::unique_ptr&lt;Animal&gt;&gt; zoo2;
+    zoo2.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Dog&gt;());
+    Dog rex;
+    Animal&amp; ref = rex;
+    Animal copy = ref;
+    std::cout &lt;&lt; zoo[<span class="hljs-number">0</span>].<span class="hljs-built_in">sound</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; zoo2[<span class="hljs-number">0</span>]-&gt;<span class="hljs-built_in">sound</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span>
+              &lt;&lt; ref.<span class="hljs-built_in">sound</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; copy.<span class="hljs-built_in">sound</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch02-zoo">... woof woof ...</pre>
+    <p><b>Why.</b> <code>std::vector&lt;Animal&gt;</code> stores <code>Animal</code> objects, so <code>push_back(Dog{})</code> copies (moves) only the <code>Animal</code> part into a new <code>Animal</code>: slicing. <code>Animal copy = ref;</code> slices too, even though <code>ref</code> refers to a dog, because the copy is a fresh <code>Animal</code> whose constructor installs <code>Animal</code>'s vptr. Only the reference and the pointer keep the dynamic type. Making <code>Animal</code>'s copy operations protected or deleted would turn both slicing lines into compile errors.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This program prints one line and exits normally. What is wrong, and how would you catch it?</p>
+<pre data-run="ch02-nonvirt-dtor" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Buffer</span> {
+    ~<span class="hljs-built_in">Buffer</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;~Buffer\n&quot;</span>; }
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">fill</span><span class="hljs-params">()</span> </span>{}
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">FileBuffer</span> : Buffer {
+    std::vector&lt;<span class="hljs-type">char</span>&gt; data = std::<span class="hljs-built_in">vector</span>&lt;<span class="hljs-type">char</span>&gt;(<span class="hljs-number">4096</span>);
+    ~<span class="hljs-built_in">FileBuffer</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;~FileBuffer\n&quot;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Buffer* b = <span class="hljs-keyword">new</span> FileBuffer;
+    b-&gt;<span class="hljs-built_in">fill</span>();
+    <span class="hljs-keyword">delete</span> b;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>Buffer</code> is polymorphic but its destructor is not virtual, so <code>delete b</code> is undefined behaviour. In practice it prints only <code>~Buffer</code>: <code>~FileBuffer</code> never runs and the 4 KB vector leaks. On Linux, LeakSanitizer reports the leaked 4096-byte buffer, and ASan can also report <code>new-delete-type-mismatch</code>, because the object was allocated with 32 bytes and sized deallocation frees it as an 8-byte <code>Buffer</code>. The compiler warning below is the most reliable detector.</p>
+    <p><b>Why.</b> Without <code>virtual</code>, <code>delete b</code> is compiled as a direct call to <code>Buffer::~Buffer</code> followed by <code>operator delete(b, sizeof(Buffer))</code>. GCC also warns with <code>-Wdelete-non-virtual-dtor</code>, which is in <code>-Wall</code>. Fix: <code>virtual ~Buffer()</code>, or hold the object in a <code>unique_ptr&lt;FileBuffer&gt;</code>. The output is not compared here because the behaviour is undefined.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Overriding one overload. What does this print?</p>
+<pre data-run="ch02-overload-hide"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Printer</span> {
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">print</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;int &quot;</span> &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">print</span><span class="hljs-params">(<span class="hljs-type">double</span> x)</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;double &quot;</span> &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Printer</span>() = <span class="hljs-keyword">default</span>;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Fancy</span> : Printer {
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">print</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> <span class="hljs-keyword">override</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;fancy int &quot;</span> &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Fancy f;
+    Printer&amp; p = f;
+    f.<span class="hljs-built_in">print</span>(<span class="hljs-number">2.5</span>);
+    p.<span class="hljs-built_in">print</span>(<span class="hljs-number">2.5</span>);
+    p.<span class="hljs-built_in">print</span>(<span class="hljs-number">3</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch02-overload-hide">fancy int 2
+double 2.5
+fancy int 3</pre>
+    <p><b>Why.</b> In <code>Fancy</code>'s scope, the name <code>print</code> finds only <code>Fancy::print(int)</code>; the base <code>print(double)</code> is hidden, so <code>2.5</code> is converted to <code>2</code>. Through <code>Printer&amp;</code>, lookup sees both base overloads, picks <code>print(double)</code> at compile time, and since <code>Fancy</code> does not override it, <code>Printer::print(double)</code> runs. <code>p.print(3)</code> picks <code>print(int)</code> and dispatches to the override. Fix: <code>using Printer::print;</code> in <code>Fancy</code>. GCC's <code>-Woverloaded-virtual</code> flags this.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The thermostat always reports 0. Why?</p>
+<pre data-run="ch02-missing-const"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Sensor</span> {
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">double</span> <span class="hljs-title">read</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">0.0</span>; }
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Sensor</span>() = <span class="hljs-keyword">default</span>;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Thermo</span> : Sensor {
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">read</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">21.5</span>; }  <span class="hljs-comment">// meant to override</span>
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">report</span><span class="hljs-params">(<span class="hljs-type">const</span> Sensor&amp; s)</span> </span>{ std::cout &lt;&lt; s.<span class="hljs-built_in">read</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Thermo t;
+    <span class="hljs-built_in">report</span>(t);
+    std::cout &lt;&lt; t.<span class="hljs-built_in">read</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch02-missing-const">0
+21.5</pre>
+    <p><b>Answer.</b> <code>Thermo::read</code> is not <code>const</code>, so it does not override <code>Sensor::read() const</code>. It is a new function that hides the base one in <code>Thermo</code>'s scope. Through <code>const Sensor&amp;</code>, the base version runs.</p>
+    <p><b>Why.</b> An override must match the cv-qualifiers and ref-qualifier exactly. Writing <code>double read() const override</code> fixes it, and writing <code>override</code> on the broken version would have turned the bug into a compile error ("marked override, but does not override"). This is the single best argument for always writing <code>override</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Virtual base initialisation. What does this print?</p>
+<pre data-run="ch02-vbase-order"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">A</span> {
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">A</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> : v(v) {</span> std::cout &lt;&lt; <span class="hljs-string">&quot;A(&quot;</span> &lt;&lt; v &lt;&lt; <span class="hljs-string">&quot;)\n&quot;</span>; }
+    <span class="hljs-type">int</span> v;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">B</span> : <span class="hljs-keyword">virtual</span> A { <span class="hljs-built_in">B</span>() : <span class="hljs-built_in">A</span>(<span class="hljs-number">1</span>) { std::cout &lt;&lt; <span class="hljs-string">&quot;B\n&quot;</span>; } };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">C</span> : <span class="hljs-keyword">virtual</span> A { <span class="hljs-built_in">C</span>() : <span class="hljs-built_in">A</span>(<span class="hljs-number">2</span>) { std::cout &lt;&lt; <span class="hljs-string">&quot;C\n&quot;</span>; } };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">D</span> : B, C { <span class="hljs-built_in">D</span>() : <span class="hljs-built_in">A</span>(<span class="hljs-number">3</span>) { std::cout &lt;&lt; <span class="hljs-string">&quot;D\n&quot;</span>; } };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    D d;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;d.v = &quot;</span> &lt;&lt; d.v &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    C c;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;c.v = &quot;</span> &lt;&lt; c.v &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch02-vbase-order">A(3)
+B
+C
+D
+d.v = 3
+A(2)
+C
+c.v = 2</pre>
+    <p><b>Why.</b> When <code>D</code> is the most derived class, <code>D</code>'s constructor initialises the virtual base <code>A</code> first, with <code>A(3)</code>. The <code>A(1)</code> and <code>A(2)</code> initialisers in <code>B</code> and <code>C</code> are skipped because those constructors are not running for the most derived object. When a plain <code>C</code> is created, <code>C</code> is the most derived class, so its <code>A(2)</code> is used. Remove <code>A(3)</code> from <code>D</code> and the program fails to compile, because <code>A</code> has no default constructor: many candidates expect <code>A(1)</code> from the first base instead.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this not compile, and what are the two ways to fix it?</p>
+<pre data-run="ch02-diamond-ambig" data-mode="error"><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Device</span> { <span class="hljs-type">int</span> id = <span class="hljs-number">0</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Scanner</span> : Device {};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Printer</span> : Device {};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Copier</span> : Scanner, Printer {};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Copier c;
+    c.id = <span class="hljs-number">7</span>;
+    <span class="hljs-keyword">return</span> c.id;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A <code>Copier</code> contains two <code>Device</code> subobjects (one in <code>Scanner</code>, one in <code>Printer</code>), so <code>c.id</code> is ambiguous. Converting <code>Copier*</code> to <code>Device*</code> is ambiguous for the same reason.</p>
+    <p><b>Why.</b> Fix 1: say which one you mean, <code>c.Scanner::id = 7;</code>, if the copier really has two independent devices. Fix 2: if there should be one device, inherit virtually, <code>struct Scanner : virtual Device</code> and <code>struct Printer : virtual Device</code>, so both share a single subobject. Fix 2 costs a vbase offset per access and makes <code>Copier</code> responsible for constructing <code>Device</code>. Often the best fix is design: make <code>Scanner</code> and <code>Printer</code> data-free interfaces and keep the id in <code>Copier</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This prints nothing on stdout and aborts. Why? (Output is not compared: the behaviour is undefined.)</p>
+<pre data-run="ch02-pure-call" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Task</span> {
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Task</span>() { <span class="hljs-built_in">finish</span>(); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">finish</span><span class="hljs-params">()</span> </span>{ <span class="hljs-built_in">cleanup</span>(); }  <span class="hljs-comment">// indirect, so the compiler cannot reject it</span>
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">cleanup</span><span class="hljs-params">()</span> </span>= <span class="hljs-number">0</span>;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Download</span> : Task {
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">cleanup</span><span class="hljs-params">()</span> <span class="hljs-keyword">override</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;closing socket\n&quot;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    { Download d; }
+    std::cout &lt;&lt; <span class="hljs-string">&quot;done\n&quot;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> When <code>d</code> is destroyed, <code>~Download</code> runs first, then <code>~Task</code> sets the vptr back to <code>Task</code>'s vtable. <code>finish()</code> then calls <code>cleanup()</code> through that table, whose slot is the pure virtual stub. With GCC and Clang the runtime prints <code>pure virtual method called</code> to stderr and calls <code>std::terminate</code>, so <code>done</code> never prints.</p>
+    <p><b>Why.</b> [class.abstract]/6 makes a virtual call to a pure virtual function from the abstract class's constructor or destructor undefined. A direct call would usually be caught at compile or link time; going through a helper hides it. Fix: do the cleanup in <code>~Download</code> (each class releases what it owns, RAII style), or make <code>cleanup</code> non-pure. Never rely on derived behaviour from a base destructor.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Overloads and dynamic type. What does this print?</p>
+<pre data-run="ch02-single-dispatch"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Shape</span> { <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Shape</span>() = <span class="hljs-keyword">default</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Circle</span> : Shape {};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">collide</span><span class="hljs-params">(<span class="hljs-type">const</span> Shape&amp;)</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;shape\n&quot;</span>; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">collide</span><span class="hljs-params">(<span class="hljs-type">const</span> Circle&amp;)</span> </span>{ std::cout &lt;&lt; <span class="hljs-string">&quot;circle\n&quot;</span>; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Circle c;
+    Shape&amp; s = c;
+    <span class="hljs-built_in">collide</span>(c);
+    <span class="hljs-built_in">collide</span>(s);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch02-single-dispatch">circle
+shape</pre>
+    <p><b>Why.</b> Overload resolution uses the static type of each argument at compile time. <code>s</code> has static type <code>Shape&amp;</code>, so <code>collide(const Shape&amp;)</code> is chosen even though the object is a <code>Circle</code>. Virtual dispatch happens only on the object a member function is called on. The visitor pattern (coding drill below) is the standard way to dispatch on argument types.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Assignment through a base reference. What does this print?</p>
+<pre data-run="ch02-partial-assign"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Point</span> {
+    <span class="hljs-type">int</span> x = <span class="hljs-number">0</span>, y = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Point</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">print</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ std::cout &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27;,&#x27;</span> &lt;&lt; y &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Point3</span> : Point {
+    <span class="hljs-type">int</span> z = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">print</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ std::cout &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27;,&#x27;</span> &lt;&lt; y &lt;&lt; <span class="hljs-string">&#x27;,&#x27;</span> &lt;&lt; z &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Point3 a;
+    a.x = <span class="hljs-number">1</span>; a.y = <span class="hljs-number">2</span>; a.z = <span class="hljs-number">3</span>;
+    Point3 b;
+    b.x = <span class="hljs-number">7</span>; b.y = <span class="hljs-number">8</span>; b.z = <span class="hljs-number">9</span>;
+    Point&amp; ra = a;
+    ra = b;
+    a.<span class="hljs-built_in">print</span>();
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch02-partial-assign">7,8,3</pre>
+    <p><b>Why.</b> <code>ra = b</code> calls <code>Point::operator=</code>, chosen statically because assignment operators are not virtual here. It copies only the <code>Point</code> fields, leaving <code>a.z</code> at 3: a half-assigned object that matches neither original. This is the assignment form of slicing. Making <code>operator=</code> virtual does not really help, because the override would have to accept a <code>const Point&amp;</code> and decide what to do with a plain <code>Point</code>. The usual fix is to make polymorphic bases non-assignable (protected or deleted copy assignment).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span><code>typeid</code> with and without virtual functions. What does this print?</p>
+<pre data-run="ch02-typeid"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;typeinfo&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">A</span> {};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">B</span> : A {};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">P</span> { <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">P</span>() = <span class="hljs-keyword">default</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Q</span> : P {};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    B b;
+    A&amp; a = b;
+    Q q;
+    P&amp; p = q;
+    std::cout &lt;&lt; (<span class="hljs-built_in">typeid</span>(a) == <span class="hljs-built_in">typeid</span>(B)) &lt;&lt; (<span class="hljs-built_in">typeid</span>(p) == <span class="hljs-built_in">typeid</span>(Q)) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    P* none = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-keyword">try</span> {
+        std::cout &lt;&lt; <span class="hljs-built_in">typeid</span>(*none).<span class="hljs-built_in">name</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_typeid&amp;) {
+        std::cout &lt;&lt; <span class="hljs-string">&quot;bad_typeid\n&quot;</span>;
+    }
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch02-typeid">01
+bad_typeid</pre>
+    <p><b>Why.</b> <code>A</code> is not polymorphic, so <code>typeid(a)</code> is resolved at compile time from the static type <code>A</code>: there is no vptr to consult. <code>P</code> is polymorphic, so <code>typeid(p)</code> reads the dynamic type <code>Q</code>. For a polymorphic glvalue obtained by dereferencing a null pointer, <code>typeid</code> throws <code>std::bad_typeid</code> instead of crashing ([expr.typeid]/3); this is one of the few places where <code>*nullptr</code> has defined behaviour. The name string itself is implementation-defined, which is why the program never prints a successful one.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch02-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Polymorphic deep copy. Write an abstract <code>Shape</code> with <code>area()</code>, <code>name()</code>, <code>scale(double)</code> and a <code>clone()</code> that returns <code>std::unique_ptr&lt;Shape&gt;</code>, plus two concrete shapes. Then write <code>Drawing</code>, which owns a <code>std::vector&lt;std::unique_ptr&lt;Shape&gt;&gt;</code> and is copyable with deep-copy semantics. Requirements: copying a <code>Drawing</code> must not share shapes; slicing a <code>Shape</code> by accident must not compile; moving must be <code>noexcept</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Give <code>Shape</code> a public non-virtual <code>clone()</code> that wraps a private virtual <code>do_clone()</code> returning a raw pointer, so each override can use a covariant return type and the public interface still returns a smart pointer. Make <code>Shape</code>'s copy operations protected: derived classes can still copy themselves inside <code>do_clone</code>, but outside code cannot slice. <code>Drawing</code>'s copy constructor clones each element; assignment uses copy-and-swap so a single by-value <code>operator=</code> handles copy and move and gives the strong exception guarantee (rule of five from <a href="#ch01">Ch 1</a>).</p>
+<pre data-run="ch02-clone" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Shape</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Shape</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">double</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> std::string <span class="hljs-title">name</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">scale</span><span class="hljs-params">(<span class="hljs-type">double</span> k)</span> </span>= <span class="hljs-number">0</span>;
+    <span class="hljs-function">std::unique_ptr&lt;Shape&gt; <span class="hljs-title">clone</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">unique_ptr</span>&lt;Shape&gt;(<span class="hljs-built_in">do_clone</span>()); }
+<span class="hljs-keyword">protected</span>:
+    <span class="hljs-built_in">Shape</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Shape</span>(<span class="hljs-type">const</span> Shape&amp;) = <span class="hljs-keyword">default</span>;             <span class="hljs-comment">// derived classes may copy, outsiders may not</span>
+    Shape&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Shape&amp;) = <span class="hljs-keyword">default</span>;
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> Shape* <span class="hljs-title">do_clone</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Rect</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Shape {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Rect</span>(<span class="hljs-type">double</span> w, <span class="hljs-type">double</span> h) : <span class="hljs-built_in">w_</span>(w), <span class="hljs-built_in">h_</span>(h) {}
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> w_ * h_; }
+    <span class="hljs-function">std::string <span class="hljs-title">name</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;rect&quot;</span>; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">scale</span><span class="hljs-params">(<span class="hljs-type">double</span> k)</span> <span class="hljs-keyword">override</span> </span>{ w_ *= k; h_ *= k; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function">Rect* <span class="hljs-title">do_clone</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-keyword">new</span> <span class="hljs-built_in">Rect</span>(*<span class="hljs-keyword">this</span>); }  <span class="hljs-comment">// covariant</span>
+    <span class="hljs-type">double</span> w_, h_;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Tri</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Shape {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Tri</span>(<span class="hljs-type">double</span> b, <span class="hljs-type">double</span> h) : <span class="hljs-built_in">b_</span>(b), <span class="hljs-built_in">h_</span>(h) {}
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> b_ * h_ / <span class="hljs-number">2</span>; }
+    <span class="hljs-function">std::string <span class="hljs-title">name</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;tri&quot;</span>; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">scale</span><span class="hljs-params">(<span class="hljs-type">double</span> k)</span> <span class="hljs-keyword">override</span> </span>{ b_ *= k; h_ *= k; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function">Tri* <span class="hljs-title">do_clone</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-keyword">new</span> <span class="hljs-built_in">Tri</span>(*<span class="hljs-keyword">this</span>); }
+    <span class="hljs-type">double</span> b_, h_;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Drawing</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Drawing</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Drawing</span>(<span class="hljs-type">const</span> Drawing&amp; other) {
+        shapes_.<span class="hljs-built_in">reserve</span>(other.shapes_.<span class="hljs-built_in">size</span>());
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; s : other.shapes_) shapes_.<span class="hljs-built_in">push_back</span>(s-&gt;<span class="hljs-built_in">clone</span>());
+    }
+    <span class="hljs-built_in">Drawing</span>(Drawing&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    Drawing&amp; <span class="hljs-keyword">operator</span>=(Drawing other) <span class="hljs-keyword">noexcept</span> {  <span class="hljs-comment">// copy-and-swap: copy happens in the parameter</span>
+        shapes_.<span class="hljs-built_in">swap</span>(other.shapes_);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    ~<span class="hljs-built_in">Drawing</span>() = <span class="hljs-keyword">default</span>;
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">add</span><span class="hljs-params">(std::unique_ptr&lt;Shape&gt; s)</span> </span>{ shapes_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(s)); }
+    <span class="hljs-function">Shape&amp; <span class="hljs-title">at</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> i)</span> </span>{ <span class="hljs-keyword">return</span> *shapes_.<span class="hljs-built_in">at</span>(i); }
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">total_area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-type">double</span> total = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; s : shapes_) total += s-&gt;<span class="hljs-built_in">area</span>();
+        <span class="hljs-keyword">return</span> total;
+    }
+<span class="hljs-keyword">private</span>:
+    std::vector&lt;std::unique_ptr&lt;Shape&gt;&gt; shapes_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Drawing a;
+    a.<span class="hljs-built_in">add</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Rect&gt;(<span class="hljs-number">2</span>, <span class="hljs-number">3</span>));
+    a.<span class="hljs-built_in">add</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Tri&gt;(<span class="hljs-number">4</span>, <span class="hljs-number">5</span>));
+    Drawing b = a;  <span class="hljs-comment">// deep copy</span>
+    b.<span class="hljs-built_in">at</span>(<span class="hljs-number">0</span>).<span class="hljs-built_in">scale</span>(<span class="hljs-number">2</span>);
+    Drawing c;
+    c = b;          <span class="hljs-comment">// copy assignment</span>
+    c.<span class="hljs-built_in">at</span>(<span class="hljs-number">1</span>).<span class="hljs-built_in">scale</span>(<span class="hljs-number">0.5</span>);
+    std::cout &lt;&lt; a.<span class="hljs-built_in">total_area</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; b.<span class="hljs-built_in">total_area</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; c.<span class="hljs-built_in">total_area</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; c.<span class="hljs-built_in">at</span>(<span class="hljs-number">0</span>).<span class="hljs-built_in">name</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; c.<span class="hljs-built_in">at</span>(<span class="hljs-number">1</span>).<span class="hljs-built_in">name</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-comment">// Rect r = static_cast&lt;Rect&amp;&gt;(a.at(0)); fine, but  Shape s = a.at(0);  does not compile</span>
+}</code></pre>
+<pre class="out" data-out="ch02-clone">16 34 26.5
+rect tri</pre>
+    <p><b>Complexity and pitfalls.</b> Copy is O(n) allocations; move is O(1). Pitfalls: forgetting to override <code>do_clone</code> in a further-derived class silently clones the parent type (marking leaf classes <code>final</code> prevents that class of bug, and some codebases add a CRTP helper that writes <code>do_clone</code> for you); returning <code>std::unique_ptr&lt;Rect&gt;</code> from an override does not compile because smart pointers are not covariant; and a defaulted copy constructor on <code>Drawing</code> would fail to compile (unique_ptr is move-only), which is the compiler telling you a decision is needed.</p>
+    <p class="rating">Estimated rating: ~1400 · standard idiom, but it needs covariance, protected copies and copy-and-swap together</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Dynamic dispatch without <code>virtual</code>. Implement an <code>Animal</code> "class" in C-style C++: a struct holding a pointer to a table of function pointers (<code>speak</code>, <code>destroy</code>) and a name. Implement <code>Dog</code> (with a bark count) and <code>Cat</code> (grumpy or not) that embed <code>Animal</code> as their first member, factory functions returning <code>Animal*</code>, and free functions <code>speak(const Animal*)</code> and <code>destroy(Animal*)</code> that dispatch. This is how C codebases (the Linux kernel's <code>file_operations</code>, for example) do dispatch, and how C++ compilers implement virtual functions.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> One constant table per "class" plays the vtable; the first field of every object plays the vptr. Because <code>Animal</code> is the first member of a standard-layout <code>Dog</code>, a <code>Dog*</code> and a pointer to its <code>base</code> member are pointer-interconvertible, so the "override" can <code>reinterpret_cast</code> back to <code>Dog</code> legally. The <code>destroy</code> slot plays the virtual deleting destructor: it frees the object as its real type.</p>
+<pre data-run="ch02-manual-vtable" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Animal</span>;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">AnimalVTable</span> {
+    <span class="hljs-built_in">void</span> (*speak)(<span class="hljs-type">const</span> Animal*);
+    <span class="hljs-built_in">void</span> (*destroy)(Animal*);
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Animal</span> {
+    <span class="hljs-type">const</span> AnimalVTable* vptr;
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* name;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">speak</span><span class="hljs-params">(<span class="hljs-type">const</span> Animal* a)</span> </span>{ a-&gt;vptr-&gt;<span class="hljs-built_in">speak</span>(a); }  <span class="hljs-comment">// the &quot;virtual call&quot;</span>
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">destroy</span><span class="hljs-params">(Animal* a)</span> </span>{ a-&gt;vptr-&gt;<span class="hljs-built_in">destroy</span>(a); }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Dog</span> { Animal base; <span class="hljs-type">int</span> barks; };
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">dog_speak</span><span class="hljs-params">(<span class="hljs-type">const</span> Animal* a)</span> </span>{
+    <span class="hljs-type">const</span> Dog* d = <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> Dog*&gt;(a);  <span class="hljs-comment">// ok: base is the first member</span>
+    std::cout &lt;&lt; a-&gt;name &lt;&lt; <span class="hljs-string">&#x27;:&#x27;</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; d-&gt;barks; ++i) std::cout &lt;&lt; <span class="hljs-string">&quot; woof&quot;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">dog_destroy</span><span class="hljs-params">(Animal* a)</span> </span>{ <span class="hljs-keyword">delete</span> <span class="hljs-built_in">reinterpret_cast</span>&lt;Dog*&gt;(a); }
+<span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> AnimalVTable dog_vtable{dog_speak, dog_destroy};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Animal* <span class="hljs-title">make_dog</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* name, <span class="hljs-type">int</span> barks)</span> </span>{
+    Dog* d = <span class="hljs-keyword">new</span> Dog{{&amp;dog_vtable, name}, barks};
+    <span class="hljs-keyword">return</span> &amp;d-&gt;base;
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Cat</span> { Animal base; <span class="hljs-type">bool</span> grumpy; };
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">cat_speak</span><span class="hljs-params">(<span class="hljs-type">const</span> Animal* a)</span> </span>{
+    <span class="hljs-type">const</span> Cat* c = <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> Cat*&gt;(a);
+    std::cout &lt;&lt; a-&gt;name &lt;&lt; <span class="hljs-string">&quot;: &quot;</span> &lt;&lt; (c-&gt;grumpy ? <span class="hljs-string">&quot;hiss&quot;</span> : <span class="hljs-string">&quot;meow&quot;</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">cat_destroy</span><span class="hljs-params">(Animal* a)</span> </span>{ <span class="hljs-keyword">delete</span> <span class="hljs-built_in">reinterpret_cast</span>&lt;Cat*&gt;(a); }
+<span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> AnimalVTable cat_vtable{cat_speak, cat_destroy};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Animal* <span class="hljs-title">make_cat</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* name, <span class="hljs-type">bool</span> grumpy)</span> </span>{
+    Cat* c = <span class="hljs-keyword">new</span> Cat{{&amp;cat_vtable, name}, grumpy};
+    <span class="hljs-keyword">return</span> &amp;c-&gt;base;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Animal* zoo[] = {<span class="hljs-built_in">make_dog</span>(<span class="hljs-string">&quot;Rex&quot;</span>, <span class="hljs-number">2</span>), <span class="hljs-built_in">make_cat</span>(<span class="hljs-string">&quot;Tom&quot;</span>, <span class="hljs-literal">false</span>), <span class="hljs-built_in">make_cat</span>(<span class="hljs-string">&quot;Grim&quot;</span>, <span class="hljs-literal">true</span>)};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Animal* a : zoo) <span class="hljs-built_in">speak</span>(a);
+    <span class="hljs-keyword">for</span> (Animal* a : zoo) <span class="hljs-built_in">destroy</span>(a);
+}</code></pre>
+<pre class="out" data-out="ch02-manual-vtable">Rex: woof woof
+Tom: meow
+Grim: hiss</pre>
+    <p><b>Complexity and pitfalls.</b> Each call is the same two loads and an indirect call as a real virtual call. Pitfalls: the cast back is only valid while the embedded base is the first member of a standard-layout struct (otherwise you need <code>offsetof</code>, the kernel's <code>container_of</code>); calling <code>delete</code> on the <code>Animal*</code> itself would be undefined, exactly like a missing virtual destructor; and nothing checks that a table's functions match its object type, which is what the compiler-generated version guarantees for you. Mention in the interview that real vtables also hold RTTI and offset-to-top, and that you have reimplemented single inheritance only.</p>
+    <p class="rating">Estimated rating: ~1600 · needs the vtable model and the pointer-interconvertibility rule, little code</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Type erasure with value semantics. Write a class <code>Drawable</code> that can hold any type <code>T</code> for which a free function <code>draw(const T&amp;, std::ostream&amp;, std::size_t indent)</code> exists, with no common base class required. <code>Drawable</code> must be copyable (deep copy), movable and storable in a <code>std::vector&lt;Drawable&gt;</code>. Make a <code>Document</code> (a vector of <code>Drawable</code>) itself drawable, so a document can contain a copy of itself. Draw a document holding an <code>int</code>, a <code>std::string</code>, a user <code>Circle</code> and a nested copy of the document.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> This is Sean Parent's "runtime polymorphism without inheritance". Keep the hierarchy private: a nested abstract <code>Concept</code> with virtual <code>draw_</code> and <code>clone</code>, and a class template <code>Model&lt;T&gt;</code> that stores a <code>T</code> and forwards to the free <code>draw</code> found by argument-dependent lookup. <code>Drawable</code> owns a <code>unique_ptr&lt;Concept&gt;</code>, copies by cloning, and exposes <code>draw</code> as a hidden friend. Constrain the converting constructor so it never hijacks copying a <code>Drawable</code>. This is the same technique as <code>std::function</code> and <code>std::any</code>.</p>
+<pre data-run="ch02-type-erasure" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">draw</span><span class="hljs-params">(<span class="hljs-type">int</span> x, std::ostream&amp; out, std::<span class="hljs-type">size_t</span> indent)</span> </span>{
+    out &lt;&lt; std::<span class="hljs-built_in">string</span>(indent, <span class="hljs-string">&#x27; &#x27;</span>) &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">draw</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; s, std::ostream&amp; out, std::<span class="hljs-type">size_t</span> indent)</span> </span>{
+    out &lt;&lt; std::<span class="hljs-built_in">string</span>(indent, <span class="hljs-string">&#x27; &#x27;</span>) &lt;&lt; s &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Drawable</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+        <span class="hljs-built_in">requires</span>(!std::is_same_v&lt;std::<span class="hljs-type">remove_cvref_t</span>&lt;T&gt;, Drawable&gt;)
+    <span class="hljs-built_in">Drawable</span>(T x) : <span class="hljs-built_in">self_</span>(std::make_unique&lt;Model&lt;T&gt;&gt;(std::<span class="hljs-built_in">move</span>(x))) {}
+    <span class="hljs-built_in">Drawable</span>(<span class="hljs-type">const</span> Drawable&amp; other) : <span class="hljs-built_in">self_</span>(other.self_-&gt;<span class="hljs-built_in">clone</span>()) {}
+    <span class="hljs-built_in">Drawable</span>(Drawable&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    Drawable&amp; <span class="hljs-keyword">operator</span>=(Drawable other) <span class="hljs-keyword">noexcept</span> {
+        self_ = std::<span class="hljs-built_in">move</span>(other.self_);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    ~<span class="hljs-built_in">Drawable</span>() = <span class="hljs-keyword">default</span>;
+
+    <span class="hljs-function"><span class="hljs-keyword">friend</span> <span class="hljs-type">void</span> <span class="hljs-title">draw</span><span class="hljs-params">(<span class="hljs-type">const</span> Drawable&amp; d, std::ostream&amp; out, std::<span class="hljs-type">size_t</span> indent)</span> </span>{
+        d.self_-&gt;<span class="hljs-built_in">draw_</span>(out, indent);
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Concept</span> {
+        <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Concept</span>() = <span class="hljs-keyword">default</span>;
+        <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">draw_</span><span class="hljs-params">(std::ostream&amp; out, std::<span class="hljs-type">size_t</span> indent)</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+        <span class="hljs-function"><span class="hljs-keyword">virtual</span> std::unique_ptr&lt;Concept&gt; <span class="hljs-title">clone</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+    };
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Model</span> <span class="hljs-keyword">final</span> : Concept {
+        <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Model</span><span class="hljs-params">(T x)</span> : data(std::move(x)) {</span>}
+        <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">draw_</span><span class="hljs-params">(std::ostream&amp; out, std::<span class="hljs-type">size_t</span> indent)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-built_in">draw</span>(data, out, indent); }
+        <span class="hljs-function">std::unique_ptr&lt;Concept&gt; <span class="hljs-title">clone</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;Model&gt;(*<span class="hljs-keyword">this</span>); }
+        T data;
+    };
+    std::unique_ptr&lt;Concept&gt; self_;
+};
+
+<span class="hljs-keyword">using</span> Document = std::vector&lt;Drawable&gt;;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">draw</span><span class="hljs-params">(<span class="hljs-type">const</span> Document&amp; doc, std::ostream&amp; out, std::<span class="hljs-type">size_t</span> indent)</span> </span>{
+    out &lt;&lt; std::<span class="hljs-built_in">string</span>(indent, <span class="hljs-string">&#x27; &#x27;</span>) &lt;&lt; <span class="hljs-string">&quot;&lt;document&gt;\n&quot;</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; d : doc) <span class="hljs-built_in">draw</span>(d, out, indent + <span class="hljs-number">2</span>);
+    out &lt;&lt; std::<span class="hljs-built_in">string</span>(indent, <span class="hljs-string">&#x27; &#x27;</span>) &lt;&lt; <span class="hljs-string">&quot;&lt;/document&gt;\n&quot;</span>;
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Circle</span> { <span class="hljs-type">double</span> r; };
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">draw</span><span class="hljs-params">(<span class="hljs-type">const</span> Circle&amp; c, std::ostream&amp; out, std::<span class="hljs-type">size_t</span> indent)</span> </span>{
+    out &lt;&lt; std::<span class="hljs-built_in">string</span>(indent, <span class="hljs-string">&#x27; &#x27;</span>) &lt;&lt; <span class="hljs-string">&quot;circle r=&quot;</span> &lt;&lt; c.r &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Document doc;
+    doc.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">0</span>);
+    doc.<span class="hljs-built_in">emplace_back</span>(std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;hello&quot;</span>));
+    doc.<span class="hljs-built_in">emplace_back</span>(Circle{<span class="hljs-number">2</span>});
+    Drawable snapshot = doc;  <span class="hljs-comment">// a deep copy of the document so far</span>
+    doc.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(snapshot));
+    <span class="hljs-built_in">draw</span>(doc, std::cout, <span class="hljs-number">0</span>);
+}</code></pre>
+<pre class="out" data-out="ch02-type-erasure">&lt;document&gt;
+  0
+  hello
+  circle r=2
+  &lt;document&gt;
+    0
+    hello
+    circle r=2
+  &lt;/document&gt;
+&lt;/document&gt;</pre>
+    <p><b>Complexity and pitfalls.</b> One heap allocation per stored value (a production version adds a small-buffer optimisation, see <a href="#ch16">Ch 16</a>), and one virtual call per draw. Pitfalls: the <code>requires</code> clause is defensive here, because a by-value template is never used to copy its own class ([class.copy.ctor]/5), but if you change the parameter to a forwarding reference <code>T&amp;&amp;</code>, the template beats the copy constructor for a non-const <code>Drawable</code> lvalue and wraps a <code>Drawable</code> inside a <code>Drawable</code>; the free <code>draw</code> for user types must be findable by ADL at instantiation, so declare it in the type's namespace; and copying <code>doc</code> while pushing into it (<code>doc.push_back(doc)</code>) is safe only because the argument is converted to a <code>Drawable</code> before the vector changes, which is why the reference makes the snapshot explicit.</p>
+    <p class="rating">Estimated rating: ~1800 · combines templates, a hidden class hierarchy, ADL and value semantics; many candidates have never seen it</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Double dispatch with the visitor pattern. Build an expression tree with node types <code>Num</code>, <code>Add</code> and <code>Mul</code> owned by <code>std::unique_ptr</code>. Add a <code>Visitor</code> interface and two visitors: one that evaluates the tree to a <code>long</code> and one that prints it fully parenthesised. Adding a new operation must not require editing the node classes.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Each node implements <code>accept(Visitor&amp;)</code> by calling <code>v.visit(*this)</code>. The first dispatch (virtual <code>accept</code>) recovers the node type; inside it, <code>*this</code> has a static type, so overload resolution picks the right <code>visit</code> overload, and the second dispatch (virtual <code>visit</code>) recovers the visitor type. Visitors keep their state as members. The trade-off: new operations are cheap, new node types require changing every visitor. <code>std::variant</code> plus <code>std::visit</code> is the closed-set, allocation-free alternative.</p>
+<pre data-run="ch02-visitor" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Num</span>;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Add</span>;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Mul</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Visitor</span> {
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Visitor</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">visit</span><span class="hljs-params">(<span class="hljs-type">const</span> Num&amp;)</span> </span>= <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">visit</span><span class="hljs-params">(<span class="hljs-type">const</span> Add&amp;)</span> </span>= <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">visit</span><span class="hljs-params">(<span class="hljs-type">const</span> Mul&amp;)</span> </span>= <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Expr</span> {
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Expr</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">accept</span><span class="hljs-params">(Visitor&amp; v)</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+};
+<span class="hljs-keyword">using</span> ExprPtr = std::unique_ptr&lt;Expr&gt;;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Num</span> <span class="hljs-keyword">final</span> : Expr {
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Num</span><span class="hljs-params">(<span class="hljs-type">long</span> v)</span> : value(v) {</span>}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">accept</span><span class="hljs-params">(Visitor&amp; v)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ v.<span class="hljs-built_in">visit</span>(*<span class="hljs-keyword">this</span>); }
+    <span class="hljs-type">long</span> value;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Add</span> <span class="hljs-keyword">final</span> : Expr {
+    <span class="hljs-built_in">Add</span>(ExprPtr l, ExprPtr r) : <span class="hljs-built_in">lhs</span>(std::<span class="hljs-built_in">move</span>(l)), <span class="hljs-built_in">rhs</span>(std::<span class="hljs-built_in">move</span>(r)) {}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">accept</span><span class="hljs-params">(Visitor&amp; v)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ v.<span class="hljs-built_in">visit</span>(*<span class="hljs-keyword">this</span>); }
+    ExprPtr lhs, rhs;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Mul</span> <span class="hljs-keyword">final</span> : Expr {
+    <span class="hljs-built_in">Mul</span>(ExprPtr l, ExprPtr r) : <span class="hljs-built_in">lhs</span>(std::<span class="hljs-built_in">move</span>(l)), <span class="hljs-built_in">rhs</span>(std::<span class="hljs-built_in">move</span>(r)) {}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">accept</span><span class="hljs-params">(Visitor&amp; v)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ v.<span class="hljs-built_in">visit</span>(*<span class="hljs-keyword">this</span>); }
+    ExprPtr lhs, rhs;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> ExprPtr <span class="hljs-title">num</span><span class="hljs-params">(<span class="hljs-type">long</span> v)</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;Num&gt;(v); }
+<span class="hljs-function"><span class="hljs-type">static</span> ExprPtr <span class="hljs-title">add</span><span class="hljs-params">(ExprPtr l, ExprPtr r)</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;Add&gt;(std::<span class="hljs-built_in">move</span>(l), std::<span class="hljs-built_in">move</span>(r)); }
+<span class="hljs-function"><span class="hljs-type">static</span> ExprPtr <span class="hljs-title">mul</span><span class="hljs-params">(ExprPtr l, ExprPtr r)</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;Mul&gt;(std::<span class="hljs-built_in">move</span>(l), std::<span class="hljs-built_in">move</span>(r)); }
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Evaluator</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Visitor {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">long</span> <span class="hljs-title">eval</span><span class="hljs-params">(<span class="hljs-type">const</span> Expr&amp; e)</span> </span>{ e.<span class="hljs-built_in">accept</span>(*<span class="hljs-keyword">this</span>); <span class="hljs-keyword">return</span> result_; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">visit</span><span class="hljs-params">(<span class="hljs-type">const</span> Num&amp; n)</span> <span class="hljs-keyword">override</span> </span>{ result_ = n.value; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">visit</span><span class="hljs-params">(<span class="hljs-type">const</span> Add&amp; a)</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-type">long</span> l = <span class="hljs-built_in">eval</span>(*a.lhs); result_ = l + <span class="hljs-built_in">eval</span>(*a.rhs); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">visit</span><span class="hljs-params">(<span class="hljs-type">const</span> Mul&amp; m)</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-type">long</span> l = <span class="hljs-built_in">eval</span>(*m.lhs); result_ = l * <span class="hljs-built_in">eval</span>(*m.rhs); }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">long</span> result_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Printer</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Visitor {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::string <span class="hljs-title">print</span><span class="hljs-params">(<span class="hljs-type">const</span> Expr&amp; e)</span> </span>{ out_.<span class="hljs-built_in">clear</span>(); e.<span class="hljs-built_in">accept</span>(*<span class="hljs-keyword">this</span>); <span class="hljs-keyword">return</span> out_; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">visit</span><span class="hljs-params">(<span class="hljs-type">const</span> Num&amp; n)</span> <span class="hljs-keyword">override</span> </span>{ out_ += std::<span class="hljs-built_in">to_string</span>(n.value); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">visit</span><span class="hljs-params">(<span class="hljs-type">const</span> Add&amp; a)</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-built_in">binary</span>(*a.lhs, <span class="hljs-string">&quot; + &quot;</span>, *a.rhs); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">visit</span><span class="hljs-params">(<span class="hljs-type">const</span> Mul&amp; m)</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-built_in">binary</span>(*m.lhs, <span class="hljs-string">&quot; * &quot;</span>, *m.rhs); }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">binary</span><span class="hljs-params">(<span class="hljs-type">const</span> Expr&amp; l, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* op, <span class="hljs-type">const</span> Expr&amp; r)</span> </span>{
+        out_ += <span class="hljs-string">&#x27;(&#x27;</span>;
+        l.<span class="hljs-built_in">accept</span>(*<span class="hljs-keyword">this</span>);
+        out_ += op;
+        r.<span class="hljs-built_in">accept</span>(*<span class="hljs-keyword">this</span>);
+        out_ += <span class="hljs-string">&#x27;)&#x27;</span>;
+    }
+    std::string out_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    ExprPtr exprs[] = {<span class="hljs-built_in">mul</span>(<span class="hljs-built_in">add</span>(<span class="hljs-built_in">num</span>(<span class="hljs-number">2</span>), <span class="hljs-built_in">num</span>(<span class="hljs-number">3</span>)), <span class="hljs-built_in">num</span>(<span class="hljs-number">4</span>)), <span class="hljs-built_in">add</span>(<span class="hljs-built_in">num</span>(<span class="hljs-number">1</span>), <span class="hljs-built_in">mul</span>(<span class="hljs-built_in">num</span>(<span class="hljs-number">2</span>), <span class="hljs-built_in">num</span>(<span class="hljs-number">-5</span>)))};
+    Printer printer;
+    Evaluator evaluator;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; e : exprs) std::cout &lt;&lt; printer.<span class="hljs-built_in">print</span>(*e) &lt;&lt; <span class="hljs-string">&quot; = &quot;</span> &lt;&lt; evaluator.<span class="hljs-built_in">eval</span>(*e) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch02-visitor">((2 + 3) * 4) = 20
+(1 + (2 * -5)) = -9</pre>
+    <p><b>Complexity and pitfalls.</b> O(n) per traversal, two virtual calls per node. Pitfalls: in <code>Evaluator</code>, storing the left result in a local before evaluating the right side matters, because both recursive calls overwrite <code>result_</code>; forward declarations of every node are needed before <code>Visitor</code>; and deep trees recurse, so a pathological input can overflow the stack (an explicit stack fixes that). Interviewers often follow up with "how would you add a <code>Sub</code> node?" (every visitor changes) and "how is this different from <code>std::visit</code>?" (closed set, no heap, no virtual calls).</p>
+    <p class="rating">Estimated rating: ~1500 · classic pattern; the subtle part is explaining why two dispatches recover two types</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Hand-rolled RTTI. The codebase is built with <code>-fno-rtti</code>, so <code>dynamic_cast</code> is unavailable. Implement LLVM-style <code>isa&lt;T&gt;</code>, <code>dyn_cast&lt;T&gt;</code> and <code>cast&lt;T&gt;</code> for a hierarchy <code>Shape</code> → <code>Polygon</code> → {<code>Square</code>, <code>Triangle</code>} and <code>Shape</code> → <code>Circle</code>, including a check for the intermediate class <code>Polygon</code>. Use it to sum polygon sides and square side lengths.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Store a kind enum in the base, set by each constructor. Order the enumerators so that each intermediate class covers a contiguous range (all polygons between <code>K_Square</code> and <code>K_LastPolygon</code>); then each class's static <code>classof</code> is one or two comparisons. <code>dyn_cast</code> checks <code>classof</code> and then does a <code>static_cast</code>, which is safe because the check proved the type. <code>cast</code> asserts instead of checking. This is exactly how LLVM's <code>llvm/Support/Casting.h</code> works.</p>
+<pre data-run="ch02-llvm-rtti" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cassert&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Shape</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">enum</span> <span class="hljs-title class_">Kind</span> { K_Square, K_Triangle, K_LastPolygon = K_Triangle, K_Circle };
+    <span class="hljs-function">Kind <span class="hljs-title">kind</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> kind_; }
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Shape</span>() = <span class="hljs-keyword">default</span>;  <span class="hljs-comment">// only so unique_ptr&lt;Shape&gt; deletes correctly</span>
+<span class="hljs-keyword">protected</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Shape</span><span class="hljs-params">(Kind k)</span> : kind_(k) {</span>}
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">const</span> Kind kind_;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Polygon</span> : <span class="hljs-keyword">public</span> Shape {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">sides</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> sides_; }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">classof</span><span class="hljs-params">(<span class="hljs-type">const</span> Shape* s)</span> </span>{ <span class="hljs-keyword">return</span> s-&gt;<span class="hljs-built_in">kind</span>() &gt;= K_Square &amp;&amp; s-&gt;<span class="hljs-built_in">kind</span>() &lt;= K_LastPolygon; }
+<span class="hljs-keyword">protected</span>:
+    <span class="hljs-built_in">Polygon</span>(Kind k, <span class="hljs-type">int</span> n) : <span class="hljs-built_in">Shape</span>(k), <span class="hljs-built_in">sides_</span>(n) {}
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">int</span> sides_;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Square</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Polygon {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Square</span><span class="hljs-params">(<span class="hljs-type">double</span> s)</span> : Polygon(K_Square, <span class="hljs-number">4</span>), side(s) {</span>}
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">classof</span><span class="hljs-params">(<span class="hljs-type">const</span> Shape* s)</span> </span>{ <span class="hljs-keyword">return</span> s-&gt;<span class="hljs-built_in">kind</span>() == K_Square; }
+    <span class="hljs-type">double</span> side;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Triangle</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Polygon {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Triangle</span>() : <span class="hljs-built_in">Polygon</span>(K_Triangle, <span class="hljs-number">3</span>) {}
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">classof</span><span class="hljs-params">(<span class="hljs-type">const</span> Shape* s)</span> </span>{ <span class="hljs-keyword">return</span> s-&gt;<span class="hljs-built_in">kind</span>() == K_Triangle; }
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Circle</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Shape {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Circle</span><span class="hljs-params">(<span class="hljs-type">double</span> r)</span> : Shape(K_Circle), radius(r) {</span>}
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">classof</span><span class="hljs-params">(<span class="hljs-type">const</span> Shape* s)</span> </span>{ <span class="hljs-keyword">return</span> s-&gt;<span class="hljs-built_in">kind</span>() == K_Circle; }
+    <span class="hljs-type">double</span> radius;
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">To</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">From</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">isa</span><span class="hljs-params">(<span class="hljs-type">const</span> From* p)</span> </span>{ <span class="hljs-keyword">return</span> To::<span class="hljs-built_in">classof</span>(p); }
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">To</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">From</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> To* <span class="hljs-title">dyn_cast</span><span class="hljs-params">(From* p)</span> </span>{ <span class="hljs-keyword">return</span> p &amp;&amp; To::<span class="hljs-built_in">classof</span>(p) ? <span class="hljs-built_in">static_cast</span>&lt;To*&gt;(p) : <span class="hljs-literal">nullptr</span>; }
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">To</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">From</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> To* <span class="hljs-title">cast</span><span class="hljs-params">(From* p)</span> </span>{
+    <span class="hljs-built_in">assert</span>(<span class="hljs-built_in">isa</span>&lt;To&gt;(p) &amp;&amp; <span class="hljs-string">&quot;cast&lt;&gt; to the wrong type&quot;</span>);
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;To*&gt;(p);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::unique_ptr&lt;Shape&gt;&gt; shapes;
+    shapes.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Square&gt;(<span class="hljs-number">2</span>));
+    shapes.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Circle&gt;(<span class="hljs-number">1</span>));
+    shapes.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Triangle&gt;());
+    shapes.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Square&gt;(<span class="hljs-number">3</span>));
+
+    <span class="hljs-type">int</span> polygons = <span class="hljs-number">0</span>, sides = <span class="hljs-number">0</span>;
+    <span class="hljs-type">double</span> square_sides = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; s : shapes) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span>* p = <span class="hljs-built_in">dyn_cast</span>&lt;Polygon&gt;(s.<span class="hljs-built_in">get</span>())) { ++polygons; sides += p-&gt;<span class="hljs-built_in">sides</span>(); }
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span>* sq = <span class="hljs-built_in">dyn_cast</span>&lt;Square&gt;(s.<span class="hljs-built_in">get</span>())) square_sides += sq-&gt;side;
+    }
+    std::cout &lt;&lt; <span class="hljs-string">&quot;polygons=&quot;</span> &lt;&lt; polygons &lt;&lt; <span class="hljs-string">&quot; sides=&quot;</span> &lt;&lt; sides &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;square side sum=&quot;</span> &lt;&lt; square_sides &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;circle radius=&quot;</span> &lt;&lt; <span class="hljs-built_in">cast</span>&lt;Circle&gt;(shapes[<span class="hljs-number">1</span>].<span class="hljs-built_in">get</span>())-&gt;radius &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;isa&lt;Circle&gt;(square)=&quot;</span> &lt;&lt; <span class="hljs-built_in">isa</span>&lt;Circle&gt;(shapes[<span class="hljs-number">0</span>].<span class="hljs-built_in">get</span>()) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch02-llvm-rtti">polygons=3 sides=11
+square side sum=5
+circle radius=1
+isa&lt;Circle&gt;(square)=0</pre>
+    <p><b>Complexity and pitfalls.</b> Each check is O(1) with no memory access beyond the kind field, much cheaper than <code>dynamic_cast</code>'s hierarchy walk. Pitfalls: adding a new polygon after <code>K_LastPolygon</code> silently breaks <code>Polygon::classof</code>, so new kinds must go inside the range and the "last" marker must move; the hierarchy is closed (a plugin cannot add a kind without editing the enum); and <code>cast</code> becomes an unchecked <code>static_cast</code> in release builds where <code>assert</code> is compiled out.</p>
+    <p class="rating">Estimated rating: ~1600 · small code, but the range trick for intermediate classes and the safety argument are what interviewers probe</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Self-registering plugin factory. Design a <code>CodecRegistry</code> that maps names to factories returning <code>std::unique_ptr&lt;Codec&gt;</code>, where each concrete codec registers itself from its own source file with one line, without editing a central list. Requirements: registration must work regardless of the order in which translation units are initialised; <code>create</code> of an unknown name returns <code>nullptr</code>; duplicate names are rejected; <code>names()</code> lists registered codecs in sorted order.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> The registry is a function-local static ("Meyers singleton"), created on first use, so a static registration object in any translation unit can safely call into it during static initialisation: this sidesteps the static initialisation order fiasco covered in <a href="#ch03">Ch 3</a>. A small <code>Register&lt;T&gt;</code> helper turns registration into one line per codec. A <code>std::map</code> keeps names sorted and <code>emplace</code> reports duplicates.</p>
+<pre data-run="ch02-registry" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cctype&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Codec</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Codec</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> std::string <span class="hljs-title">encode</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; in)</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">CodecRegistry</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">using</span> Factory = std::function&lt;std::<span class="hljs-built_in">unique_ptr</span>&lt;Codec&gt;()&gt;;
+    <span class="hljs-function"><span class="hljs-type">static</span> CodecRegistry&amp; <span class="hljs-title">instance</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-type">static</span> CodecRegistry registry;  <span class="hljs-comment">// constructed on first call, thread-safe since C++11</span>
+        <span class="hljs-keyword">return</span> registry;
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">add</span><span class="hljs-params">(std::string name, Factory f)</span> </span>{ <span class="hljs-keyword">return</span> factories_.<span class="hljs-built_in">emplace</span>(std::<span class="hljs-built_in">move</span>(name), std::<span class="hljs-built_in">move</span>(f)).second; }
+    <span class="hljs-function">std::unique_ptr&lt;Codec&gt; <span class="hljs-title">create</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; name)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">auto</span> it = factories_.<span class="hljs-built_in">find</span>(name);
+        <span class="hljs-keyword">return</span> it == factories_.<span class="hljs-built_in">end</span>() ? <span class="hljs-literal">nullptr</span> : it-&gt;<span class="hljs-built_in">second</span>();
+    }
+    <span class="hljs-function">std::vector&lt;std::string&gt; <span class="hljs-title">names</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        std::vector&lt;std::string&gt; out;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; [name, factory] : factories_) out.<span class="hljs-built_in">push_back</span>(name);
+        <span class="hljs-keyword">return</span> out;
+    }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-built_in">CodecRegistry</span>() = <span class="hljs-keyword">default</span>;
+    std::map&lt;std::string, Factory&gt; factories_;
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Register</span> {
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Register</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* name)</span> </span>{
+        CodecRegistry::<span class="hljs-built_in">instance</span>().<span class="hljs-built_in">add</span>(name, [] { <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;T&gt;(); });
+    }
+};
+
+<span class="hljs-comment">// Each block below would normally live in its own .cpp file.</span>
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Upper</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Codec {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::string <span class="hljs-title">encode</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; in)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{
+        std::string out = in;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">char</span>&amp; c : out) c = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>&gt;(std::<span class="hljs-built_in">toupper</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(c)));
+        <span class="hljs-keyword">return</span> out;
+    }
+};
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> Register&lt;Upper&gt; <span class="hljs-title">reg_upper</span><span class="hljs-params">(<span class="hljs-string">&quot;upper&quot;</span>)</span></span>;
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Reverse</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Codec {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::string <span class="hljs-title">encode</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; in)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> {in.<span class="hljs-built_in">rbegin</span>(), in.<span class="hljs-built_in">rend</span>()}; }
+};
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> Register&lt;Reverse&gt; <span class="hljs-title">reg_reverse</span><span class="hljs-params">(<span class="hljs-string">&quot;reverse&quot;</span>)</span></span>;
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Rot13</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Codec {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::string <span class="hljs-title">encode</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; in)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{
+        std::string out = in;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">char</span>&amp; c : out) {
+            <span class="hljs-keyword">if</span> (c &gt;= <span class="hljs-string">&#x27;a&#x27;</span> &amp;&amp; c &lt;= <span class="hljs-string">&#x27;z&#x27;</span>) c = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>&gt;(<span class="hljs-string">&#x27;a&#x27;</span> + (c - <span class="hljs-string">&#x27;a&#x27;</span> + <span class="hljs-number">13</span>) % <span class="hljs-number">26</span>);
+            <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> (c &gt;= <span class="hljs-string">&#x27;A&#x27;</span> &amp;&amp; c &lt;= <span class="hljs-string">&#x27;Z&#x27;</span>) c = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>&gt;(<span class="hljs-string">&#x27;A&#x27;</span> + (c - <span class="hljs-string">&#x27;A&#x27;</span> + <span class="hljs-number">13</span>) % <span class="hljs-number">26</span>);
+        }
+        <span class="hljs-keyword">return</span> out;
+    }
+};
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> Register&lt;Rot13&gt; <span class="hljs-title">reg_rot13</span><span class="hljs-params">(<span class="hljs-string">&quot;rot13&quot;</span>)</span></span>;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span>&amp; registry = CodecRegistry::<span class="hljs-built_in">instance</span>();
+    <span class="hljs-type">const</span> <span class="hljs-keyword">auto</span> names = registry.<span class="hljs-built_in">names</span>();
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; names.<span class="hljs-built_in">size</span>(); ++i) std::cout &lt;&lt; (i ? <span class="hljs-string">&quot; &quot;</span> : <span class="hljs-string">&quot;&quot;</span>) &lt;&lt; names[i];
+    std::cout &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* name : {<span class="hljs-string">&quot;upper&quot;</span>, <span class="hljs-string">&quot;rot13&quot;</span>, <span class="hljs-string">&quot;reverse&quot;</span>, <span class="hljs-string">&quot;zip&quot;</span>}) {
+        <span class="hljs-keyword">auto</span> codec = registry.<span class="hljs-built_in">create</span>(name);
+        std::cout &lt;&lt; name &lt;&lt; <span class="hljs-string">&quot;: &quot;</span> &lt;&lt; (codec ? codec-&gt;<span class="hljs-built_in">encode</span>(<span class="hljs-string">&quot;Hello&quot;</span>) : <span class="hljs-string">&quot;&lt;unknown&gt;&quot;</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+    std::cout &lt;&lt; <span class="hljs-string">&quot;duplicate accepted: &quot;</span> &lt;&lt; registry.<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;upper&quot;</span>, [] { <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;Reverse&gt;(); }) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch02-registry">reverse rot13 upper
+upper: HELLO
+rot13: Uryyb
+reverse: olleH
+zip: &lt;unknown&gt;
+duplicate accepted: 0</pre>
+    <p><b>Complexity and pitfalls.</b> Lookup is O(log n). Pitfalls worth raising: if codecs live in a static library, the linker drops object files that nothing references, so their registration objects never run (fix with <code>--whole-archive</code> or an explicit reference); registration during static initialisation is single-threaded, but adding codecs later from several threads needs a mutex; and the registry must not be a namespace-scope global, because another TU's registration could run before it is constructed.</p>
+    <p class="rating">Estimated rating: ~1500 · easy code; the static initialisation and linker questions are what make it senior-level</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch02-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>Dispatch</b> happens only for a virtual function, called through a pointer or reference (or <code>this</code>), with an unqualified name. Overload resolution and default arguments always use the static type.</li>
+<li><b>Layout (Itanium ABI):</b> one vtable per class in read-only data; one vptr per polymorphic subobject at its offset 0. The vtable holds virtual base offsets, offset-to-top, the RTTI pointer, then function slots, including two destructor slots. A virtual call is two loads and an indirect call; the real cost is lost inlining and mispredicted branches.</li>
+<li><b>Always write <code>override</code></b>; a missing <code>const</code> or a different parameter type silently creates a new function that hides the base one. Use <code>using Base::f;</code> to unhide overloads. <code>final</code> enables devirtualisation when the static type is the final class.</li>
+<li><b>Destructors:</b> public and virtual, or protected and non-virtual. <code>unique_ptr&lt;Base&gt;</code> needs the virtual destructor; <code>shared_ptr&lt;Base&gt;</code> created from a <code>Derived</code> does not. <code>delete[]</code> through a base pointer is undefined even with a virtual destructor.</li>
+<li><b>Slicing</b> happens on copy or assignment by value into a base; the copy gets the base vptr. Pass by reference, store smart pointers, catch by <code>const&amp;</code>, protect base copy operations, add <code>clone()</code>.</li>
+<li><b>Constructors and destructors</b> dispatch to the class currently being built or destroyed, never further down. An indirect call to a pure virtual function there aborts with "pure virtual method called".</li>
+<li><b>Multiple inheritance</b> adjusts pointers on conversion and uses thunks. Non-virtual diamonds duplicate the base and make access ambiguous; virtual inheritance shares one base, which the most derived class constructs first. <code>static_cast</code> down from a virtual base is ill-formed.</li>
+<li><b>RTTI:</b> <code>dynamic_cast</code> returns null for pointers and throws <code>bad_cast</code> for references; <code>typeid</code> sees the dynamic type only for polymorphic glvalues. Covariant returns work for raw pointers and references, not smart pointers.</li>
+</ul>
+</section>

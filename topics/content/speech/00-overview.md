@@ -54,4 +54,4 @@ Every block with an output below it was executed when the site was built, and th
 
 Dockerfiles, Kubernetes YAML, browser JavaScript and SDP samples cannot run in this site's build, so they appear as plain blocks with no output, and are labelled illustrative. Their syntax follows the real formats, and field names can change between versions, so check them against the documentation for your version. Model names such as Whisper, Silero VAD and pyannote.audio are given for orientation. Their details change, so check the current release before quoting specifics.
 
-You should know Python and basic deep learning. TCP and UDP themselves are covered in the C++ guide's [networking chapter](../../guide/#ch08), and sampling and the FFT in the [signals guide](../signals-hw/#ch01).
+You should know Python and basic deep learning. TCP and UDP themselves are covered in the C++ guide's [networking chapter](../../guide/os/#ch05), and sampling and the FFT in the [signals guide](../signals-hw/#ch01).

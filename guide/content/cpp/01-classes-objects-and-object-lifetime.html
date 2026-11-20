@@ -1,0 +1,918 @@
+---
+title: Classes, objects and object lifetime
+part: Part A · Object-oriented programming
+lede: A class bundles data with the rules that keep that data valid, and an object is a region of memory that obeys those rules from its constructor to its destructor. This chapter covers how objects are laid out, how they are built and destroyed, and which special member functions the compiler writes for you. Interviewers use these questions to find out whether you can write a resource-owning class that does not leak, double free or copy by accident.
+desc: Encapsulation, constructors, destructors, initialiser lists, rule of 3/5/0
+hours: 4
+prereqs: pointers, references, basic templates
+---
+<section id="ch01-objects" data-roles="th"><div class="sec-head"><h2>Classes and objects</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+  <p>A <b>class</b> is a type: a description of what data an object holds and which operations are allowed on it. An <b>object</b> is an instance of that type, a block of bytes with a lifetime. The class exists only at compile time. At run time there are just objects and the machine code of their member functions.</p>
+  <p>The two keywords <code>class</code> and <code>struct</code> define the same kind of thing. The only differences are defaults: members of a <code>struct</code> are public by default and it inherits publicly by default, while a <code>class</code> is private on both counts. By convention, <code>struct</code> is used for plain bundles of data with no invariant, and <code>class</code> for types that protect an invariant.</p>
+
+  <h3 id="ch01-layout">What an object looks like in memory</h3>
+  <p>Only non-static data members take space in an object. Member functions live once in the code segment and are shared by all objects. They receive the object's address as a hidden <code>this</code> parameter. Static data members live once per program, outside every object. A class with virtual functions also carries a hidden pointer to its vtable (<a href="#ch02">Ch 2</a>).</p>
+  <p>Members are stored in declaration order, and each one is placed at an offset that is a multiple of its alignment. The compiler inserts <b>padding</b> bytes to satisfy this, and it pads the end of the object so that in an array every element is aligned too. So the order in which you declare members can change <code>sizeof</code>:</p>
+<pre data-run="ch01-layout"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">A</span> { <span class="hljs-type">char</span> c; <span class="hljs-type">int</span> i; <span class="hljs-type">char</span> d; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">B</span> { <span class="hljs-type">int</span> i; <span class="hljs-type">char</span> c; <span class="hljs-type">char</span> d; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Empty</span> {};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">WithFn</span> { <span class="hljs-type">int</span> x; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">()</span> </span>{} <span class="hljs-type">static</span> <span class="hljs-type">int</span> count; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;A=%zu B=%zu Empty=%zu WithFn=%zu\n&quot;</span>,
+                <span class="hljs-built_in">sizeof</span>(A), <span class="hljs-built_in">sizeof</span>(B), <span class="hljs-built_in">sizeof</span>(Empty), <span class="hljs-built_in">sizeof</span>(WithFn));
+}</code></pre>
+<pre class="out" data-out="ch01-layout">A=12 B=8 Empty=1 WithFn=4</pre>
+  <figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 200" role="img" aria-label="Member order changes padding: struct A is 12 bytes and struct B is 8 bytes">
+    <text x="20" y="64" class="t-bold">struct A</text><text x="20" y="80" class="t-small t-muted">sizeof 12</text>
+    <rect x="140" y="40" width="44" height="40" class="d-acc"/><text x="162" y="65" text-anchor="middle" class="t-mono">c</text>
+    <rect x="184" y="40" width="132" height="40" class="d-soft"/><text x="250" y="65" text-anchor="middle" class="t-small t-muted">padding 3</text>
+    <rect x="316" y="40" width="176" height="40" class="d-key"/><text x="404" y="65" text-anchor="middle" class="t-mono">int i</text>
+    <rect x="492" y="40" width="44" height="40" class="d-acc"/><text x="514" y="65" text-anchor="middle" class="t-mono">d</text>
+    <rect x="536" y="40" width="132" height="40" class="d-soft"/><text x="602" y="65" text-anchor="middle" class="t-small t-muted">tail padding 3</text>
+    <text x="140" y="32" text-anchor="middle" class="t-small t-muted">0</text><text x="316" y="32" text-anchor="middle" class="t-small t-muted">4</text><text x="492" y="32" text-anchor="middle" class="t-small t-muted">8</text><text x="668" y="32" text-anchor="middle" class="t-small t-muted">12</text>
+    <text x="20" y="144" class="t-bold">struct B</text><text x="20" y="160" class="t-small t-muted">sizeof 8</text>
+    <rect x="140" y="120" width="176" height="40" class="d-key"/><text x="228" y="145" text-anchor="middle" class="t-mono">int i</text>
+    <rect x="316" y="120" width="44" height="40" class="d-acc"/><text x="338" y="145" text-anchor="middle" class="t-mono">c</text>
+    <rect x="360" y="120" width="44" height="40" class="d-acc"/><text x="382" y="145" text-anchor="middle" class="t-mono">d</text>
+    <rect x="404" y="120" width="88" height="40" class="d-soft"/><text x="448" y="145" text-anchor="middle" class="t-small t-muted">pad 2</text>
+    <text x="140" y="186" class="t-small t-muted">Each cell is one byte. int needs a 4-byte aligned offset, and the total size rounds up to a multiple of 4.</text>
+  </svg></div><figcaption><b>Member order changes the size.</b> In <code>A</code> the <code>int</code> must start at offset 4, so 3 bytes are wasted after <code>c</code> and 3 more at the end. Putting the largest member first, as <code>B</code> does, packs the two chars together and saves 4 bytes per object.</figcaption></figure>
+  <p>An empty class still has size 1, because two distinct objects must have distinct addresses. When an empty class is used as a base class, the <b>empty base optimisation</b> lets it take zero bytes. C++20 <code>[[no_unique_address]]</code> gives members the same freedom.</p>
+  <div class="callout key"><p class="callout-title">Know this cold</p><p>Functions, static members and type information add nothing to <code>sizeof</code>. Non-static data members, padding and (for polymorphic classes) the vptr are the only things that do.</p></div>
+</section>
+
+<section id="ch01-encapsulation" data-roles="th"><div class="sec-head"><h2>Encapsulation and invariants</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+  <p>An <b>invariant</b> is a condition that every object of a class must satisfy whenever outside code can see it. Examples: a fraction's denominator is never zero, a vector's size never exceeds its capacity, a string's buffer is always null-terminated. <b>Encapsulation</b> means making the data private, so that the only way to change it is through member functions that preserve the invariant. The constructor establishes the invariant, every public member function keeps it, and the destructor releases what the object owns.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Access</th><th>Who can use the member</th></tr></thead>
+    <tbody>
+      <tr><td><code>public</code></td><td>Any code</td></tr>
+      <tr><td><code>protected</code></td><td>Members and friends of the class, and members of derived classes (through a derived object)</td></tr>
+      <tr><td><code>private</code></td><td>Members and friends of the class only</td></tr>
+    </tbody>
+  </table></div>
+  <p>Access control is <b>per class, not per object</b>. A member function can read the private members of any object of its own class, which is how copy constructors and <code>operator==</code> read the other object's data. Access control is checked at compile time only. It has no run-time cost and is no security boundary, because a pointer cast can still reach the bytes.</p>
+  <div class="callout trap"><p class="callout-title">Interview trap</p><p>A getter and a setter for every field is not encapsulation. If <code>setDenominator(0)</code> is allowed, the invariant is gone and the class is a struct with extra typing. Expose operations that mean something (<code>add</code>, <code>push_back</code>, <code>withdraw</code>) and validate inside them.</p></div>
+</section>
+
+<section id="ch01-constructors" data-roles="th"><div class="sec-head"><h2>Constructors</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+  <p>A constructor turns raw storage into a valid object. It has the class's name, has no return type, and runs automatically when the object is created. A class can have several constructors, distinguished by their parameters.</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Kind</th><th>Signature</th><th>Called by</th></tr></thead>
+    <tbody>
+      <tr><td>Default</td><td><code>T()</code> (or every parameter defaulted)</td><td><code>T t;</code> <code>T t{};</code> <code>new T</code>, arrays of T</td></tr>
+      <tr><td>Parameterised</td><td><code>T(int, std::string)</code></td><td><code>T t(1, "x");</code> <code>T t{1, "x"};</code></td></tr>
+      <tr><td>Copy</td><td><code>T(const T&amp;)</code></td><td><code>T b = a;</code> <code>T b(a);</code>, pass or return an lvalue by value</td></tr>
+      <tr><td>Move</td><td><code>T(T&amp;&amp;) noexcept</code></td><td><code>T b = std::move(a);</code>, from temporaries when not elided (<a href="#ch18">Ch 18</a>)</td></tr>
+      <tr><td>Converting</td><td>any non-<code>explicit</code> constructor callable with one argument</td><td>implicit conversions such as <code>T t = 5;</code></td></tr>
+      <tr><td>Delegating</td><td><code>T() : T(0, "") {}</code></td><td>a constructor that forwards to another one of the same class</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="ch01-explicit">explicit and implicit conversions</h3>
+  <p>A constructor callable with one argument doubles as an implicit conversion. That is useful for <code>std::string s = "hi";</code> and dangerous for <code>Meters m = 5.0;</code> or a function <code>void sleep(Seconds)</code> called as <code>sleep(5)</code>. Mark single-argument constructors <code>explicit</code> unless the conversion is lossless and obvious. An <code>explicit</code> constructor still works with direct initialisation (<code>Meters m(5.0)</code> or <code>Meters m{5.0}</code>), but it is rejected for copy initialisation (<code>Meters m = 5.0</code>) and for implicit argument conversion.</p>
+
+  <h3 id="ch01-default-delete">= default, = delete and default member initialisers</h3>
+  <p><code>= default</code> asks the compiler for its usual implementation, and <code>= delete</code> makes any call ill-formed. A deleted function still takes part in overload resolution, so <code>void f(double); void f(int) = delete;</code> blocks <code>f(3)</code> instead of silently converting. A default member initialiser (<code>int count = 0;</code>) is used by every constructor that does not mention that member in its initialiser list, which removes a whole class of "forgot to initialise in one constructor" bugs.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">class</span> <span class="hljs-title class_">Connection</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Connection</span>() : <span class="hljs-built_in">Connection</span>(<span class="hljs-string">&quot;localhost&quot;</span>, <span class="hljs-number">80</span>) {}
+    <span class="hljs-built_in">Connection</span>(std::string host, <span class="hljs-type">int</span> port) : <span class="hljs-built_in">host_</span>(std::<span class="hljs-built_in">move</span>(host)), <span class="hljs-built_in">port_</span>(port) {}
+    <span class="hljs-built_in">Connection</span>(<span class="hljs-type">const</span> Connection&amp;) = <span class="hljs-keyword">delete</span>;
+    Connection&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Connection&amp;) = <span class="hljs-keyword">delete</span>;
+<span class="hljs-keyword">private</span>:
+    std::string host_;
+    <span class="hljs-type">int</span> port_;
+    <span class="hljs-type">int</span> retries_ = <span class="hljs-number">3</span>;
+};</code></pre>
+  <div class="callout trap"><p class="callout-title">Interview trap</p><p><code>T t();</code> does not create an object. It declares a function named <code>t</code> that returns a <code>T</code> (the "most vexing parse"). Write <code>T t;</code> or <code>T t{};</code> instead.</p></div>
+</section>
+
+<section id="ch01-init-lists" data-roles="th"><div class="sec-head"><h2>Member initialiser lists and construction order</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+  <p>A constructor body runs after every base and member has been constructed. So assigning to members inside the body means constructing them first (default constructor) and then assigning (assignment operator). The member initialiser list constructs each member directly with the right value:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-built_in">Person</span>(std::string name) : <span class="hljs-built_in">name_</span>(std::<span class="hljs-built_in">move</span>(name)), <span class="hljs-built_in">id_</span>(next_id++) {}   <span class="hljs-comment">// construct once</span>
+<span class="hljs-built_in">Person</span>(std::string name) { name_ = name; id_ = next_id++; }            <span class="hljs-comment">// default-construct, then assign</span></code></pre>
+  <p>Some members <b>must</b> go in the initialiser list, because they cannot be assigned or default-constructed afterwards: <code>const</code> members, reference members, members of a type with no default constructor, and base classes that need arguments.</p>
+
+  <h3 id="ch01-order">The order is fixed by the class, not by the list</h3>
+  <p>Construction always happens in this order:</p>
+  <ol>
+    <li>Virtual base classes (only in the most-derived class).</li>
+    <li>Direct base classes, in the order they appear in the base-specifier list.</li>
+    <li>Non-static data members, in <b>declaration order</b>.</li>
+    <li>The constructor body.</li>
+  </ol>
+  <p>Destruction runs exactly in reverse. The order in which you write the initialiser list is ignored. GCC and Clang warn about a mismatch with <code>-Wreorder</code>, which <code>-Wall</code> enables. The order matters whenever one member's initialiser reads another member.</p>
+  <figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="Construction runs base, members in declaration order, then body; destruction runs in reverse">
+    <defs><marker id="ch01-c01a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+    <text x="20" y="30" class="t-bold">construction</text>
+    <rect x="20" y="44" width="190" height="48" rx="8" class="d-acc"/><text x="115" y="66" text-anchor="middle" class="t-bold">1. base classes</text><text x="115" y="82" text-anchor="middle" class="t-small t-muted">in base-list order</text>
+    <rect x="265" y="44" width="190" height="48" rx="8" class="d-key"/><text x="360" y="66" text-anchor="middle" class="t-bold">2. data members</text><text x="360" y="82" text-anchor="middle" class="t-small t-muted">in declaration order</text>
+    <rect x="510" y="44" width="190" height="48" rx="8" class="d-box"/><text x="605" y="66" text-anchor="middle" class="t-bold">3. constructor body</text><text x="605" y="82" text-anchor="middle" class="t-small t-muted">object is now complete</text>
+    <line x1="210" y1="68" x2="262" y2="68" class="d-line" marker-end="url(#ch01-c01a)"/>
+    <line x1="455" y1="68" x2="507" y2="68" class="d-line" marker-end="url(#ch01-c01a)"/>
+    <text x="20" y="136" class="t-bold">destruction</text>
+    <rect x="20" y="150" width="190" height="48" rx="8" class="d-box"/><text x="115" y="172" text-anchor="middle" class="t-bold">1. destructor body</text><text x="115" y="188" text-anchor="middle" class="t-small t-muted">members still alive</text>
+    <rect x="265" y="150" width="190" height="48" rx="8" class="d-key"/><text x="360" y="172" text-anchor="middle" class="t-bold">2. data members</text><text x="360" y="188" text-anchor="middle" class="t-small t-muted">reverse declaration order</text>
+    <rect x="510" y="150" width="190" height="48" rx="8" class="d-acc"/><text x="605" y="172" text-anchor="middle" class="t-bold">3. base classes</text><text x="605" y="188" text-anchor="middle" class="t-small t-muted">reverse base-list order</text>
+    <line x1="210" y1="174" x2="262" y2="174" class="d-line" marker-end="url(#ch01-c01a)"/>
+    <line x1="455" y1="174" x2="507" y2="174" class="d-line" marker-end="url(#ch01-c01a)"/>
+    <text x="20" y="222" class="t-small t-muted">The order of the member initialiser list never changes these steps.</text>
+  </svg></div><figcaption><b>Objects are built from the inside out and torn down from the outside in.</b> When the destructor body runs, every member is still valid, and by the time the base destructor runs, the derived parts are gone.</figcaption></figure>
+  <p>This program traces the whole lifecycle:</p>
+<pre data-run="ch01-trace"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tracer</span> {
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* name;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Tracer</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* n)</span> : name(n) {</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ctor %s\n&quot;</span>, name); }
+    ~<span class="hljs-built_in">Tracer</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;dtor %s\n&quot;</span>, name); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-built_in">Base</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor Base&quot;</span>); }
+    ~<span class="hljs-built_in">Base</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor Base&quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Widget</span> : Base {
+    Tracer a{<span class="hljs-string">&quot;a&quot;</span>};
+    Tracer b;
+    <span class="hljs-built_in">Widget</span>() : <span class="hljs-built_in">b</span>(<span class="hljs-string">&quot;b&quot;</span>) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Widget body&quot;</span>); }
+    ~<span class="hljs-built_in">Widget</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;~Widget body&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Widget w;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;end of main&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch01-trace">ctor Base
+ctor a
+ctor b
+Widget body
+end of main
+~Widget body
+dtor b
+dtor a
+dtor Base</pre>
+</section>
+
+<section id="ch01-destructors" data-roles="th"><div class="sec-head"><h2>Destructors and RAII</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+  <p>A destructor (<code>~T()</code>) runs when an object's lifetime ends. It takes no arguments, cannot be overloaded, and is implicitly <code>noexcept</code>. When it runs depends on the storage duration:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Object</th><th>Destroyed</th></tr></thead>
+    <tbody>
+      <tr><td>Local variable</td><td>At the end of its scope, in reverse order of construction, including during stack unwinding from an exception</td></tr>
+      <tr><td>Temporary</td><td>At the end of the full expression, unless it is bound to a <code>const&amp;</code> or <code>&amp;&amp;</code> local, which extends its life to the reference's scope</td></tr>
+      <tr><td>Heap object</td><td>Only when you <code>delete</code> it (or a smart pointer does)</td></tr>
+      <tr><td>Array element</td><td>In reverse index order</td></tr>
+      <tr><td>Static or global</td><td>After <code>main</code> returns, in reverse order of construction</td></tr>
+      <tr><td>Member or base</td><td>After the enclosing object's destructor body, in reverse order</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="ch01-raii">RAII</h3>
+  <p><b>Resource Acquisition Is Initialisation</b> ties a resource (memory, a file, a lock, a socket) to an object's lifetime: acquire it in the constructor and release it in the destructor. Because destructors of locals run on every exit path, including <code>return</code>, <code>break</code> and exceptions, the release cannot be forgotten. <code>std::unique_ptr</code>, <code>std::lock_guard</code>, <code>std::fstream</code> and <code>std::vector</code> are all RAII types.</p>
+
+  <h3 id="ch01-ctor-throws">When a constructor throws</h3>
+  <p>An object whose constructor did not finish never existed, so <b>its destructor does not run</b>. The members and bases that had already been fully constructed <i>are</i> destroyed, in reverse order. So a class that grabs two raw resources in its constructor leaks the first one if acquiring the second one throws. The fix is to hold each resource in its own RAII member, such as a <code>unique_ptr</code>, so that each member cleans itself up.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">class</span> <span class="hljs-title class_">Bad</span> {
+    <span class="hljs-type">int</span>* a_; <span class="hljs-type">int</span>* b_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Bad</span>() : <span class="hljs-built_in">a_</span>(<span class="hljs-keyword">new</span> <span class="hljs-type">int</span>[<span class="hljs-number">100</span>]), <span class="hljs-built_in">b_</span>(<span class="hljs-keyword">new</span> <span class="hljs-type">int</span>[<span class="hljs-number">100</span>]) {}   <span class="hljs-comment">// if the second new throws, a_ leaks</span>
+    ~<span class="hljs-built_in">Bad</span>() { <span class="hljs-keyword">delete</span>[] a_; <span class="hljs-keyword">delete</span>[] b_; }
+};
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Good</span> {
+    std::unique_ptr&lt;<span class="hljs-type">int</span>[]&gt; a_ = std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>[]&gt;(<span class="hljs-number">100</span>);
+    std::unique_ptr&lt;<span class="hljs-type">int</span>[]&gt; b_ = std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>[]&gt;(<span class="hljs-number">100</span>);   <span class="hljs-comment">// a_ is destroyed if this throws</span>
+};</code></pre>
+  <div class="callout trap"><p class="callout-title">Interview trap</p><p>Never let an exception escape a destructor. Destructors are <code>noexcept</code> by default, so a throw calls <code>std::terminate</code>. Even with <code>noexcept(false)</code>, throwing while another exception is unwinding the stack terminates the program.</p></div>
+</section>
+
+<section id="ch01-special-members" data-roles="th"><div class="sec-head"><h2>The special member functions</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+  <p>The compiler can write six functions for you: the default constructor, the destructor, the copy constructor, copy assignment, the move constructor and move assignment. The generated versions work member by member. They copy, move, assign or destroy each base and member in order. Whether each one is generated depends on what you declared yourself:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>You declare</th><th>default ctor</th><th>destructor</th><th>copy ctor</th><th>copy assign</th><th>move ctor</th><th>move assign</th></tr></thead>
+    <tbody>
+      <tr><td>nothing</td><td>defaulted</td><td>defaulted</td><td>defaulted</td><td>defaulted</td><td>defaulted</td><td>defaulted</td></tr>
+      <tr><td>any constructor</td><td><b>not declared</b></td><td>defaulted</td><td>defaulted</td><td>defaulted</td><td>defaulted</td><td>defaulted</td></tr>
+      <tr><td>destructor</td><td>defaulted</td><td>yours</td><td>defaulted*</td><td>defaulted*</td><td><b>not declared</b></td><td><b>not declared</b></td></tr>
+      <tr><td>copy ctor</td><td><b>not declared</b></td><td>defaulted</td><td>yours</td><td>defaulted*</td><td><b>not declared</b></td><td><b>not declared</b></td></tr>
+      <tr><td>copy assign</td><td>defaulted</td><td>defaulted</td><td>defaulted*</td><td>yours</td><td><b>not declared</b></td><td><b>not declared</b></td></tr>
+      <tr><td>move ctor</td><td><b>not declared</b></td><td>defaulted</td><td><b>deleted</b></td><td><b>deleted</b></td><td>yours</td><td><b>not declared</b></td></tr>
+      <tr><td>move assign</td><td>defaulted</td><td>defaulted</td><td><b>deleted</b></td><td><b>deleted</b></td><td><b>not declared</b></td><td>yours</td></tr>
+    </tbody>
+  </table></div>
+  <p>* Generated, but deprecated since C++11: rely on it and a future standard may break your code. "Not declared" for a move operation is subtle. The class still works with <code>std::move</code>, but overload resolution then picks the copy operation, so a "move" silently copies.</p>
+  <div class="callout key"><p class="callout-title">Know this cold</p><p>Declaring a destructor, even an empty one or <code>~T() = default</code>, suppresses the implicit move operations. Declaring any move operation deletes both copy operations.</p></div>
+</section>
+
+<section id="ch01-rule-of-five" data-roles="th"><div class="sec-head"><h2>The rules of three, five and zero</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+  <p>If a class needs a hand-written destructor, it almost certainly owns a resource, and then the generated copy operations are wrong: they copy the pointer, not what it points to (a <b>shallow copy</b>), so two objects free the same memory.</p>
+  <ul>
+    <li><b>Rule of three</b> (C++98): if you write one of destructor, copy constructor or copy assignment, write all three.</li>
+    <li><b>Rule of five</b> (C++11): add the move constructor and move assignment, or the type will copy where it could move.</li>
+    <li><b>Rule of zero</b>: better still, write none of them. Hold resources in members that already manage themselves (<code>std::string</code>, <code>std::vector</code>, <code>std::unique_ptr</code>), and let the compiler generate correct code. Only classes whose whole job is managing one resource should implement the five.</li>
+  </ul>
+
+  <h3 id="ch01-buffer">A rule-of-five class with copy-and-swap</h3>
+  <p>The copy-and-swap idiom writes assignment once, taking its argument by value. The parameter is built by the copy constructor (from an lvalue) or by the move constructor (from an rvalue), and then swapped in. The old contents are released when the parameter is destroyed. This gives the strong exception guarantee and handles self-assignment for free.</p>
+<pre data-run="ch01-buffer" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Buffer</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Buffer</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> : size_(n), data_(new int[n]()) {</span>}
+    ~<span class="hljs-built_in">Buffer</span>() { <span class="hljs-keyword">delete</span>[] data_; }
+    <span class="hljs-built_in">Buffer</span>(<span class="hljs-type">const</span> Buffer&amp; other) : <span class="hljs-built_in">size_</span>(other.size_), <span class="hljs-built_in">data_</span>(<span class="hljs-keyword">new</span> <span class="hljs-type">int</span>[other.size_]) {
+        std::<span class="hljs-built_in">copy</span>(other.data_, other.data_ + size_, data_);
+    }
+    <span class="hljs-built_in">Buffer</span>(Buffer&amp;&amp; other) <span class="hljs-keyword">noexcept</span>
+        : <span class="hljs-built_in">size_</span>(std::<span class="hljs-built_in">exchange</span>(other.size_, <span class="hljs-number">0</span>)), <span class="hljs-built_in">data_</span>(std::<span class="hljs-built_in">exchange</span>(other.data_, <span class="hljs-literal">nullptr</span>)) {}
+    Buffer&amp; <span class="hljs-keyword">operator</span>=(Buffer other) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-built_in">swap</span>(other);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">swap</span><span class="hljs-params">(Buffer&amp; other)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-built_in">swap</span>(size_, other.size_);
+        std::<span class="hljs-built_in">swap</span>(data_, other.data_);
+    }
+    <span class="hljs-type">int</span>&amp; <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) { <span class="hljs-keyword">return</span> data_[i]; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">size_t</span> size_;
+    <span class="hljs-type">int</span>* data_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Buffer <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-number">3</span>)</span></span>;
+    a[<span class="hljs-number">0</span>] = <span class="hljs-number">7</span>;
+    Buffer b = a;
+    b[<span class="hljs-number">0</span>] = <span class="hljs-number">9</span>;
+    <span class="hljs-function">Buffer <span class="hljs-title">c</span><span class="hljs-params">(<span class="hljs-number">1</span>)</span></span>;
+    c = a;
+    c = std::<span class="hljs-built_in">move</span>(b);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d %zu %zu\n&quot;</span>, a[<span class="hljs-number">0</span>], c[<span class="hljs-number">0</span>], c.<span class="hljs-built_in">size</span>(), b.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch01-buffer">7 9 3 0</pre>
+  <p>Note that <code>size_</code> is declared before <code>data_</code>, and that the copy constructor's <code>new int[other.size_]</code> reads <code>other</code>, not its own <code>size_</code>. Both choices keep the code safe if someone reorders the members later.</p>
+  <div class="callout tip"><p class="callout-title">Tip</p><p>The by-value <code>operator=</code> costs one extra move when you assign from an rvalue, compared with a separate <code>operator=(Buffer&amp;&amp;)</code>, and it always allocates on copy even when the existing buffer is big enough. <code>std::vector</code> avoids both costs by writing the operators separately. Mention this trade-off when you show the idiom.</p></div>
+</section>
+
+<section id="ch01-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>What is the difference between <code>struct</code> and <code>class</code> in C++?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The defaults are the only difference. A <code>struct</code> has public members and public inheritance by default, while a <code>class</code> has private members and private inheritance by default.</p>
+      <p><b>Why.</b> Both can have constructors, virtual functions, templates and access specifiers. Candidates often say "structs cannot have member functions", which is true in C and false in C++. Convention: use <code>struct</code> for passive data with no invariant, and <code>class</code> when you protect one.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>Which members must be initialised in the member initialiser list rather than in the constructor body?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>const</code> data members, reference members, members whose type has no default constructor, and base classes that need constructor arguments.</p>
+      <p><b>Why.</b> By the time the body runs, every member already exists. A <code>const</code> or a reference cannot be assigned afterwards, and a type without a default constructor could not have been built in the first place. For everything else, the list is still preferred, because it constructs once instead of default-constructing and then assigning.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>When does the compiler <i>not</i> generate a default constructor?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> In two cases. It is not declared when you declare any constructor yourself, including a copy or move constructor. It is defined as deleted when some member or base cannot be default-constructed: a reference member without a default member initialiser, a <code>const</code> member of a type that would be left uninitialised, or a member whose own default constructor is deleted or inaccessible.</p>
+      <p><b>Why.</b> The compiler assumes that a class with its own constructor has rules for building objects. <code>T() = default;</code> brings the default constructor back.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>What is RAII, and why does it make code exception safe?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> RAII binds a resource to an object: the constructor acquires the resource and the destructor releases it. Destructors of local objects run on every way out of a scope, including stack unwinding after an exception, so the resource is always released.</p>
+      <p><b>Why.</b> Manual cleanup has to be repeated on every <code>return</code> and in every <code>catch</code>, and that is where leaks come from. With RAII, cleanup is written once. Examples: <code>unique_ptr</code> (memory), <code>lock_guard</code> (a mutex), <code>fstream</code> (a file), <code>jthread</code> (joining a thread).</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>State the rule of three, the rule of five and the rule of zero. Which one should you follow by default?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Rule of three: if you write the destructor, the copy constructor or copy assignment, write all three. Rule of five: add the move constructor and move assignment too. Rule of zero: write none, by holding resources in members that already manage themselves. Rule of zero is the default.</p>
+      <p><b>Why.</b> A hand-written destructor means the class owns something, so the member-wise copies the compiler generates would share it. Writing the five correctly is error-prone, so confine it to small resource handles (one per resource type) and compose everything else from them.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>What is the difference between a shallow copy and a deep copy?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> A shallow copy duplicates the pointer, so both objects point to the same buffer. A deep copy allocates a new buffer and copies the contents, so each object owns its own.</p>
+      <p><b>Why.</b> The implicit copy constructor copies each member, and copying a raw pointer member is a shallow copy. For an owning class that leads to a double free when both destructors run, and to changes through one object showing up in the other. Shallow sharing is correct only when it is intended and reference counted, as in <code>shared_ptr</code>.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>Can a member function access the private members of a <i>different</i> object of the same class?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Yes. Access control in C++ is per class, not per object.</p>
+      <p><b>Why.</b> That is how a copy constructor reads <code>other.data_</code> and how <code>operator==</code> compares private fields. People who answer "no" are usually thinking of object-level privacy in languages like Smalltalk or Ruby. The check happens at compile time, on the name being accessed and the context it is accessed from.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>What is <code>sizeof</code> an empty class, and why isn't it 0? Is it ever 0?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> It is at least 1 (in practice exactly 1). A complete object never has size 0, but an empty <i>base</i> subobject can take zero bytes (the empty base optimisation), and so can a member marked <code>[[no_unique_address]]</code> (C++20).</p>
+      <p><b>Why.</b> Distinct objects need distinct addresses: in <code>Empty arr[2]</code>, <code>&amp;arr[0] != &amp;arr[1]</code> requires each element to take space. The EBO is why <code>std::unique_ptr&lt;T&gt;</code> with the default deleter is the size of a raw pointer.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>A constructor throws halfway through. Does the destructor run? What happens to the members that were already built?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The class's destructor does not run. Every base and member that was already fully constructed is destroyed, in reverse order, and then the exception propagates. If the object was being created with <code>new</code>, the memory is freed too.</p>
+      <p><b>Why.</b> The object's lifetime begins only when its constructor completes. Raw resources acquired in the constructor body leak in this case, which is the reason to hold each resource in an RAII member. A function-try-block on the constructor can observe or translate the exception, but it cannot stop it from propagating.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>Why must a copy constructor take its parameter by reference? What happens with <code>T(T other)</code>?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>T(T)</code> is ill-formed and the compiler rejects it. If it were allowed, passing the argument by value would itself need a copy, which would call the copy constructor, which would need another copy, forever.</p>
+      <p><b>Why.</b> The standard says such a constructor is never a copy constructor and is ill-formed ([class.copy.ctor]). The usual answer "infinite recursion at run time" is the motivation, but in practice you get a compile error. The parameter is <code>const T&amp;</code> so that temporaries and const objects can be copied. <code>T(T&amp;)</code> is also a legal copy constructor, but it cannot copy const objects.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>Does <code>T b = a;</code> call the copy constructor or copy assignment?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The copy constructor. The <code>=</code> in a declaration is initialisation syntax, not assignment. Assignment happens only to an object that already exists: <code>T b; b = a;</code>.</p>
+      <p><b>Why.</b> The rule of thumb: if a new object is being created, a constructor runs. Assignment operators run only on objects that are already alive, and they must release whatever the object held before.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>Can a destructor be private? Why would you want that?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Yes. Objects with automatic, static or member storage then cannot be created outside the class, because their destructor would be called implicitly from code that has no access to it. Code can only create them on the heap and must destroy them through a member or friend, for example a <code>destroy()</code> function or reference counting.</p>
+      <p><b>Why.</b> This is used to force heap-only objects, such as intrusively reference-counted COM-style objects that delete themselves when the count reaches zero. A protected destructor in a base class is the other common case: it stops <code>delete</code> through a base pointer without making the destructor virtual (<a href="#ch02">Ch 2</a>).</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="concept">
+    <p class="dq"><span class="lvl">Concept</span>What does <code>explicit</code> do on a constructor, and when should you leave it off?</p>
+    <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> <code>explicit</code> stops the constructor from being used for implicit conversions and for copy initialisation (<code>T t = x;</code>). Direct initialisation (<code>T t(x)</code> or <code>T t{x}</code>) still works. Leave it off only when the conversion is natural and lossless, as with <code>std::string</code> from <code>const char*</code> or a <code>Fraction</code> from an integer.</p>
+      <p><b>Why.</b> Implicit conversions let calls like <code>sleep(5)</code> compile against <code>sleep(Duration)</code> with the wrong unit. Since C++11, <code>explicit</code> also matters for multi-argument constructors, because it blocks <code>return {a, b};</code> and <code>f({a, b})</code>. C++20 adds <code>explicit(bool)</code> for conditional explicitness in templates.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="tricky">
+    <p class="dq"><span class="lvl">Tricky</span>You add an empty destructor <code>~Holder() {}</code> to a class whose only member is a <code>std::vector</code>. What changes?</p>
+    <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The implicit move constructor and move assignment are no longer declared, so <code>std::move</code> on a <code>Holder</code> now copies the vector. The class also stops being trivially destructible. Program behaviour is unchanged, but performance can collapse, for example when a <code>std::vector&lt;Holder&gt;</code> reallocates.</p>
+      <p><b>Why.</b> A user-declared destructor suggests resource management, so C++11 kept the old copying behaviour for safety. <code>~Holder() = default;</code> still counts as user-declared and has the same effect. Either delete the destructor or add <code>Holder(Holder&amp;&amp;) = default;</code> and friends (and then the copy operations too, since declaring a move deletes them). The <code>Holder</code> drill in the next section shows the effect.</p>
+    </div></details>
+  </div>
+</section>
+
+<section id="ch01-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>What does this print? Note the order of the initialiser list.</p>
+<pre data-run="ch01-order"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Part</span> {
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* name;
+    <span class="hljs-built_in">Part</span>(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* n) : <span class="hljs-built_in">name</span>(n) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;+%s &quot;</span>, name); }
+    ~<span class="hljs-built_in">Part</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;-%s &quot;</span>, name); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-built_in">Base</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;+Base &quot;</span>); }
+    ~<span class="hljs-built_in">Base</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;-Base &quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Car</span> : Base {
+    Part engine;
+    Part wheel{<span class="hljs-string">&quot;wheel&quot;</span>};
+    <span class="hljs-built_in">Car</span>() : <span class="hljs-built_in">wheel</span>(<span class="hljs-string">&quot;spare&quot;</span>), <span class="hljs-built_in">engine</span>(<span class="hljs-string">&quot;engine&quot;</span>) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;+Car &quot;</span>); }
+    ~<span class="hljs-built_in">Car</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;-Car &quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Car car;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;| &quot;</span>);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch01-order">+Base +engine +spare +Car | -Car -spare -engine -Base</pre>
+      <p><b>Why.</b> The base comes first, then the members in <i>declaration</i> order (<code>engine</code>, then <code>wheel</code>), whatever order the initialiser list uses. Because <code>wheel</code> appears in the initialiser list, its default member initialiser <code>{"wheel"}</code> is ignored and <code>"spare"</code> is used. Destruction is the exact reverse. Both compilers warn with <code>-Wreorder</code>.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>Which special member functions run, and in what order?</p>
+<pre data-run="ch01-copyinit"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;default&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy ctor&quot;</span>); }
+    T&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy assign&quot;</span>); <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    T a;
+    T b = a;
+    <span class="hljs-function">T <span class="hljs-title">c</span><span class="hljs-params">(a)</span></span>;
+    b = c;
+    T d = <span class="hljs-built_in">T</span>();
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch01-copyinit">default
+copy ctor
+copy ctor
+copy assign
+default</pre>
+      <p><b>Why.</b> <code>T b = a;</code> creates a new object, so the copy constructor runs, not assignment. <code>b = c;</code> assigns to an existing object. <code>T d = T();</code> runs only the default constructor: since C++17, a prvalue initialises <code>d</code> directly, with no temporary and no copy (guaranteed copy elision, <a href="#ch21">Ch 21</a>).</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>When does each temporary die?</p>
+<pre data-run="ch01-temp"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Noisy</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-built_in">Noisy</span>(<span class="hljs-type">int</span> i) : <span class="hljs-built_in">id</span>(i) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;make %d\n&quot;</span>, id); }
+    ~<span class="hljs-built_in">Noisy</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;drop %d\n&quot;</span>, id); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Noisy <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-number">1</span>)</span></span>;
+    <span class="hljs-built_in">Noisy</span>(<span class="hljs-number">2</span>);
+    <span class="hljs-type">const</span> Noisy&amp; r = <span class="hljs-built_in">Noisy</span>(<span class="hljs-number">3</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;end %d\n&quot;</span>, r.id);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch01-temp">make 1
+make 2
+drop 2
+make 3
+end 3
+drop 3
+drop 1</pre>
+      <p><b>Why.</b> <code>Noisy(2);</code> creates a temporary that is destroyed at the end of its full expression, the same line. Binding <code>Noisy(3)</code> to a <code>const&amp;</code> local extends its lifetime to the end of <code>r</code>'s scope. Locals are destroyed in reverse order of creation, so the extended temporary (created after <code>a</code>) dies first. Watch out for <code>Noisy(x);</code> with an identifier: that line declares a variable named <code>x</code>.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>How many objects get constructed?</p>
+<pre data-run="ch01-vexing"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">P</span> {
+    <span class="hljs-built_in">P</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;P()&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    P a;
+    <span class="hljs-function">P <span class="hljs-title">b</span><span class="hljs-params">()</span></span>;
+    P c{};
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;done&quot;</span>);
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch01-vexing">P()
+P()
+done</pre>
+      <p><b>Why.</b> Only two objects, <code>a</code> and <code>c</code>. <code>P b();</code> is the most vexing parse: it declares a function <code>b</code> that takes no arguments and returns a <code>P</code>. Brace initialisation (<code>P c{};</code>) cannot be parsed as a function declaration, which is one reason to prefer it. GCC warns with <code>-Wvexing-parse</code>.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="output">
+    <p class="dq"><span class="lvl">Output</span>What are the two sizes after the "move"?</p>
+<pre data-run="ch01-nomove"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Holder</span> {
+    std::vector&lt;<span class="hljs-type">int</span>&gt; v;
+    ~<span class="hljs-built_in">Holder</span>() {}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Holder a{{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>}};
+    Holder b = std::<span class="hljs-built_in">move</span>(a);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a=%zu b=%zu\n&quot;</span>, a.v.<span class="hljs-built_in">size</span>(), b.v.<span class="hljs-built_in">size</span>());
+}</code></pre>
+    <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch01-nomove">a=3 b=3</pre>
+      <p><b>Why.</b> The user-declared destructor suppresses the implicit move constructor. <code>std::move(a)</code> produces an rvalue, but the only constructor that can take it is the implicit copy constructor (<code>const Holder&amp;</code> binds to rvalues), so the vector is copied. Remove the destructor and the output becomes <code>a=0 b=3</code> with both libstdc++ and libc++. (A moved-from vector is formally "valid but unspecified", but both implementations leave it empty.)</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>The author expects <code>10 15</code>. What does the program actually do?</p>
+<pre data-run="ch01-reorder" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Range</span> {
+    <span class="hljs-type">int</span> end;
+    <span class="hljs-type">int</span> begin;
+    <span class="hljs-built_in">Range</span>(<span class="hljs-type">int</span> b, <span class="hljs-type">int</span> len) : <span class="hljs-built_in">begin</span>(b), <span class="hljs-built_in">end</span>(begin + len) {}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Range <span class="hljs-title">r</span><span class="hljs-params">(<span class="hljs-number">10</span>, <span class="hljs-number">5</span>)</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d\n&quot;</span>, r.begin, r.end);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> The behaviour is undefined. <code>end</code> is declared first, so it is initialised first, and <code>begin + len</code> reads <code>begin</code> before it has been initialised. The program can print any value for <code>end</code>.</p>
+      <p><b>Fix.</b> Declare <code>begin</code> before <code>end</code>, or initialise <code>end</code> from the parameters: <code>end(b + len)</code>. The second fix is more robust, because it does not depend on member order at all. <code>-Wall</code> warns about both the reordering and the uninitialised read.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>This small string class works in a quick test and crashes in production. Why?</p>
+<pre data-run="ch01-shallow" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Str</span> {
+    <span class="hljs-type">char</span>* p;
+    <span class="hljs-built_in">Str</span>(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s) : <span class="hljs-built_in">p</span>(<span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[std::<span class="hljs-built_in">strlen</span>(s) + <span class="hljs-number">1</span>]) { std::<span class="hljs-built_in">strcpy</span>(p, s); }
+    ~<span class="hljs-built_in">Str</span>() { <span class="hljs-keyword">delete</span>[] p; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Str <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-string">&quot;hi&quot;</span>)</span></span>;
+    Str b = a;
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> It is a double free. The implicit copy constructor copies the pointer, so <code>a.p == b.p</code>. Both destructors <code>delete[]</code> the same buffer. AddressSanitizer reports <code>attempting double-free</code>.</p>
+      <p><b>Fix.</b> Follow the rule of three/five: write a deep-copying copy constructor and copy assignment (and the moves), or delete copying. The best fix is the rule of zero: hold a <code>std::string</code>.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>This assignment operator passes every test except one. Which input breaks it?</p>
+<pre data-run="ch01-selfassign" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Name</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Name</span>(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s) : <span class="hljs-built_in">p_</span>(<span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[std::<span class="hljs-built_in">strlen</span>(s) + <span class="hljs-number">1</span>]) { std::<span class="hljs-built_in">strcpy</span>(p_, s); }
+    <span class="hljs-built_in">Name</span>(<span class="hljs-type">const</span> Name&amp; o) : <span class="hljs-built_in">Name</span>(o.p_) {}
+    Name&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Name&amp; o) {
+        <span class="hljs-keyword">delete</span>[] p_;
+        p_ = <span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[std::<span class="hljs-built_in">strlen</span>(o.p_) + <span class="hljs-number">1</span>];
+        std::<span class="hljs-built_in">strcpy</span>(p_, o.p_);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    ~<span class="hljs-built_in">Name</span>() { <span class="hljs-keyword">delete</span>[] p_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">get</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> p_; }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">char</span>* p_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Name <span class="hljs-title">n</span><span class="hljs-params">(<span class="hljs-string">&quot;alice&quot;</span>)</span></span>;
+    Name&amp; alias = n;
+    n = alias;
+    std::<span class="hljs-built_in">puts</span>(n.<span class="hljs-built_in">get</span>());
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> Self-assignment. When <code>&amp;o == this</code>, <code>delete[] p_</code> frees the buffer that <code>o.p_</code> still points to, and then <code>strlen(o.p_)</code> reads freed memory: a use after free. ASan reports <code>heap-use-after-free</code>. Self-assignment usually arrives through aliases such as <code>v[i] = v[j]</code>, not as literal <code>n = n</code>.</p>
+      <p><b>Fix.</b> Allocate and copy first, then delete. That also gives the strong exception guarantee if <code>new</code> throws. Alternatively, use copy-and-swap. An <code>if (this == &amp;o)</code> check alone fixes self-assignment but still leaves the object broken if <code>new</code> throws.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="bug">
+    <p class="dq"><span class="lvl">Find the bug</span>Why does this not compile, and is that a bug or a feature?</p>
+<pre data-run="ch01-explicit" data-mode="error"><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Meters</span> {
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Meters</span><span class="hljs-params">(<span class="hljs-type">double</span> v)</span> : value(v) {</span>}
+    <span class="hljs-type">double</span> value;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">double</span> <span class="hljs-title">twice</span><span class="hljs-params">(Meters m)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">2</span> * m.value; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Meters <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-number">3.0</span>)</span></span>;
+    Meters b = <span class="hljs-number">4.0</span>;
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-built_in">twice</span>(a) + <span class="hljs-built_in">twice</span>(<span class="hljs-number">5.0</span>) + b.value);
+}</code></pre>
+    <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+      <p><b>Answer.</b> There are two errors, and both are the intended effect of <code>explicit</code>. <code>Meters b = 4.0;</code> is copy initialisation, which cannot use an explicit constructor. <code>twice(5.0)</code> would need an implicit conversion from <code>double</code> to <code>Meters</code>. <code>Meters a(3.0)</code> is direct initialisation and is fine.</p>
+      <p><b>Fix.</b> Be explicit at the call site: <code>Meters b{4.0};</code> and <code>twice(Meters{5.0})</code>. Unit types are the textbook case for <code>explicit</code>, because a bare <code>5.0</code> could mean feet.</p>
+    </div></details>
+  </div>
+</section>
+
+<section id="ch01-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Implement a <code>String</code> class that owns a heap buffer and follows the rule of five.</p>
+    <p>Requirements: a constructor from <code>const char*</code> (default <code>""</code>), a deep-copying copy constructor and copy assignment, a <code>noexcept</code> move constructor and move assignment that leave the source empty, <code>size()</code>, and <code>c_str()</code>, which must work on a moved-from object. Self-assignment and self-move must be safe.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> Store <code>size_</code> and a <code>char*</code>, with size declared first because the buffer allocation reads it. The copy constructor allocates and copies <code>size_ + 1</code> bytes. Moves steal the pointer with <code>std::exchange</code>. Both assignments build a local copy or moved temporary and swap it in, so self-assignment needs no special handling and the old buffer is freed by the temporary's destructor.</p>
+<pre data-run="ch01-string" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">String</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">String</span>(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s = <span class="hljs-string">&quot;&quot;</span>) : <span class="hljs-built_in">size_</span>(std::<span class="hljs-built_in">strlen</span>(s)), <span class="hljs-built_in">data_</span>(<span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[size_ + <span class="hljs-number">1</span>]) {
+        std::<span class="hljs-built_in">memcpy</span>(data_, s, size_ + <span class="hljs-number">1</span>);
+    }
+    <span class="hljs-built_in">String</span>(<span class="hljs-type">const</span> String&amp; other) : <span class="hljs-built_in">size_</span>(other.size_), <span class="hljs-built_in">data_</span>(<span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[other.size_ + <span class="hljs-number">1</span>]) {
+        std::<span class="hljs-built_in">memcpy</span>(data_, other.data_, size_ + <span class="hljs-number">1</span>);
+    }
+    <span class="hljs-built_in">String</span>(String&amp;&amp; other) <span class="hljs-keyword">noexcept</span>
+        : <span class="hljs-built_in">size_</span>(std::<span class="hljs-built_in">exchange</span>(other.size_, <span class="hljs-number">0</span>)), <span class="hljs-built_in">data_</span>(std::<span class="hljs-built_in">exchange</span>(other.data_, <span class="hljs-literal">nullptr</span>)) {}
+    String&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> String&amp; other) {
+        String <span class="hljs-built_in">copy</span>(other);
+        <span class="hljs-built_in">swap</span>(copy);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    String&amp; <span class="hljs-keyword">operator</span>=(String&amp;&amp; other) <span class="hljs-keyword">noexcept</span> {
+        String <span class="hljs-built_in">moved</span>(std::<span class="hljs-built_in">move</span>(other));
+        <span class="hljs-built_in">swap</span>(moved);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    ~<span class="hljs-built_in">String</span>() { <span class="hljs-keyword">delete</span>[] data_; }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">swap</span><span class="hljs-params">(String&amp; other)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-built_in">swap</span>(size_, other.size_);
+        std::<span class="hljs-built_in">swap</span>(data_, other.data_);
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">c_str</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> data_ ? data_ : <span class="hljs-string">&quot;&quot;</span>; }
+
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">size_t</span> size_;
+    <span class="hljs-type">char</span>* data_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">String <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-string">&quot;hello&quot;</span>)</span></span>;
+    String b = a;
+    String c;
+    c = a;
+    String d = std::<span class="hljs-built_in">move</span>(b);
+    String&amp; alias = a;
+    a = alias;
+    String&amp; self = c;
+    c = std::<span class="hljs-built_in">move</span>(self);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s %s %s [%s] %zu\n&quot;</span>, a.<span class="hljs-built_in">c_str</span>(), c.<span class="hljs-built_in">c_str</span>(), d.<span class="hljs-built_in">c_str</span>(), b.<span class="hljs-built_in">c_str</span>(), b.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch01-string">hello hello hello [] 0</pre>
+      <p><b>Complexity and pitfalls.</b> Copies are O(n) and moves are O(1). Common mistakes: forgetting the <code>+ 1</code> for the terminator, leaving the moved-from pointer non-null (double free), returning <code>nullptr</code> from <code>c_str()</code> after a move, and omitting <code>noexcept</code>. Without <code>noexcept</code>, <code>std::vector&lt;String&gt;</code> copies on reallocation (<a href="#ch18">Ch 18</a>).</p>
+      <p class="rating">Estimated rating: ~1500 · straightforward logic, but six special members with lifetime and exception corner cases.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Write a class <code>Counted</code> that reports how many objects are alive now and how many were ever created.</p>
+    <p>Every way of creating an object (default, copy, move) must count. Assignment creates nothing. <code>Counted::live()</code> must return 0 once every object has been destroyed.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> Use two <code>inline static</code> counters. Every constructor increments both, and the destructor decrements <code>live_</code>. The trap is the implicit copy and move constructors, which would create objects without counting them and drive <code>live()</code> negative. So all three constructors are written by hand, and the assignments are defaulted, because they do not change the number of objects.</p>
+<pre data-run="ch01-counted"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Counted</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Counted</span>() { ++live_; ++created_; }
+    <span class="hljs-built_in">Counted</span>(<span class="hljs-type">const</span> Counted&amp;) { ++live_; ++created_; }
+    <span class="hljs-built_in">Counted</span>(Counted&amp;&amp;) <span class="hljs-keyword">noexcept</span> { ++live_; ++created_; }
+    Counted&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Counted&amp;) = <span class="hljs-keyword">default</span>;
+    Counted&amp; <span class="hljs-keyword">operator</span>=(Counted&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    ~<span class="hljs-built_in">Counted</span>() { --live_; }
+
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">live</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> live_; }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">created</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> created_; }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">inline</span> <span class="hljs-type">static</span> <span class="hljs-type">int</span> live_ = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">inline</span> <span class="hljs-type">static</span> <span class="hljs-type">int</span> created_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        Counted a;
+        Counted b = a;
+        Counted c = std::<span class="hljs-built_in">move</span>(b);
+        a = c;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;inside: live=%d created=%d\n&quot;</span>, Counted::<span class="hljs-built_in">live</span>(), Counted::<span class="hljs-built_in">created</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after: live=%d created=%d\n&quot;</span>, Counted::<span class="hljs-built_in">live</span>(), Counted::<span class="hljs-built_in">created</span>());
+}</code></pre>
+<pre class="out" data-out="ch01-counted">inside: live=3 created=3
+after: live=0 created=3</pre>
+      <p><b>Pitfalls.</b> Defining only the default constructor gives <code>after: live=-2</code>. For use across threads, make the counters <code>std::atomic&lt;int&gt;</code>. In a CRTP base, <code>Counted&lt;T&gt;</code> gives every derived type its own counters.</p>
+      <p class="rating">Estimated rating: ~1100 · tests whether you know every path that creates an object.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Write an RAII wrapper <code>File</code> for C's <code>FILE*</code>.</p>
+    <p>It must open the file in its constructor and close it in its destructor, be non-copyable and movable, and offer <code>explicit operator bool</code> and <code>get()</code>. Moving must transfer ownership, so the file is closed exactly once.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> Delete both copy operations. The move constructor takes the handle with <code>std::exchange(other.f_, nullptr)</code>. Move assignment closes its current handle before taking the new one, and guards against self-move. The destructor closes only a non-null handle.</p>
+<pre data-run="ch01-file" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">File</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">File</span>(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* path, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* mode) : <span class="hljs-built_in">f_</span>(std::<span class="hljs-built_in">fopen</span>(path, mode)) {}
+    ~<span class="hljs-built_in">File</span>() { <span class="hljs-keyword">if</span> (f_) std::<span class="hljs-built_in">fclose</span>(f_); }
+    <span class="hljs-built_in">File</span>(<span class="hljs-type">const</span> File&amp;) = <span class="hljs-keyword">delete</span>;
+    File&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> File&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">File</span>(File&amp;&amp; other) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">f_</span>(std::<span class="hljs-built_in">exchange</span>(other.f_, <span class="hljs-literal">nullptr</span>)) {}
+    File&amp; <span class="hljs-keyword">operator</span>=(File&amp;&amp; other) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;other) {
+            <span class="hljs-keyword">if</span> (f_) std::<span class="hljs-built_in">fclose</span>(f_);
+            f_ = std::<span class="hljs-built_in">exchange</span>(other.f_, <span class="hljs-literal">nullptr</span>);
+        }
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">bool</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> f_ != <span class="hljs-literal">nullptr</span>; }
+    <span class="hljs-function">std::FILE* <span class="hljs-title">get</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> f_; }
+
+<span class="hljs-keyword">private</span>:
+    std::FILE* f_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        <span class="hljs-function">File <span class="hljs-title">out</span><span class="hljs-params">(<span class="hljs-string">&quot;ch01_demo.txt&quot;</span>, <span class="hljs-string">&quot;w&quot;</span>)</span></span>;
+        std::<span class="hljs-built_in">fputs</span>(<span class="hljs-string">&quot;raii\n&quot;</span>, out.<span class="hljs-built_in">get</span>());
+    }
+    <span class="hljs-function">File <span class="hljs-title">in</span><span class="hljs-params">(<span class="hljs-string">&quot;ch01_demo.txt&quot;</span>, <span class="hljs-string">&quot;r&quot;</span>)</span></span>;
+    <span class="hljs-type">char</span> line[<span class="hljs-number">16</span>] = {};
+    <span class="hljs-keyword">if</span> (!std::<span class="hljs-built_in">fgets</span>(line, <span class="hljs-keyword">sizeof</span> line, in.<span class="hljs-built_in">get</span>())) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    File moved = std::<span class="hljs-built_in">move</span>(in);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s&quot;</span>, line);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;in=%d moved=%d\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">bool</span>&gt;(in), <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">bool</span>&gt;(moved));
+    std::<span class="hljs-built_in">remove</span>(<span class="hljs-string">&quot;ch01_demo.txt&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch01-file">raii
+in=0 moved=1</pre>
+      <p><b>Pitfalls.</b> The inner block matters: the writer's destructor flushes and closes the file before it is reopened for reading. In production, prefer <code>std::unique_ptr&lt;FILE, decltype(&amp;fclose)&gt;</code> or a stateless deleter (<a href="#ch10">Ch 10</a>), or simply <code>std::fstream</code>. Also decide what a failed <code>fopen</code> means: here it gives a null handle that converts to <code>false</code>, and throwing is the other option.</p>
+      <p class="rating">Estimated rating: ~1300 · a move-only handle, with the close-before-overwrite and self-move details.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Implement <code>IntVector</code>, a growable array of <code>int</code> with the rule of five.</p>
+    <p>Support <code>push_back</code> with amortised O(1) growth (doubling), <code>operator[]</code>, <code>size()</code> and <code>capacity()</code>, deep copy, and O(1) <code>noexcept</code> moves. A default-constructed vector must not allocate.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> Store three members with default member initialisers, so the defaulted default constructor yields an empty vector. When the vector is full, <code>grow()</code> allocates double the capacity, copies, and frees the old buffer. Copying allocates exactly <code>size</code> elements. Assignment is copy-and-swap.</p>
+<pre data-run="ch01-intvector" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">IntVector</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">IntVector</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">IntVector</span>(<span class="hljs-type">const</span> IntVector&amp; other)
+        : <span class="hljs-built_in">data_</span>(other.size_ ? <span class="hljs-keyword">new</span> <span class="hljs-type">int</span>[other.size_] : <span class="hljs-literal">nullptr</span>), <span class="hljs-built_in">size_</span>(other.size_), <span class="hljs-built_in">cap_</span>(other.size_) {
+        std::<span class="hljs-built_in">copy</span>(other.data_, other.data_ + size_, data_);
+    }
+    <span class="hljs-built_in">IntVector</span>(IntVector&amp;&amp; other) <span class="hljs-keyword">noexcept</span>
+        : <span class="hljs-built_in">data_</span>(std::<span class="hljs-built_in">exchange</span>(other.data_, <span class="hljs-literal">nullptr</span>)),
+          <span class="hljs-built_in">size_</span>(std::<span class="hljs-built_in">exchange</span>(other.size_, <span class="hljs-number">0</span>)),
+          <span class="hljs-built_in">cap_</span>(std::<span class="hljs-built_in">exchange</span>(other.cap_, <span class="hljs-number">0</span>)) {}
+    IntVector&amp; <span class="hljs-keyword">operator</span>=(IntVector other) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-built_in">swap</span>(other);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    ~<span class="hljs-built_in">IntVector</span>() { <span class="hljs-keyword">delete</span>[] data_; }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(<span class="hljs-type">int</span> value)</span> </span>{
+        <span class="hljs-keyword">if</span> (size_ == cap_) <span class="hljs-built_in">grow</span>();
+        data_[size_++] = value;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">swap</span><span class="hljs-params">(IntVector&amp; other)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-built_in">swap</span>(data_, other.data_);
+        std::<span class="hljs-built_in">swap</span>(size_, other.size_);
+        std::<span class="hljs-built_in">swap</span>(cap_, other.cap_);
+    }
+    <span class="hljs-type">int</span> <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> data_[i]; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">capacity</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> cap_; }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">grow</span><span class="hljs-params">()</span> </span>{
+        std::<span class="hljs-type">size_t</span> next = cap_ ? <span class="hljs-number">2</span> * cap_ : <span class="hljs-number">1</span>;
+        <span class="hljs-type">int</span>* bigger = <span class="hljs-keyword">new</span> <span class="hljs-type">int</span>[next];
+        std::<span class="hljs-built_in">copy</span>(data_, data_ + size_, bigger);
+        <span class="hljs-keyword">delete</span>[] data_;
+        data_ = bigger;
+        cap_ = next;
+    }
+
+    <span class="hljs-type">int</span>* data_ = <span class="hljs-literal">nullptr</span>;
+    std::<span class="hljs-type">size_t</span> size_ = <span class="hljs-number">0</span>;
+    std::<span class="hljs-type">size_t</span> cap_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    IntVector a;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">1</span>; i &lt;= <span class="hljs-number">5</span>; ++i) a.<span class="hljs-built_in">push_back</span>(i);
+    IntVector b = a;
+    b.<span class="hljs-built_in">push_back</span>(<span class="hljs-number">6</span>);
+    IntVector c;
+    c = std::<span class="hljs-built_in">move</span>(b);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a size=%zu cap=%zu\n&quot;</span>, a.<span class="hljs-built_in">size</span>(), a.<span class="hljs-built_in">capacity</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;b size=%zu\n&quot;</span>, b.<span class="hljs-built_in">size</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;c:&quot;</span>);
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; c.<span class="hljs-built_in">size</span>(); ++i) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot; %d&quot;</span>, c[i]);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch01-intvector">a size=5 cap=8
+b size=0
+c: 1 2 3 4 5 6</pre>
+      <p><b>Complexity and pitfalls.</b> Doubling makes <code>n</code> pushes cost O(n) copies in total, so each push is amortised O(1). Growing by a constant amount instead would make <code>n</code> pushes cost O(n²). <code>grow()</code> allocates before it frees, so a throwing <code>new</code> leaves the vector unchanged. A generic <code>Vector&lt;T&gt;</code> would need raw storage and placement new so that capacity does not construct elements (<a href="#ch12">Ch 12</a>).</p>
+      <p class="rating">Estimated rating: ~1600 · rule of five, plus amortised growth and the correct moved-from state.</p>
+    </div></details>
+  </div>
+
+  <div class="drill" data-kind="code">
+    <p class="dq"><span class="lvl">Code</span>Design a <code>Date</code> class that can never hold an invalid date.</p>
+    <p>A <code>Date</code> has a year, month and day, and must always be a real calendar date (leap years included: 2000 is a leap year, 1900 is not). Invalid input is common and expected, so report it without exceptions: provide <code>static std::optional&lt;Date&gt; make(int y, int m, int d)</code>, and make it impossible to construct a <code>Date</code> any other way, except by copying one. Add read-only accessors and <code>next_day()</code>, which must keep the invariant.</p>
+    <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+      <p><b>Approach.</b> This is the <i>named constructor</i> idiom. The real constructor is private and trusts its arguments, and the public static <code>make</code> validates first, so every <code>Date</code> in the program went through the check. A constructor cannot return "no object", which is why the factory returns <code>std::optional</code>; throwing from a public constructor is the other option when bad input is truly exceptional. There are no setters: <code>next_day()</code> is the only mutation, and it rolls the day, month and year over in that order so the invariant holds on exit.</p>
+<pre data-run="ch01-date"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Date</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">static</span> std::optional&lt;Date&gt; <span class="hljs-title">make</span><span class="hljs-params">(<span class="hljs-type">int</span> y, <span class="hljs-type">int</span> m, <span class="hljs-type">int</span> d)</span> </span>{
+        <span class="hljs-keyword">if</span> (m &lt; <span class="hljs-number">1</span> || m &gt; <span class="hljs-number">12</span> || d &lt; <span class="hljs-number">1</span> || d &gt; <span class="hljs-built_in">days_in</span>(y, m)) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">Date</span>(y, m, d);
+    }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">year</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> y_; }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">month</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> m_; }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">day</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> d_; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">next_day</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (++d_ &lt;= <span class="hljs-built_in">days_in</span>(y_, m_)) <span class="hljs-keyword">return</span>;
+        d_ = <span class="hljs-number">1</span>;
+        <span class="hljs-keyword">if</span> (++m_ &lt;= <span class="hljs-number">12</span>) <span class="hljs-keyword">return</span>;
+        m_ = <span class="hljs-number">1</span>;
+        ++y_;
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-built_in">Date</span>(<span class="hljs-type">int</span> y, <span class="hljs-type">int</span> m, <span class="hljs-type">int</span> d) : <span class="hljs-built_in">y_</span>(y), <span class="hljs-built_in">m_</span>(m), <span class="hljs-built_in">d_</span>(d) {}
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">leap</span><span class="hljs-params">(<span class="hljs-type">int</span> y)</span> </span>{ <span class="hljs-keyword">return</span> (y % <span class="hljs-number">4</span> == <span class="hljs-number">0</span> &amp;&amp; y % <span class="hljs-number">100</span> != <span class="hljs-number">0</span>) || y % <span class="hljs-number">400</span> == <span class="hljs-number">0</span>; }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">days_in</span><span class="hljs-params">(<span class="hljs-type">int</span> y, <span class="hljs-type">int</span> m)</span> </span>{
+        <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> days[] = {<span class="hljs-number">31</span>, <span class="hljs-number">28</span>, <span class="hljs-number">31</span>, <span class="hljs-number">30</span>, <span class="hljs-number">31</span>, <span class="hljs-number">30</span>, <span class="hljs-number">31</span>, <span class="hljs-number">31</span>, <span class="hljs-number">30</span>, <span class="hljs-number">31</span>, <span class="hljs-number">30</span>, <span class="hljs-number">31</span>};
+        <span class="hljs-keyword">return</span> m == <span class="hljs-number">2</span> &amp;&amp; <span class="hljs-built_in">leap</span>(y) ? <span class="hljs-number">29</span> : days[m - <span class="hljs-number">1</span>];
+    }
+
+    <span class="hljs-type">int</span> y_, m_, d_;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(<span class="hljs-type">const</span> Date&amp; d)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%04d-%02d-%02d\n&quot;</span>, d.<span class="hljs-built_in">year</span>(), d.<span class="hljs-built_in">month</span>(), d.<span class="hljs-built_in">day</span>()); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> tests[][<span class="hljs-number">3</span>] = {{<span class="hljs-number">2024</span>, <span class="hljs-number">2</span>, <span class="hljs-number">29</span>}, {<span class="hljs-number">2023</span>, <span class="hljs-number">2</span>, <span class="hljs-number">29</span>}, {<span class="hljs-number">1900</span>, <span class="hljs-number">2</span>, <span class="hljs-number">29</span>}, {<span class="hljs-number">2000</span>, <span class="hljs-number">2</span>, <span class="hljs-number">29</span>}, {<span class="hljs-number">2024</span>, <span class="hljs-number">13</span>, <span class="hljs-number">1</span>}};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; t : tests) {
+        <span class="hljs-keyword">auto</span> d = Date::<span class="hljs-built_in">make</span>(t[<span class="hljs-number">0</span>], t[<span class="hljs-number">1</span>], t[<span class="hljs-number">2</span>]);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d-%d-%d %s\n&quot;</span>, t[<span class="hljs-number">0</span>], t[<span class="hljs-number">1</span>], t[<span class="hljs-number">2</span>], d ? <span class="hljs-string">&quot;ok&quot;</span> : <span class="hljs-string">&quot;rejected&quot;</span>);
+    }
+    Date d = *Date::<span class="hljs-built_in">make</span>(<span class="hljs-number">2023</span>, <span class="hljs-number">12</span>, <span class="hljs-number">31</span>);
+    d.<span class="hljs-built_in">next_day</span>();
+    <span class="hljs-built_in">show</span>(d);
+    d = *Date::<span class="hljs-built_in">make</span>(<span class="hljs-number">2024</span>, <span class="hljs-number">2</span>, <span class="hljs-number">28</span>);
+    d.<span class="hljs-built_in">next_day</span>();
+    <span class="hljs-built_in">show</span>(d);
+    d.<span class="hljs-built_in">next_day</span>();
+    <span class="hljs-built_in">show</span>(d);
+    <span class="hljs-comment">// Date bad(2024, 2, 30);  // error: the constructor is private</span>
+}</code></pre>
+<pre class="out" data-out="ch01-date">2024-2-29 ok
+2023-2-29 rejected
+1900-2-29 rejected
+2000-2-29 ok
+2024-13-1 rejected
+2024-01-01
+2024-02-29
+2024-03-01</pre>
+      <p><b>Pitfalls.</b> The leap-year rule has three parts (divisible by 4, except centuries, except multiples of 400), and forgetting the last two accepts 1900-02-29. The implicit copy operations are correct here, because copying a valid date gives a valid date, so the rule of zero applies. <code>std::optional&lt;Date&gt;</code> can still hold a <code>Date</code> built by a private constructor because <code>make</code>, a member, builds it. Dereferencing an empty optional with <code>*</code> is undefined behaviour, so production callers check it or use <code>.value()</code>, which throws. A one-line <code>struct</code> with three public <code>int</code>s would be simpler and would let any caller write <code>d.day = 31</code> in February.</p>
+      <p class="rating">Estimated rating: ~1200 · simple calendar logic, judged on making invalid states unrepresentable.</p>
+    </div></details>
+  </div>
+</section>
+
+<section id="ch01-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+  <ul>
+    <li><code>struct</code> and <code>class</code> differ only in default access and default inheritance.</li>
+    <li><code>sizeof</code> counts data members, padding and the vptr. Order members from largest to smallest to reduce padding. An empty class has size 1, except as a base (EBO).</li>
+    <li>Construction order: virtual bases, bases, members in declaration order, then the body. Destruction is the reverse. The initialiser-list order is ignored.</li>
+    <li><code>const</code> members, references, members without a default constructor and bases with arguments must be in the initialiser list.</li>
+    <li>If a constructor throws, the destructor does not run, but the members already built are destroyed. Hold each resource in its own RAII member.</li>
+    <li>A user-declared destructor or copy operation suppresses the implicit moves (so <code>std::move</code> copies). A user-declared move deletes the copies.</li>
+    <li>Follow the rule of zero by default. Write the five only for a class whose single job is owning one resource, and make its moves <code>noexcept</code>.</li>
+    <li><code>T b = a;</code> is construction, not assignment. <code>T t();</code> declares a function. Mark single-argument constructors <code>explicit</code> unless the conversion is lossless.</li>
+  </ul>
+</section>

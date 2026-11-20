@@ -30,17 +30,17 @@
       {
        "id": "cpp-objects",
        "text": "C++ object model and lifetime",
-       "href": "../guide/#ch01"
+       "href": "../guide/cpp/#ch01"
       },
       {
        "id": "cpp-mem",
        "text": "new/delete, fragmentation and memory pools",
-       "href": "../guide/#ch09"
+       "href": "../guide/cpp/#ch07"
       },
       {
        "id": "cpp-placement",
        "text": "Placement new and custom allocation",
-       "href": "../guide/#ch14"
+       "href": "../guide/cpp/#ch12"
       },
       {
        "id": "os-procs",
@@ -50,7 +50,7 @@
       {
        "id": "os-sync",
        "text": "Synchronisation and deadlock",
-       "href": "../guide/#ch05"
+       "href": "../guide/os/#ch02"
       },
       {
        "id": "os-mem",
@@ -199,12 +199,12 @@
       {
        "id": "cpp-objects",
        "text": "C++ object model and lifetime",
-       "href": "../guide/#ch01"
+       "href": "../guide/cpp/#ch01"
       },
       {
        "id": "cpp-moves",
        "text": "Move semantics",
-       "href": "../guide/#ch20"
+       "href": "../guide/cpp/#ch18"
       },
       {
        "id": "dsa-map",
@@ -339,7 +339,7 @@
       {
        "id": "cn-tcp",
        "text": "TCP, UDP, sockets and HTTP",
-       "href": "../guide/#ch08"
+       "href": "../guide/os/#ch05"
       }
      ]
     },
@@ -492,7 +492,7 @@
       {
        "id": "os-sync",
        "text": "Synchronisation and deadlock",
-       "href": "../guide/#ch05"
+       "href": "../guide/os/#ch02"
       },
       {
        "id": "os-mem",
@@ -502,7 +502,7 @@
       {
        "id": "cn-tcp",
        "text": "TCP, UDP, sockets and HTTP",
-       "href": "../guide/#ch08"
+       "href": "../guide/os/#ch05"
       },
       {
        "id": "sql-joins",
@@ -601,7 +601,7 @@
       {
        "id": "cpp-objects",
        "text": "C++ object model and lifetime",
-       "href": "../guide/#ch01"
+       "href": "../guide/cpp/#ch01"
       }
      ]
     },
@@ -831,17 +831,17 @@
       {
        "id": "cpp-objects",
        "text": "C++ object model and lifetime",
-       "href": "../guide/#ch01"
+       "href": "../guide/cpp/#ch01"
       },
       {
        "id": "cpp-moves",
        "text": "Move semantics",
-       "href": "../guide/#ch20"
+       "href": "../guide/cpp/#ch18"
       },
       {
        "id": "cpp-cachealloc",
        "text": "Cache-friendly allocation",
-       "href": "../guide/#ch19"
+       "href": "../guide/cpp/#ch17"
       },
       {
        "id": "ca-cache",

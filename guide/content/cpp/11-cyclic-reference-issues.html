@@ -1,0 +1,1369 @@
+---
+title: Cyclic reference issues
+part: Part C · Memory management
+lede: Reference counting frees an object when nobody points to it, so two objects that point to each other are never freed. This chapter shows exactly how `shared_ptr` cycles form (including the hidden ones inside callbacks), how to prove a leak, and the standard ways to break a cycle: `weak_ptr`, raw back pointers and an ownership graph with no cycles. Interviewers ask about it because it separates people who use `shared_ptr` everywhere from people who design ownership.
+desc: shared_ptr cycles, weak_ptr breaking, parent pointers, observers
+hours: 3
+prereqs: [Ch 9](#ch09) smart pointers, [Ch 10](#ch10) custom deleters
+---
+<section id="ch11-leak" data-roles="th"><div class="sec-head"><h2>How a shared_ptr cycle leaks</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A <code>shared_ptr</code> answers one local question: "how many owners point at this object?". It never asks whether those owners are themselves reachable from the program. When object A owns B and B owns A, each count includes the other's pointer, so neither count can reach zero once the outside world lets go. The objects are unreachable, yet every count is 1. That is a leak, and their destructors never run, so any resource they hold (sockets, files, threads) leaks too.</p>
+<p><b>Under the hood.</b> Each <code>make_shared</code> creates a control block with a strong count (owners) and a weak count. Copying a <code>shared_ptr</code> increments the strong count atomically, and destroying one decrements it. The destructor of the managed object runs only when the strong count goes from 1 to 0 (<a href="#ch09">Ch 9</a> has the full control block).</p>
+<pre data-run="ch13-cycle" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> alive = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Person</span> {
+    std::string name;
+    std::shared_ptr&lt;Person&gt; partner;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Person</span><span class="hljs-params">(std::string n)</span> : name(std::move(n)) {</span> ++alive; std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;hello %s\n&quot;</span>, name.<span class="hljs-built_in">c_str</span>()); }
+    ~<span class="hljs-built_in">Person</span>() { --alive; std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;bye %s\n&quot;</span>, name.<span class="hljs-built_in">c_str</span>()); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        <span class="hljs-keyword">auto</span> alice = std::<span class="hljs-built_in">make_shared</span>&lt;Person&gt;(<span class="hljs-string">&quot;alice&quot;</span>);
+        <span class="hljs-keyword">auto</span> bob = std::<span class="hljs-built_in">make_shared</span>&lt;Person&gt;(<span class="hljs-string">&quot;bob&quot;</span>);
+        alice-&gt;partner = bob;
+        bob-&gt;partner = alice;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;counts: alice %ld, bob %ld\n&quot;</span>, alice.<span class="hljs-built_in">use_count</span>(), bob.<span class="hljs-built_in">use_count</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after scope: %d alive\n&quot;</span>, alive);
+}</code></pre>
+<pre class="out" data-out="ch13-cycle">hello alice
+hello bob
+counts: alice 2, bob 2
+after scope: 2 alive</pre>
+<p>No "bye" line is ever printed. At the closing brace the local <code>bob</code> is destroyed first (strong count 2 to 1), then <code>alice</code> (2 to 1). Both counts stop at 1, held by the other object's <code>partner</code> member.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 280" role="img" aria-label="Reference counts of two objects in a cycle before and after the stack pointers go away">
+<defs><marker id="ch11-c13a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="22" class="t-bold">Inside the scope</text>
+<text x="400" y="22" class="t-bold">After the scope: unreachable, counts still 1</text>
+<rect x="20" y="40" width="90" height="34" class="d-soft"/><text x="65" y="62" text-anchor="middle" class="t-mono t-small">alice (stack)</text>
+<rect x="20" y="190" width="90" height="34" class="d-soft"/><text x="65" y="212" text-anchor="middle" class="t-mono t-small">bob (stack)</text>
+<rect x="170" y="40" width="160" height="60" class="d-acc"/><text x="180" y="60" class="t-small t-bold">Person alice</text><text x="180" y="80" class="t-mono t-small">strong = 2</text><text x="180" y="94" class="t-mono t-small t-muted">partner → bob</text>
+<rect x="170" y="180" width="160" height="60" class="d-acc"/><text x="180" y="200" class="t-small t-bold">Person bob</text><text x="180" y="220" class="t-mono t-small">strong = 2</text><text x="180" y="234" class="t-mono t-small t-muted">partner → alice</text>
+<path d="M110,57 L168,62" class="d-line" marker-end="url(#ch13-c13a)"/>
+<path d="M110,207 L168,207" class="d-line" marker-end="url(#ch13-c13a)"/>
+<path d="M290,100 L290,178" class="d-line-acc" marker-end="url(#ch13-c13a)"/>
+<path d="M210,180 L210,102" class="d-line-acc" marker-end="url(#ch13-c13a)"/>
+<rect x="470" y="40" width="160" height="60" class="d-trap"/><text x="480" y="60" class="t-small t-bold">Person alice</text><text x="480" y="80" class="t-mono t-small t-trap">strong = 1</text><text x="480" y="94" class="t-mono t-small t-muted">partner → bob</text>
+<rect x="470" y="180" width="160" height="60" class="d-trap"/><text x="480" y="200" class="t-small t-bold">Person bob</text><text x="480" y="220" class="t-mono t-small t-trap">strong = 1</text><text x="480" y="234" class="t-mono t-small t-muted">partner → alice</text>
+<path d="M590,100 L590,178" class="d-line-trap" marker-end="url(#ch13-c13a)"/>
+<path d="M510,180 L510,102" class="d-line-trap" marker-end="url(#ch13-c13a)"/>
+<text x="400" y="140" class="t-small t-muted">no stack</text>
+<text x="400" y="154" class="t-small t-muted">pointers</text>
+<line x1="370" y1="36" x2="370" y2="260" class="d-grid"/>
+<text x="400" y="268" class="t-small">Each count is held up by the other object. Neither reaches 0, so neither destructor runs.</text>
+</svg></div><figcaption><b>A cycle keeps every count at least 1.</b> On the left, each object has one owner on the stack and one in the other object. When the stack pointers die, each count drops by exactly one and stops at 1. Reference counting has no way to notice that the two objects are reachable only from each other.</figcaption></figure>
+<h3 id="ch11-cycle-shapes">Where cycles come from in real code</h3>
+<ul>
+<li><b>Bidirectional relationships</b>: parent and child in a tree, <code>prev</code> and <code>next</code> in a doubly linked list, a session and its connection, a document and its views.</li>
+<li><b>Callbacks</b>: an object stores a <code>std::function</code> (a handler, a timer, a completion callback) whose lambda captured a <code>shared_ptr</code> to the same object. The cycle is invisible in the class definition.</li>
+<li><b>Registries</b>: a manager owns a list of <code>shared_ptr&lt;Client&gt;</code> and each client owns a <code>shared_ptr&lt;Manager&gt;</code> to talk back.</li>
+<li><b>Self-ownership</b>: an object stores <code>shared_from_this()</code> in one of its own members, a cycle of length one.</li>
+<li><b>Longer rings</b>: A to B to C to A, often created by three different teams, which is why ownership rules must be global (<a href="#ch11-design">see the rules</a>).</li>
+</ul>
+</section>
+
+<section id="ch11-detect" data-roles="th"><div class="sec-head"><h2>Detecting cycles</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A cycle does not crash. It shows up as memory growth, files that stay open, or destructors whose side effects never happen. You need tools that make "never destroyed" visible.</p>
+<h3 id="ch11-printouts">Destructor printouts and instance counters</h3>
+<p>The cheapest proof is a static counter incremented in every constructor and decremented in the destructor, checked at the end of a test. It works on every platform and in release builds. Destructor printouts are the same idea for quick experiments, and they are what most interview answers use.</p>
+<h3 id="ch11-weak-probe">The weak_ptr probe</h3>
+<p>In a unit test, keep a <code>weak_ptr</code> to the object, drop all the strong pointers you know about, and assert that the <code>weak_ptr</code> has expired. If it has not, something still owns the object, and <code>probe.use_count()</code> tells you how many owners are left. This needs no change to the class under test.</p>
+<pre data-run="ch13-probe" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Widget</span> {
+    std::function&lt;<span class="hljs-type">void</span>()&gt; on_click;
+    <span class="hljs-type">int</span> clicks = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">check</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* label, <span class="hljs-type">const</span> std::weak_ptr&lt;Widget&gt;&amp; probe)</span> </span>{
+    <span class="hljs-keyword">if</span> (probe.<span class="hljs-built_in">expired</span>()) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s: freed\n&quot;</span>, label);
+    <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s: LEAK, %ld owner(s) left\n&quot;</span>, label, probe.<span class="hljs-built_in">use_count</span>());
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::weak_ptr&lt;Widget&gt; probe;
+    {
+        <span class="hljs-keyword">auto</span> w = std::<span class="hljs-built_in">make_shared</span>&lt;Widget&gt;();
+        w-&gt;on_click = [w] { ++w-&gt;clicks; };          <span class="hljs-comment">// the lambda owns w, and w owns the lambda</span>
+        probe = w;
+    }
+    <span class="hljs-built_in">check</span>(<span class="hljs-string">&quot;capture shared_ptr&quot;</span>, probe);
+    probe.<span class="hljs-built_in">lock</span>()-&gt;on_click = <span class="hljs-literal">nullptr</span>;               <span class="hljs-comment">// break the cycle by hand, so the test cleans up</span>
+    <span class="hljs-built_in">check</span>(<span class="hljs-string">&quot;after clearing&quot;</span>, probe);
+
+    {
+        <span class="hljs-keyword">auto</span> w = std::<span class="hljs-built_in">make_shared</span>&lt;Widget&gt;();
+        Widget* raw = w.<span class="hljs-built_in">get</span>();
+        w-&gt;on_click = [raw] { ++raw-&gt;clicks; };      <span class="hljs-comment">// the object owns the lambda, the lambda only observes</span>
+        probe = w;
+    }
+    <span class="hljs-built_in">check</span>(<span class="hljs-string">&quot;capture raw pointer&quot;</span>, probe);
+}</code></pre>
+<pre class="out" data-out="ch13-probe">capture shared_ptr: LEAK, 1 owner(s) left
+after clearing: freed
+capture raw pointer: freed</pre>
+<h3 id="ch11-tools">Leak detectors</h3>
+<ul>
+<li><b>LeakSanitizer</b> (<code>-fsanitize=address</code> on Linux, or <code>-fsanitize=leak</code> alone) scans memory at exit and reports heap blocks that no live pointer reaches, with allocation stacks. A cycle is exactly that, so it is reported. On Linux it is on by default with ASan. On macOS, Apple's Xcode clang does not support it, but upstream LLVM clang (for example Homebrew's) does with <code>ASAN_OPTIONS=detect_leaks=1</code>. The harness for this guide leaves it off, which is why the drills prove leaks with counters.</li>
+<li><b>Valgrind memcheck</b> reports cycles as "definitely lost" or "indirectly lost" blocks, more slowly but without recompiling.</li>
+<li><b>Heap profilers</b> (heaptrack, jemalloc or tcmalloc profiling) show steady growth by allocation site, which is how cycles are usually found in long-running servers where the process never exits.</li>
+</ul>
+<div class="callout tip"><p class="callout-title">Tip</p><p>A leak checker only reports at exit. In a server, a cycle that forms per request is found by a test that runs the request 1000 times and checks the instance counter is back to its starting value.</p></div>
+</section>
+
+<section id="ch11-weak-break" data-roles="th"><div class="sec-head"><h2>Breaking cycles with weak_ptr</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A <code>weak_ptr</code> is a non-owning reference that knows whether its target is still alive. It increments the weak count, not the strong count, so it does not keep the object alive. To use the object you call <code>lock()</code>, which atomically returns a <code>shared_ptr</code> (owning, for as long as you hold it) or an empty one if the object is gone. Breaking a cycle means choosing one edge in each cycle and making it weak.</p>
+<p><b>Which edge?</b> Make weak the edge that points <i>back</i> toward the owner, that is, from the part to the whole, from the child to the parent, from the observer target to the observer, from the cache to the cached value. The rule of thumb: the weak edge must point at something that has another owner. If you make the wrong edge weak, the object you still need is destroyed immediately.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 260" role="img" aria-label="A tree with owning pointers down and weak pointers up">
+<defs><marker id="ch11-c13b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="20" y="20" width="100" height="32" class="d-soft"/><text x="70" y="41" text-anchor="middle" class="t-mono t-small">root (stack)</text>
+<rect x="250" y="20" width="120" height="44" class="d-key"/><text x="310" y="38" text-anchor="middle" class="t-small t-bold">root</text><text x="310" y="54" text-anchor="middle" class="t-mono t-small">strong 1</text>
+<rect x="130" y="130" width="120" height="44" class="d-acc"/><text x="190" y="148" text-anchor="middle" class="t-small t-bold">usr</text><text x="190" y="164" text-anchor="middle" class="t-mono t-small">strong 1</text>
+<rect x="370" y="130" width="120" height="44" class="d-acc"/><text x="430" y="148" text-anchor="middle" class="t-small t-bold">etc</text><text x="430" y="164" text-anchor="middle" class="t-mono t-small">strong 1</text>
+<rect x="130" y="210" width="120" height="40" class="d-acc"/><text x="190" y="235" text-anchor="middle" class="t-small t-bold">bin</text>
+<path d="M120,36 L248,40" class="d-line" marker-end="url(#ch13-c13b)"/>
+<path d="M280,64 L210,128" class="d-line-key" marker-end="url(#ch13-c13b)"/>
+<path d="M340,64 L410,128" class="d-line-key" marker-end="url(#ch13-c13b)"/>
+<path d="M170,174 L170,208" class="d-line-key" marker-end="url(#ch13-c13b)"/>
+<path d="M150,130 C 140,90 200,60 248,52" class="d-line d-dash" marker-end="url(#ch13-c13b)"/>
+<path d="M470,130 C 480,90 420,60 372,52" class="d-line d-dash" marker-end="url(#ch13-c13b)"/>
+<path d="M230,210 C 260,195 260,185 232,176" class="d-line d-dash" marker-end="url(#ch13-c13b)"/>
+<line x1="540" y1="60" x2="590" y2="60" class="d-line-key"/><text x="600" y="64" class="t-small">shared_ptr child</text>
+<line x1="540" y1="90" x2="590" y2="90" class="d-line d-dash"/><text x="600" y="94" class="t-small">weak_ptr parent</text>
+<text x="540" y="130" class="t-small">Counts only include</text>
+<text x="540" y="146" class="t-small">solid edges. Dropping</text>
+<text x="540" y="162" class="t-small">root frees the whole</text>
+<text x="540" y="178" class="t-small">tree, top down.</text>
+</svg></div><figcaption><b>Own downward, observe upward.</b> Children are owned by their parent through <code>shared_ptr</code>; each child refers to its parent through <code>weak_ptr</code>. The ownership graph is a tree, so dropping the root's last owner destroys the root, whose <code>children</code> vector then destroys the children.</figcaption></figure>
+<pre data-run="ch13-tree" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+    std::string name;
+    std::weak_ptr&lt;Node&gt; parent;                       <span class="hljs-comment">// observes</span>
+    std::vector&lt;std::shared_ptr&lt;Node&gt;&gt; children;      <span class="hljs-comment">// owns</span>
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Node</span><span class="hljs-params">(std::string n)</span> : name(std::move(n)) {</span>}
+    ~<span class="hljs-built_in">Node</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;~%s\n&quot;</span>, name.<span class="hljs-built_in">c_str</span>()); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::shared_ptr&lt;Node&gt; <span class="hljs-title">add_child</span><span class="hljs-params">(<span class="hljs-type">const</span> std::shared_ptr&lt;Node&gt;&amp; parent, std::string name)</span> </span>{
+    <span class="hljs-keyword">auto</span> c = std::<span class="hljs-built_in">make_shared</span>&lt;Node&gt;(std::<span class="hljs-built_in">move</span>(name));
+    c-&gt;parent = parent;
+    parent-&gt;children.<span class="hljs-built_in">push_back</span>(c);
+    <span class="hljs-keyword">return</span> c;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> root = std::<span class="hljs-built_in">make_shared</span>&lt;Node&gt;(<span class="hljs-string">&quot;root&quot;</span>);
+    <span class="hljs-keyword">auto</span> usr = <span class="hljs-built_in">add_child</span>(root, <span class="hljs-string">&quot;usr&quot;</span>);
+    <span class="hljs-keyword">auto</span> bin = <span class="hljs-built_in">add_child</span>(usr, <span class="hljs-string">&quot;bin&quot;</span>);
+
+    std::string path;
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> n = bin; n; n = n-&gt;parent.<span class="hljs-built_in">lock</span>()) path = <span class="hljs-string">&quot;/&quot;</span> + n-&gt;name + path;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, path.<span class="hljs-built_in">c_str</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;root %ld owner(s), usr %ld owner(s)\n&quot;</span>, root.<span class="hljs-built_in">use_count</span>(), usr.<span class="hljs-built_in">use_count</span>());
+
+    usr.<span class="hljs-built_in">reset</span>();
+    bin.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dropping root&quot;</span>);
+    root.<span class="hljs-built_in">reset</span>();
+}</code></pre>
+<pre class="out" data-out="ch13-tree">/root/usr/bin
+root 1 owner(s), usr 2 owner(s)
+dropping root
+~root
+~usr
+~bin</pre>
+<p>The destructor body of <code>root</code> runs first, then its members are destroyed, which destroys <code>usr</code>, whose members destroy <code>bin</code>. The parent links never contribute to a count.</p>
+<h3 id="ch11-dlist">Doubly linked lists</h3>
+<p>Same rule: <code>next</code> owns, <code>prev</code> observes. The list owns <code>head</code>, every node owns its successor, and <code>tail</code> is a <code>weak_ptr</code> or raw pointer.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">DNode</span> {
+    T value;
+    std::shared_ptr&lt;DNode&gt; next;   <span class="hljs-comment">// owning</span>
+    std::weak_ptr&lt;DNode&gt; prev;     <span class="hljs-comment">// breaks the next/prev cycle</span>
+};</code></pre>
+<p>Two practical notes. First, a long owning chain is destroyed recursively (each node's destructor destroys <code>next</code>), so a list of a million nodes can overflow the stack; write an iterative <code>clear()</code>. Second, <code>weak_ptr::lock()</code> on every backward step costs two atomic operations; if the list owns all nodes, a raw <code>prev</code> pointer is just as safe and much cheaper (next section).</p>
+<h3 id="ch11-weak-costs">What weak_ptr costs</h3>
+<ul>
+<li>Size: 16 bytes, the same as <code>shared_ptr</code> (object pointer and control block pointer).</li>
+<li><code>lock()</code>: an atomic compare-and-swap loop on the strong count (it must not resurrect an object whose count already hit 0), then an atomic decrement when the returned <code>shared_ptr</code> dies.</li>
+<li>Memory: the control block stays allocated until the weak count also reaches 0. With <code>make_shared</code> the object and control block are one allocation, so a long-lived <code>weak_ptr</code> keeps the whole block (including the dead object's bytes) allocated, although the destructor has already run. With <code>shared_ptr&lt;T&gt;(new T)</code> only the small control block stays.</li>
+</ul>
+</section>
+
+<section id="ch11-raw-back" data-roles="th"><div class="sec-head"><h2>Raw non-owning back pointers</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A back pointer needs to be a <code>weak_ptr</code> only if the target can die while the pointer still exists. If the structure guarantees that a child never outlives its parent, the parent link can be a plain <code>T*</code> (or <code>T&amp;</code>): it is 8 bytes, needs no atomics and no <code>lock()</code>. The guarantee usually comes from <code>unique_ptr</code> ownership: the parent owns its children exclusively, nobody else holds an owning pointer to a child, so a child exists only inside its parent.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+    Node* parent = <span class="hljs-literal">nullptr</span>;                          <span class="hljs-comment">// valid for the child&#x27;s whole life</span>
+    std::vector&lt;std::unique_ptr&lt;Node&gt;&gt; children;     <span class="hljs-comment">// exclusive ownership</span>
+
+    <span class="hljs-function">Node&amp; <span class="hljs-title">add_child</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">auto</span> c = std::<span class="hljs-built_in">make_unique</span>&lt;Node&gt;();
+        c-&gt;parent = <span class="hljs-keyword">this</span>;
+        children.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(c));
+        <span class="hljs-keyword">return</span> *children.<span class="hljs-built_in">back</span>();
+    }
+};</code></pre>
+<div class="table-wrap"><table>
+<thead><tr><th>Back edge</th><th>Safe when</th><th>Cost per access</th><th>Failure mode</th></tr></thead>
+<tbody>
+<tr><td><code>weak_ptr&lt;T&gt;</code></td><td>always; target may die first</td><td><code>lock()</code>: 2 atomic ops</td><td>returns null, which you must handle</td></tr>
+<tr><td><code>T*</code> / <code>T&amp;</code></td><td>target is guaranteed to outlive the pointer</td><td>none</td><td>dangling pointer, use-after-free if the guarantee breaks</td></tr>
+<tr><td><code>shared_ptr&lt;T&gt;</code></td><td>never for a back edge</td><td>copy: 1 atomic op</td><td>cycle, leak</td></tr>
+<tr><td>index or id into a container</td><td>target stored in a stable container</td><td>a lookup</td><td>stale id, detectable with generation counters</td></tr>
+</tbody></table></div>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>The raw back pointer breaks silently when ownership changes. If someone later hands out <code>shared_ptr&lt;Node&gt;</code> to children (for example to return them from an API), a child can outlive its parent, and <code>child-&gt;parent</code> dangles. Write the lifetime assumption down in a comment, or use <code>weak_ptr</code> whenever ownership is shared.</p></div>
+<p>Moving the parent object is another trap. If <code>Node</code> objects live in a <code>std::vector&lt;Node&gt;</code> and the vector reallocates, every <code>parent</code> pointer to them dangles. Owning children through <code>unique_ptr</code> (stable heap addresses) avoids that.</p>
+</section>
+
+<section id="ch11-observers" data-roles="th"><div class="sec-head"><h2>Observers and caches</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch11-observer">The observer pattern</h3>
+<p>A subject that stores <code>shared_ptr&lt;Observer&gt;</code> keeps every observer alive forever, and if the observer also holds the subject, you have a cycle. Storing raw <code>Observer*</code> instead means an observer that dies without unsubscribing leaves a dangling pointer, a classic crash. Storing <code>weak_ptr&lt;Observer&gt;</code> fixes both: the subject does not own its observers, and on each notification it locks each entry, calls live observers and erases expired ones.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">notify</span><span class="hljs-params">(<span class="hljs-type">const</span> Event&amp; e)</span> </span>{
+    std::<span class="hljs-built_in">erase_if</span>(observers_, [&amp;](<span class="hljs-type">const</span> std::weak_ptr&lt;Observer&gt;&amp; w) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> o = w.<span class="hljs-built_in">lock</span>()) { o-&gt;<span class="hljs-built_in">on_event</span>(e); <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>; }
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;                                    <span class="hljs-comment">// expired: drop it</span>
+    });
+}</code></pre>
+<p>Locking before the call matters: the observer cannot be destroyed in the middle of <code>on_event</code>, even if another thread drops the last external owner. Be aware that an observer that unsubscribes (modifies <code>observers_</code>) from inside its own callback invalidates the iteration; real implementations copy the list, or mark entries and erase after the loop.</p>
+<h3 id="ch11-cache">Caches of shared objects</h3>
+<p>A cache that stores <code>shared_ptr&lt;Texture&gt;</code> never frees anything. A cache that stores <code>weak_ptr&lt;Texture&gt;</code> returns the existing object while someone uses it and lets it die when the last user drops it. This "weak cache" or flyweight is common for fonts, compiled shaders, DNS results and parsed configs. Expired entries remain in the map until you purge them (on lookup, periodically, or from a custom deleter as in <a href="#ch10">Ch 10</a>), otherwise the map itself grows without bound.</p>
+</section>
+
+<section id="ch11-self-capture" data-roles="th"><div class="sec-head"><h2>Callbacks, enable_shared_from_this and capturing self</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A lambda's captures are members of its closure object. A <code>std::function</code> that holds the closure owns those members. So <code>obj-&gt;handler = [self = obj] { ... };</code> stores, inside <code>obj</code>, an object that owns <code>obj</code>. The cycle runs through a type that does not mention <code>shared_ptr</code> at all.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 220" role="img" aria-label="A cycle through a std::function member and a lambda capture">
+<defs><marker id="ch11-c13c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="30" y="50" width="200" height="110" class="d-acc"/>
+<text x="40" y="70" class="t-small t-bold">Connection (strong = 1)</text>
+<rect x="45" y="85" width="170" height="60" class="d-box"/>
+<text x="55" y="104" class="t-mono t-small">std::function on_data</text>
+<text x="55" y="122" class="t-small t-muted">owns its closure</text>
+<rect x="320" y="70" width="200" height="70" class="d-trap"/>
+<text x="330" y="90" class="t-small t-bold">closure object (heap)</text>
+<text x="330" y="110" class="t-mono t-small">shared_ptr self</text>
+<text x="330" y="128" class="t-small t-muted">the capture is a member</text>
+<path d="M215,110 L318,105" class="d-line" marker-end="url(#ch13-c13c)"/>
+<path d="M430,140 C 430,200 140,210 130,162" class="d-line-trap" marker-end="url(#ch13-c13c)"/>
+<text x="250" y="196" class="t-small t-trap">owning edge back to the object</text>
+<text x="560" y="80" class="t-small t-bold">Fix</text>
+<text x="560" y="100" class="t-small">capture weak_from_this()</text>
+<text x="560" y="116" class="t-small">and lock() inside, or</text>
+<text x="560" y="132" class="t-small">capture this if the object</text>
+<text x="560" y="148" class="t-small">owns the callback</text>
+</svg></div><figcaption><b>A captured shared_ptr is an owning edge.</b> The connection owns the <code>std::function</code>, which owns the closure, which owns the connection. The strong count never drops below 1. Capturing a <code>weak_ptr</code> makes the back edge non-owning.</figcaption></figure>
+<h3 id="ch11-esft">enable_shared_from_this</h3>
+<p>A member function sometimes needs a <code>shared_ptr</code> to its own object, for example to register itself with an event loop. <code>shared_ptr&lt;T&gt;(this)</code> would create a second control block and a double delete. Instead, inherit publicly from <code>std::enable_shared_from_this&lt;T&gt;</code>. The base contains a <code>mutable weak_ptr&lt;T&gt;</code>; when a <code>shared_ptr</code> constructor (or <code>make_shared</code>) takes ownership of an object with an unambiguous, accessible <code>enable_shared_from_this</code> base, it stores a weak reference to itself there. <code>shared_from_this()</code> then just locks that member.</p>
+<ul>
+<li>Since C++17, <code>shared_from_this()</code> throws <code>std::bad_weak_ptr</code> if the object is not owned by any <code>shared_ptr</code> (a stack object, a <code>unique_ptr</code>, or inside the constructor, before ownership exists). Before C++17 it was undefined behaviour.</li>
+<li>C++17 <code>weak_from_this()</code> returns the stored <code>weak_ptr</code>, which is empty in those cases, without throwing.</li>
+<li>The base must be public. With private inheritance the <code>shared_ptr</code> constructor cannot see it, the weak member stays empty and <code>shared_from_this()</code> throws.</li>
+<li>Inside the destructor the strong count is already 0, so <code>shared_from_this()</code> throws and <code>weak_from_this().lock()</code> is empty.</li>
+</ul>
+<h3 id="ch11-capture-rules">Which capture to use in a callback</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Who stores the callback</th><th>Capture</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>The object itself (a member <code>std::function</code>)</td><td><code>this</code></td><td>the callback cannot outlive the object that owns it; capturing <code>shared_from_this()</code> is a cycle</td></tr>
+<tr><td>Someone else, and the object may die first (timer queue, event bus, UI)</td><td><code>w = weak_from_this()</code>, then <code>if (auto self = w.lock())</code></td><td>no ownership, no dangling; a dead object's callback becomes a no-op</td></tr>
+<tr><td>Someone else, and the operation must keep the object alive until it completes (async read, Asio handler)</td><td><code>self = shared_from_this()</code></td><td>intentional, temporary ownership; the cycle ends when the one-shot handler runs and is destroyed</td></tr>
+<tr><td>Someone else, forever (periodic timer owned by the object)</td><td>never <code>shared_from_this()</code></td><td>the handler is never destroyed, so the object is never destroyed</td></tr>
+</tbody></table></div>
+<pre data-run="ch13-weak-capture" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> std::vector&lt;std::function&lt;<span class="hljs-type">void</span>()&gt;&gt; timer_queue;   <span class="hljs-comment">// stands in for an event loop</span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Session</span> : std::enable_shared_from_this&lt;Session&gt; {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Session</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span>}
+    ~<span class="hljs-built_in">Session</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;~Session %d\n&quot;</span>, id); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">schedule_ping</span><span class="hljs-params">()</span> </span>{
+        timer_queue.<span class="hljs-built_in">push_back</span>([w = <span class="hljs-built_in">weak_from_this</span>()] {
+            <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> self = w.<span class="hljs-built_in">lock</span>()) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ping %d\n&quot;</span>, self-&gt;id);
+            <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ping skipped: session gone&quot;</span>);
+        });
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> a = std::<span class="hljs-built_in">make_shared</span>&lt;Session&gt;(<span class="hljs-number">1</span>);
+    <span class="hljs-keyword">auto</span> b = std::<span class="hljs-built_in">make_shared</span>&lt;Session&gt;(<span class="hljs-number">2</span>);
+    a-&gt;<span class="hljs-built_in">schedule_ping</span>();
+    b-&gt;<span class="hljs-built_in">schedule_ping</span>();
+    b.<span class="hljs-built_in">reset</span>();                       <span class="hljs-comment">// b dies now: the queue does not own it</span>
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; f : timer_queue) <span class="hljs-built_in">f</span>();
+    timer_queue.<span class="hljs-built_in">clear</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;end of main&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch13-weak-capture">~Session 2
+ping 1
+ping skipped: session gone
+end of main
+~Session 1</pre>
+<p>Capturing <code>this</code> here would be a use-after-free for session 2, and capturing <code>shared_from_this()</code> would have kept session 2 alive until the queue ran. Neither is a cycle, but only the weak capture matches the intent "ping if still connected".</p>
+</section>
+
+<section id="ch11-gc" data-roles="th"><div class="sec-head"><h2>Why reference counting cannot collect cycles</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Garbage is defined globally: an object is garbage if no chain of pointers leads to it from a <i>root</i> (stack slots, registers, globals). A reference count is purely local: the number of pointers into the object. Every object in an unreachable cycle has a non-zero count that comes from inside the cycle, so local information cannot distinguish "kept alive by the program" from "kept alive by garbage". Detecting cycles needs a global traversal from the roots, which is what a tracing collector does.</p>
+<p>C++ cannot bolt a tracing collector onto <code>shared_ptr</code>, because the runtime does not know where the roots are (any word on the stack might be a pointer, pointers can be hidden in integers or unions) and because destructors must run deterministically. C++11 even had minimal "garbage collection support" APIs (<code>std::declare_reachable</code> and friends), which no implementation used, and C++23 removed them.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Language or runtime</th><th>Strategy</th><th>Cycles</th><th>Destruction timing</th></tr></thead>
+<tbody>
+<tr><td>C++ <code>shared_ptr</code></td><td>atomic reference counting</td><td>leak; break with <code>weak_ptr</code> or design</td><td>deterministic, at the last release</td></tr>
+<tr><td>Rust <code>Rc</code>/<code>Arc</code></td><td>reference counting</td><td>leak (safe, but a leak); break with <code>Weak</code></td><td>deterministic</td></tr>
+<tr><td>Swift, Objective-C ARC</td><td>compiler-inserted reference counting</td><td>leak; <code>weak</code> and <code>unowned</code> references, <code>[weak self]</code> in closures</td><td>deterministic</td></tr>
+<tr><td>CPython</td><td>reference counting plus a generational cycle detector (<code>gc</code> module)</td><td>collected by the detector, which finds groups whose counts are fully explained by internal references</td><td>immediate for acyclic objects, delayed for cycles</td></tr>
+<tr><td>Java, Go, C#, JavaScript</td><td>tracing garbage collection from roots</td><td>collected</td><td>nondeterministic; finalisers are unreliable, so resources use try-with-resources, <code>defer</code>, <code>using</code></td></tr>
+</tbody></table></div>
+<p>The trade-off is the interview point. Reference counting gives deterministic destruction, which is what makes RAII work for files, locks and sockets, and it spreads cost evenly (no pauses). The price is that cycles are the programmer's job. Tracing GC handles cycles and is often faster in throughput, but it cannot tell you <i>when</i> a resource is released.</p>
+</section>
+
+<section id="ch11-lock-races" data-roles="th"><div class="sec-head"><h2>weak_ptr and threads: lock races</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> The control block's counts are atomic, so different <code>shared_ptr</code> and <code>weak_ptr</code> <i>objects</i> that share one control block can be copied, locked and destroyed from different threads safely. What is not safe is a check followed by a separate use.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">if</span> (!w.<span class="hljs-built_in">expired</span>()) w.<span class="hljs-built_in">lock</span>()-&gt;<span class="hljs-built_in">refresh</span>();   <span class="hljs-comment">// <span class="hljs-doctag">BUG:</span> may dereference null</span>
+<span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> sp = w.<span class="hljs-built_in">lock</span>()) sp-&gt;<span class="hljs-built_in">refresh</span>();   <span class="hljs-comment">// correct: one atomic step, then you own it</span></code></pre>
+<p>Between <code>expired()</code> returning false and <code>lock()</code>, another thread can drop the last owner, so <code>lock()</code> returns an empty pointer. <code>lock()</code> itself is atomic: it increments the strong count only if it is still non-zero, so it never resurrects a dying object. For the same reason, <code>use_count()</code> is only a hint in multithreaded code; C++20 removed <code>shared_ptr::unique()</code> because it suggested otherwise.</p>
+<pre data-run="ch13-lock-race" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Config</span> { <span class="hljs-type">int</span> version; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> owner = std::<span class="hljs-built_in">make_shared</span>&lt;Config&gt;(Config{<span class="hljs-number">1</span>});
+    std::weak_ptr&lt;Config&gt; w = owner;
+    std::atomic&lt;<span class="hljs-type">bool</span>&gt; go{<span class="hljs-literal">false</span>};
+    <span class="hljs-type">int</span> alive_hits = <span class="hljs-number">0</span>, null_hits = <span class="hljs-number">0</span>;
+
+    <span class="hljs-function">std::thread <span class="hljs-title">reader</span><span class="hljs-params">([w, &amp;go, &amp;alive_hits, &amp;null_hits] {   <span class="hljs-comment">// the thread has its own copy of w</span>
+        <span class="hljs-keyword">while</span> (!go.load()) {}
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) {
+            <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> sp = w.lock()) alive_hits += (sp-&gt;version == <span class="hljs-number">1</span>);
+            <span class="hljs-keyword">else</span> ++null_hits;
+        }
+    })</span></span>;
+    go = <span class="hljs-literal">true</span>;
+    owner.<span class="hljs-built_in">reset</span>();                    <span class="hljs-comment">// races with lock(), and that is fine</span>
+    reader.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;every lock() saw a live object or null: %d\n&quot;</span>, alive_hits + null_hits == <span class="hljs-number">100000</span>);
+}</code></pre>
+<pre class="out" data-out="ch13-lock-race">every lock() saw a live object or null: 1</pre>
+<p>The split between <code>alive_hits</code> and <code>null_hits</code> depends on timing, so the program prints only the invariant. What would be a data race is two threads using the <i>same</i> <code>shared_ptr</code> or <code>weak_ptr</code> object while one of them modifies it (assigns, resets). For that, protect the pointer object with a mutex or use C++20 <code>std::atomic&lt;std::shared_ptr&lt;T&gt;&gt;</code> and <code>std::atomic&lt;std::weak_ptr&lt;T&gt;&gt;</code> (available in libstdc++ since GCC 12; libc++ as of LLVM 22 does not provide it yet).</p>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>Locking a <code>weak_ptr</code> is the only correct way to use it: <code>if (auto sp = w.lock())</code>. Never test <code>expired()</code> and then use. <code>expired()</code> is useful only as a cheap "definitely dead" check, for example to purge cache entries.</p></div>
+</section>
+
+<section id="ch11-design" data-roles="th"><div class="sec-head"><h2>Ownership design rules</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Draw every owning pointer as an arrow. If the arrows form a directed acyclic graph (DAG), reference counting frees everything: when the roots go, counts cascade to zero in topological order. A cycle anywhere in the owning graph is a leak waiting to happen. All the techniques in this chapter are ways to keep that graph acyclic.</p>
+<ol>
+<li><b>Give every object one clear owner by default.</b> Use values and <code>unique_ptr</code>. Reach for <code>shared_ptr</code> only when the lifetime is genuinely shared and not known statically (an object used by several asynchronous operations, a cache entry). Exclusive ownership cannot form a <code>shared_ptr</code> cycle.</li>
+<li><b>Keep the owning graph a DAG.</b> Owners point down, from the whole to the parts. Anything pointing up or sideways is non-owning: <code>weak_ptr</code> if the target can die first, a raw pointer or reference if it cannot.</li>
+<li><b>Treat captures as edges.</b> A lambda stored in an object or in something the object owns must not capture a <code>shared_ptr</code> to the object. Review <code>[self = shared_from_this()]</code> in code review the way you review <code>new</code>.</li>
+<li><b>Prefer explicit teardown for graphs that really are cyclic.</b> Some domains (graph editors, object graphs loaded from files) have arbitrary cycles. Store all nodes in an owning container (a <code>vector&lt;unique_ptr&lt;Node&gt;&gt;</code> or an arena, <a href="#ch15">Ch 15</a>), and let edges be raw pointers or indices. The container frees everything at once.</li>
+<li><b>Test for leaks.</b> A weak probe or an instance counter in unit tests catches the cycle that someone adds next year.</li>
+</ol>
+<div class="table-wrap"><table>
+<thead><tr><th>Key facts</th><th></th></tr></thead>
+<tbody>
+<tr><td>Destructor runs when</td><td>strong count reaches 0 (weak count irrelevant)</td></tr>
+<tr><td>Control block freed when</td><td>strong and weak counts both reach 0</td></tr>
+<tr><td><code>make_shared</code> memory with a live <code>weak_ptr</code></td><td>whole block stays allocated until the last <code>weak_ptr</code> goes</td></tr>
+<tr><td><code>weak_ptr::lock()</code></td><td>atomic; returns empty if the object is dead; never resurrects</td></tr>
+<tr><td><code>shared_from_this()</code> without an owner</td><td>throws <code>std::bad_weak_ptr</code> (C++17), UB before</td></tr>
+<tr><td><code>weak_from_this()</code></td><td>C++17; empty <code>weak_ptr</code> instead of a throw</td></tr>
+<tr><td>Can <code>unique_ptr</code> leak through a cycle?</td><td>yes, if you build an ownership ring by hand (A owns B owns A)</td></tr>
+<tr><td>LeakSanitizer</td><td>finds cycles at exit; default with ASan on Linux; on macOS only with upstream clang and <code>detect_leaks=1</code></td></tr>
+</tbody></table></div>
+</section>
+
+<section id="ch11-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Explain precisely why two objects that hold <code>shared_ptr</code>s to each other are never destroyed.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Each object's strong count includes the pointer stored in the other object. When all outside pointers are gone, both counts are still 1, and the destructor runs only when a count reaches 0. Since the destructor of A is what would release A's pointer to B (and vice versa), neither can start.</p>
+    <p><b>Why.</b> Reference counting decides liveness locally, from the number of incoming owning pointers, not from reachability. An unreachable cycle has non-zero counts that are all internal. "The memory is freed at program exit" is not an answer: destructors still never run, so files are not flushed and sockets are not closed in an orderly way, and in a long-running server the leak grows per request.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A <code>Parent</code> owns a <code>shared_ptr&lt;Child&gt;</code> and the child owns a <code>shared_ptr&lt;Parent&gt;</code>. Your colleague breaks the cycle by making the <code>Parent::child</code> member a <code>weak_ptr</code>. Does it leak? Is it correct?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It no longer leaks, but it is wrong: if nothing else owns the child, the child is destroyed as soon as it is created, and <code>parent-&gt;child.lock()</code> returns null. Make the <i>child-to-parent</i> edge weak instead.</p>
+    <p><b>Why.</b> Any weak edge in the cycle stops the leak, but a <code>weak_ptr</code> only works if the target has another owner. The child's only owner is the parent, so that edge must be owning. The parent has another owner (whoever created the tree), so the child can observe it weakly. The rule: weak edges point back toward the owner.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can you leak memory through a cycle with only <code>unique_ptr</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes. If A's <code>unique_ptr</code> member owns B and you then move ownership of A into B's member, A and B own each other and no outside pointer owns either. Both leak. A circular singly linked list built with <code>unique_ptr&lt;Node&gt; next</code> is the usual way it happens.</p>
+    <p><b>Why.</b> <code>unique_ptr</code> guarantees one owner per object, not an acyclic ownership graph. "Unique ownership cannot cycle" is the common wrong answer. It is harder to do by accident than with <code>shared_ptr</code>, because you must explicitly move the last outside owner into the ring, and the reading drills include it.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What does <code>weak_ptr::lock()</code> do, and why can't you dereference a <code>weak_ptr</code> directly?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>lock()</code> atomically increments the strong count if it is non-zero and returns a <code>shared_ptr</code> that owns the object; if the count is already 0, it returns an empty <code>shared_ptr</code>. <code>weak_ptr</code> has no <code>operator*</code> or <code>operator-&gt;</code>.</p>
+    <p><b>Why.</b> A direct dereference could not guarantee the object stays alive during the access: another thread might drop the last owner in the middle. Forcing you through <code>lock()</code> makes you hold an owner for exactly as long as you use the object. Internally <code>lock()</code> is a CAS loop, since a plain increment could revive an object whose count already hit zero.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>An object is created with <code>make_shared</code>. Its last <code>shared_ptr</code> is gone, but a <code>weak_ptr</code> to it lives on in a cache for hours. Has the object's memory been freed? Has its destructor run?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The destructor has run, but the memory has not been freed. The object's storage is inside the same allocation as the control block, and the control block must live until the weak count reaches 0.</p>
+    <p><b>Why.</b> <code>make_shared</code> does one allocation for counts plus object. The strong count reaching 0 calls the destructor; the weak count reaching 0 frees the block. For a large object (say a 1 MB buffer member stored inline) a lingering <code>weak_ptr</code> keeps the whole 1 MB allocated. <code>shared_ptr&lt;T&gt;(new T)</code> frees the object at strong count 0 and keeps only the small control block. Many candidates think a <code>weak_ptr</code> holds nothing at all.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How does <code>enable_shared_from_this</code> work internally?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The base class holds a <code>mutable weak_ptr&lt;T&gt;</code>. When a <code>shared_ptr</code> takes ownership of a raw pointer (or <code>make_shared</code> creates the object), its constructor checks at compile time whether <code>T</code> has an unambiguous, accessible <code>enable_shared_from_this</code> base, and if so assigns itself to that <code>weak_ptr</code>. <code>shared_from_this()</code> returns <code>shared_ptr&lt;T&gt;(weak_this)</code>, which throws if expired.</p>
+    <p><b>Why.</b> This lets a member function get a <code>shared_ptr</code> that shares the existing control block, instead of creating a second one with <code>shared_ptr&lt;T&gt;(this)</code>, which would delete the object twice. It also explains its limits: the weak member is filled only after the constructor finishes and only if inheritance is public.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>To fix the <code>alice</code>/<code>bob</code> cycle, a colleague adds <code>~Person() { partner.reset(); }</code>. Does that stop the leak?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. The destructor is exactly the code that never runs. It would run only when a strong count reaches 0, and the cycle is what keeps both counts at 1. Adding a reset to it changes nothing, and the program still prints no "bye" lines.</p>
+    <p><b>Why.</b> Breaking a cycle must happen either from <i>outside</i> while an external owner still exists (an explicit <code>close()</code> or <code>unlink()</code> that resets <code>partner</code> before the last outside <code>shared_ptr</code> goes), or structurally, by making one edge a <code>weak_ptr</code>. The explicit teardown works but relies on every caller remembering it on every path, including exceptions, so the structural fix is preferred. The same mistake appears as "reset the callbacks in the destructor" for a <code>std::function</code> that captured <code>shared_from_this()</code>. Many candidates suggest the destructor reset because it is how you would release resources in ordinary RAII code.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A <code>Parent</code> owns its <code>Child</code> through <code>unique_ptr</code>. The child needs the parent's settings, so the parent gives it <code>std::shared_ptr&lt;const Settings&gt;(self, &amp;self-&gt;settings)</code>, where <code>self</code> is the parent's own <code>shared_ptr</code>. No type in <code>Child</code> mentions <code>Parent</code>. Is there a cycle?</p>
+<pre data-run="ch13-aliasing-cycle" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Settings</span> { <span class="hljs-type">int</span> level = <span class="hljs-number">3</span>; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Child</span> { std::shared_ptr&lt;<span class="hljs-type">const</span> Settings&gt; settings; };
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Parent</span> {
+    Settings settings;
+    std::unique_ptr&lt;Child&gt; child;
+    ~<span class="hljs-built_in">Parent</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;~Parent&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::weak_ptr&lt;Parent&gt; probe;
+    {
+        <span class="hljs-keyword">auto</span> p = std::<span class="hljs-built_in">make_shared</span>&lt;Parent&gt;();
+        p-&gt;child = std::<span class="hljs-built_in">make_unique</span>&lt;Child&gt;();
+        p-&gt;child-&gt;settings = std::<span class="hljs-built_in">shared_ptr</span>&lt;<span class="hljs-type">const</span> Settings&gt;(p, &amp;p-&gt;settings);   <span class="hljs-comment">// aliasing constructor</span>
+        probe = p;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;parent owners %ld\n&quot;</span>, p.<span class="hljs-built_in">use_count</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after scope: expired %d, owners %ld\n&quot;</span>, probe.<span class="hljs-built_in">expired</span>(), probe.<span class="hljs-built_in">use_count</span>());
+}</code></pre>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch13-aliasing-cycle">parent owners 2
+after scope: expired 0, owners 1</pre>
+    <p><b>Answer.</b> Yes, and the parent leaks. The aliasing constructor creates a <code>shared_ptr</code> that <i>points</i> to the <code>Settings</code> member but <i>shares ownership</i> of the whole <code>Parent</code> (same control block). So the parent owns the child, and the child owns the parent. <code>~Parent</code> never prints.</p>
+    <p><b>Why.</b> An owning edge is defined by the control block a pointer shares, not by its element type. That makes aliasing pointers the hardest cycles to spot in review. Fixes: give the child a <code>std::weak_ptr&lt;const Settings&gt;</code> made from the aliasing pointer (it observes the parent's block), a plain <code>const Settings*</code> (the parent outlives its exclusively owned child), or a copy of the settings. The common wrong answer is "no cycle, it is only a pointer to <code>Settings</code>".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When is a raw pointer a better back pointer than a <code>weak_ptr</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> When the structure guarantees that the target outlives the pointer, typically when the parent owns its children exclusively with <code>unique_ptr</code> (or by value in a node container with stable addresses). Then <code>child-&gt;parent</code> can never dangle, and a raw pointer is cheaper: 8 bytes, no atomics, no null check after <code>lock()</code>.</p>
+    <p><b>Why.</b> <code>weak_ptr</code> exists to handle "the target might be gone". If that is impossible by construction, it adds cost and suggests a lifetime uncertainty that does not exist. The risk is future changes: as soon as children can be shared outside the parent, the guarantee is gone and the raw pointer becomes a use-after-free.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A class stores a <code>std::function&lt;void()&gt; on_timeout</code> and sets it to a lambda that captures <code>this</code>. Is that a cycle? What if it captures <code>shared_from_this()</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Capturing <code>this</code> is not a cycle and is safe as long as only the object itself invokes <code>on_timeout</code>: the closure cannot outlive the object that owns it. Capturing <code>shared_from_this()</code> is a cycle: object owns function owns closure owns object, so it leaks.</p>
+    <p><b>Why.</b> Raw <code>this</code> is a non-owning edge, so it adds nothing to any count. The danger with <code>this</code> appears only when a copy of the callback is handed to <i>someone else</i> (a timer queue, another thread) that may call it after the object died; then use <code>weak_from_this()</code>. Many candidates say "always capture <code>shared_from_this()</code> to be safe", which is the leak.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why can a tracing garbage collector free a cycle when reference counting cannot? How does CPython deal with cycles?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A tracing collector marks everything reachable from the roots (stacks, registers, globals) and frees the rest, so an unreachable cycle is simply never marked. Reference counting only knows incoming pointer counts. CPython uses reference counting plus a periodic cycle detector: for container objects it subtracts references that come from other tracked objects, and any group whose count is fully explained by internal references is unreachable garbage.</p>
+    <p><b>Why.</b> Reachability is a global property and counts are local. C++ chooses local counting because it gives deterministic destruction (RAII) and needs no knowledge of roots, which C++ cannot provide precisely. The price is that cycle avoidance is a design responsibility, handled with <code>weak_ptr</code>, raw back pointers or owning containers.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>In the observer pattern, why store <code>weak_ptr&lt;Observer&gt;</code> in the subject rather than <code>shared_ptr</code> or a raw pointer?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>shared_ptr</code> makes the subject keep every observer alive (and forms a cycle if the observer holds the subject). A raw pointer dangles when an observer is destroyed without unsubscribing. A <code>weak_ptr</code> does neither: the subject locks each observer during <code>notify</code>, calls the live ones and erases the expired ones.</p>
+    <p><b>Why.</b> Subscription is not ownership. Locking also protects the call: while <code>on_event</code> runs, the subject holds a temporary owner, so the observer cannot be destroyed mid-call by another thread. The cost is two atomic operations per observer per notification, which is usually negligible next to the callback.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>In an Asio-style server every handler captures <code>self = shared_from_this()</code>. Isn't that a cycle? Why doesn't it leak?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It is a temporary ownership edge, not a permanent cycle. The handler is owned by the I/O service (not by the session), runs once and is then destroyed, which releases <code>self</code>. When the last pending operation completes without starting a new one, the session's count drops to 0 and it is destroyed. That is the intended "keep alive while an operation is in flight" pattern.</p>
+    <p><b>Why.</b> A leak needs the closure to be owned, directly or indirectly, by the object it captures, and never released. If the session stored a copy of the handler in a member (or a periodic timer it owns re-arms forever with <code>self</code>), the edge would become permanent and leak. The usual way to stop such a session is to close its socket, so the pending operations complete with an error and do not re-arm.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch11-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Follow the counts. What does this print?</p>
+<pre data-run="ch13-r-counts" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">B</span>;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">A</span> { std::shared_ptr&lt;B&gt; b; ~<span class="hljs-built_in">A</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;~A&quot;</span>); } };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">B</span> { std::shared_ptr&lt;A&gt; a; ~<span class="hljs-built_in">B</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;~B&quot;</span>); } };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::weak_ptr&lt;A&gt; wa;
+    std::weak_ptr&lt;B&gt; wb;
+    {
+        <span class="hljs-keyword">auto</span> a = std::<span class="hljs-built_in">make_shared</span>&lt;A&gt;();
+        <span class="hljs-keyword">auto</span> b = std::<span class="hljs-built_in">make_shared</span>&lt;B&gt;();
+        wa = a;
+        wb = b;
+        a-&gt;b = b;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%ld %ld\n&quot;</span>, a.<span class="hljs-built_in">use_count</span>(), b.<span class="hljs-built_in">use_count</span>());
+        b-&gt;a = a;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%ld %ld\n&quot;</span>, a.<span class="hljs-built_in">use_count</span>(), b.<span class="hljs-built_in">use_count</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%ld %ld\n&quot;</span>, wa.<span class="hljs-built_in">use_count</span>(), wb.<span class="hljs-built_in">use_count</span>());
+    wa.<span class="hljs-built_in">lock</span>()-&gt;b.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%ld %ld\n&quot;</span>, wa.<span class="hljs-built_in">use_count</span>(), wb.<span class="hljs-built_in">use_count</span>());
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch13-r-counts">1 2
+2 2
+1 1
+~B
+~A
+0 0</pre>
+    <p><b>Answer.</b> After the scope both counts are 1 (the cycle). <code>wa.lock()</code> creates a temporary owner of A (count 2). Resetting <code>A::b</code> drops B to 0, so <code>~B</code> runs, and destroying B's member <code>a</code> drops A to 1. At the end of the full expression the temporary from <code>lock()</code> dies, A drops to 0 and <code>~A</code> runs.</p>
+    <p><b>Why.</b> <code>weak_ptr::use_count()</code> reports the strong count, not the weak count. The temporary <code>shared_ptr</code> returned by <code>lock()</code> lives until the semicolon, which is why <code>~A</code> comes after <code>~B</code> and not in the middle. Breaking any one edge of a cycle lets the whole cycle cascade.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A doubly linked list reports that its nodes are still alive after the list is destroyed. Why?</p>
+<pre data-run="ch13-r-dlist" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> live_nodes = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+    <span class="hljs-type">int</span> value;
+    std::shared_ptr&lt;Node&gt; next;
+    std::shared_ptr&lt;Node&gt; prev;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Node</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> : value(v) {</span> ++live_nodes; }
+    ~<span class="hljs-built_in">Node</span>() { --live_nodes; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">List</span> {
+    std::shared_ptr&lt;Node&gt; head, tail;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> </span>{
+        <span class="hljs-keyword">auto</span> n = std::<span class="hljs-built_in">make_shared</span>&lt;Node&gt;(v);
+        <span class="hljs-keyword">if</span> (!head) { head = tail = n; <span class="hljs-keyword">return</span>; }
+        n-&gt;prev = tail;
+        tail-&gt;next = n;
+        tail = n;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        List l;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">5</span>; ++i) l.<span class="hljs-built_in">push_back</span>(i);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;live inside: %d\n&quot;</span>, live_nodes);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;live after the list is gone: %d\n&quot;</span>, live_nodes);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch13-r-dlist">live inside: 5
+live after the list is gone: 5</pre>
+    <p><b>Answer.</b> Every adjacent pair of nodes owns each other through <code>next</code> and <code>prev</code>, so the list is a chain of cycles. When <code>head</code> and <code>tail</code> are released, every node still has count at least 1. Fix: make <code>prev</code> (and the list's <code>tail</code>) a <code>weak_ptr</code> or a raw <code>Node*</code>.</p>
+    <p><b>Why.</b> With <code>prev</code> weak, the owning graph is a single chain from <code>head</code>, and dropping <code>head</code> cascades down the list. Note that the cascade is recursive (each destructor destroys <code>next</code>), so for very long lists add an iterative <code>clear()</code>. LeakSanitizer on Linux would report all five nodes; the counter proves it here.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This timer callback crashes intermittently in production. What is wrong?</p>
+<pre data-run="ch13-r-dangling-this" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">EventLoop</span> {
+    std::vector&lt;std::function&lt;<span class="hljs-type">void</span>()&gt;&gt; pending;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">post</span><span class="hljs-params">(std::function&lt;<span class="hljs-type">void</span>()&gt; f)</span> </span>{ pending.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(f)); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">run</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; f : pending) <span class="hljs-built_in">f</span>(); pending.<span class="hljs-built_in">clear</span>(); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Session</span> {
+    <span class="hljs-type">int</span> bytes_sent = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">start</span><span class="hljs-params">(EventLoop&amp; loop)</span> </span>{
+        loop.<span class="hljs-built_in">post</span>([<span class="hljs-keyword">this</span>] { bytes_sent += <span class="hljs-number">100</span>; std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sent %d\n&quot;</span>, bytes_sent); });
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    EventLoop loop;
+    <span class="hljs-keyword">auto</span> s = std::<span class="hljs-built_in">make_unique</span>&lt;Session&gt;();
+    s-&gt;<span class="hljs-built_in">start</span>(loop);
+    s.<span class="hljs-built_in">reset</span>();          <span class="hljs-comment">// client disconnected before the loop ran</span>
+    loop.<span class="hljs-built_in">run</span>();
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The callback captured raw <code>this</code>, and the event loop (not the session) owns the callback. The session is destroyed before the loop runs, so the callback writes to freed memory: heap-use-after-free, which ASan reports.</p>
+    <p><b>Why.</b> A raw capture is safe only when the object owns the callback. Here the callback is stored by someone else and may run later. Fix: own the session with <code>shared_ptr</code>, inherit <code>enable_shared_from_this</code>, capture <code>w = weak_from_this()</code> and <code>lock()</code> inside, or capture <code>shared_from_this()</code> if the operation must keep the session alive until it runs. Capturing <code>shared_from_this()</code> is not a cycle here because the loop, not the session, owns the closure.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does each <code>shared_from_this</code> call do?</p>
+<pre data-run="ch13-r-sft" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">W</span> : std::enable_shared_from_this&lt;W&gt; {
+    <span class="hljs-built_in">W</span>() {
+        <span class="hljs-keyword">try</span> {
+            <span class="hljs-keyword">auto</span> self = <span class="hljs-built_in">shared_from_this</span>();
+            (<span class="hljs-type">void</span>)self;
+            std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor: got a shared_ptr&quot;</span>);
+        } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_weak_ptr&amp;) {
+            std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor: bad_weak_ptr&quot;</span>);
+        }
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> p = std::<span class="hljs-built_in">make_shared</span>&lt;W&gt;();
+    <span class="hljs-keyword">auto</span> q = p-&gt;<span class="hljs-built_in">shared_from_this</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;use_count %ld\n&quot;</span>, p.<span class="hljs-built_in">use_count</span>());
+
+    W on_stack;
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-keyword">auto</span> r = on_stack.<span class="hljs-built_in">shared_from_this</span>();
+        (<span class="hljs-type">void</span>)r;
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_weak_ptr&amp;) {
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;stack: bad_weak_ptr&quot;</span>);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;weak_from_this expired: %d\n&quot;</span>, on_stack.<span class="hljs-built_in">weak_from_this</span>().<span class="hljs-built_in">expired</span>());
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch13-r-sft">ctor: bad_weak_ptr
+use_count 2
+ctor: bad_weak_ptr
+stack: bad_weak_ptr
+weak_from_this expired: 1</pre>
+    <p><b>Answer.</b> Inside the constructor nothing owns the object yet, so both constructions print <code>bad_weak_ptr</code>. After <code>make_shared</code> returns, <code>shared_from_this()</code> shares the existing control block (count 2). The stack object is never owned, so it throws, and its <code>weak_from_this()</code> is empty.</p>
+    <p><b>Why.</b> The internal <code>weak_ptr</code> in <code>enable_shared_from_this</code> is assigned by the owning <code>shared_ptr</code> after the object has been fully constructed. C++17 specifies the throw; before C++17 these calls were undefined behaviour.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A developer needed a <code>shared_ptr</code> to the current object inside a member function and did not want to change the base classes. What happens?</p>
+<pre data-run="ch13-r-this-twice" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Job</span>;
+<span class="hljs-type">static</span> std::vector&lt;std::shared_ptr&lt;Job&gt;&gt; registry;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Job</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Job</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span>}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">enqueue</span><span class="hljs-params">()</span> </span>{ registry.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">shared_ptr</span>&lt;Job&gt;(<span class="hljs-keyword">this</span>)); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> job = std::<span class="hljs-built_in">make_shared</span>&lt;Job&gt;(<span class="hljs-number">7</span>);
+    job-&gt;<span class="hljs-built_in">enqueue</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;registered %zu job(s)\n&quot;</span>, registry.<span class="hljs-built_in">size</span>());
+    registry.<span class="hljs-built_in">clear</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;job id %d\n&quot;</span>, job-&gt;id);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>shared_ptr&lt;Job&gt;(this)</code> creates a second, independent control block for an object that is already owned. When <code>registry</code> is cleared, that control block's count reaches 0 and it deletes the job, while <code>job</code> still points to it. The next line reads freed memory, and at the end the original owner destroys the object again. Under ASan the first error is an invalid free ("attempting free on address which was not malloc()-ed"): the object lives inside <code>make_shared</code>'s combined block, so its address was never returned by <code>new</code>.</p>
+    <p><b>Why.</b> Constructing a <code>shared_ptr</code> from a raw pointer always means "I am the first owner". Inherit from <code>enable_shared_from_this&lt;Job&gt;</code> and use <code>shared_from_this()</code>, which shares the existing control block. If the registry should not keep jobs alive, store <code>weak_from_this()</code> instead.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A tree uses raw parent pointers. The code that prints a node's parent crashes. Why?</p>
+<pre data-run="ch13-r-raw-parent" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+    std::string name;
+    Node* parent = <span class="hljs-literal">nullptr</span>;
+    std::vector&lt;std::shared_ptr&lt;Node&gt;&gt; children;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Node</span><span class="hljs-params">(std::string n)</span> : name(std::move(n)) {</span>}
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::shared_ptr&lt;Node&gt; <span class="hljs-title">add</span><span class="hljs-params">(Node&amp; parent, std::string name)</span> </span>{
+    <span class="hljs-keyword">auto</span> c = std::<span class="hljs-built_in">make_shared</span>&lt;Node&gt;(std::<span class="hljs-built_in">move</span>(name));
+    c-&gt;parent = &amp;parent;
+    parent.children.<span class="hljs-built_in">push_back</span>(c);
+    <span class="hljs-keyword">return</span> c;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::shared_ptr&lt;Node&gt; keep;
+    {
+        <span class="hljs-keyword">auto</span> root = std::<span class="hljs-built_in">make_shared</span>&lt;Node&gt;(<span class="hljs-string">&quot;root, with a name long enough to live on the heap&quot;</span>);
+        keep = <span class="hljs-built_in">add</span>(*root, <span class="hljs-string">&quot;leaf&quot;</span>);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;leaf&#x27;s parent is %s\n&quot;</span>, keep-&gt;parent-&gt;name.<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The children are shared, so <code>keep</code> can (and does) outlive the root. When <code>root</code> goes out of scope the root node is destroyed, and <code>keep-&gt;parent</code> dangles: heap-use-after-free.</p>
+    <p><b>Why.</b> A raw back pointer is valid only if the parent is guaranteed to outlive the child. That holds when the parent owns its children exclusively (<code>unique_ptr</code>), and fails once children are handed out as <code>shared_ptr</code>. Fix: make <code>parent</code> a <code>weak_ptr&lt;Node&gt;</code> and check <code>lock()</code>, or keep exclusive ownership.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A ring built from <code>unique_ptr</code>. How many nodes are alive at the end?</p>
+<pre data-run="ch13-r-unique-ring" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> alive = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+    std::unique_ptr&lt;Node&gt; next;
+    <span class="hljs-built_in">Node</span>() { ++alive; }
+    ~<span class="hljs-built_in">Node</span>() { --alive; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        <span class="hljs-keyword">auto</span> a = std::<span class="hljs-built_in">make_unique</span>&lt;Node&gt;();
+        a-&gt;next = std::<span class="hljs-built_in">make_unique</span>&lt;Node&gt;();
+        a-&gt;next-&gt;next = std::<span class="hljs-built_in">make_unique</span>&lt;Node&gt;();
+        Node* last = a-&gt;next-&gt;next.<span class="hljs-built_in">get</span>();
+        last-&gt;next = std::<span class="hljs-built_in">move</span>(a);      <span class="hljs-comment">// close the ring</span>
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a is %s\n&quot;</span>, a ? <span class="hljs-string">&quot;set&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;alive: %d\n&quot;</span>, alive);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch13-r-unique-ring">a is null
+alive: 3</pre>
+    <p><b>Answer.</b> All three nodes leak. After the move, the first node is owned by the last node, which is owned by the second, which is owned by the first. The local <code>a</code> is null, so nothing outside the ring owns any of them.</p>
+    <p><b>Why.</b> <code>unique_ptr</code> guarantees a single owner per object, which the ring satisfies. It does not guarantee the ownership graph is acyclic. The same structure with <code>shared_ptr</code> would also leak. Circular lists need a non-owning link somewhere, or an owning container for all nodes.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A widget registers a handler with itself. After the scope ends, the widget is never destroyed. Find the owning edge.</p>
+<pre data-run="ch13-r-handler-leak" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> widgets = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Widget</span> : std::enable_shared_from_this&lt;Widget&gt; {
+    std::vector&lt;std::function&lt;<span class="hljs-type">void</span>(<span class="hljs-type">int</span>)&gt;&gt; handlers;
+    <span class="hljs-type">int</span> total = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">Widget</span>() { ++widgets; }
+    ~<span class="hljs-built_in">Widget</span>() { --widgets; std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;~Widget&quot;</span>); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">add_logging</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">auto</span> self = <span class="hljs-built_in">shared_from_this</span>();
+        handlers.<span class="hljs-built_in">push_back</span>([self](<span class="hljs-type">int</span> v) { self-&gt;total += v; });
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">fire</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> </span>{ <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; h : handlers) <span class="hljs-built_in">h</span>(v); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        <span class="hljs-keyword">auto</span> w = std::<span class="hljs-built_in">make_shared</span>&lt;Widget&gt;();
+        w-&gt;<span class="hljs-built_in">add_logging</span>();
+        w-&gt;<span class="hljs-built_in">fire</span>(<span class="hljs-number">5</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;total %d, use_count %ld\n&quot;</span>, w-&gt;total, w.<span class="hljs-built_in">use_count</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;widgets alive: %d\n&quot;</span>, widgets);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch13-r-handler-leak">total 5, use_count 2
+widgets alive: 1</pre>
+    <p><b>Answer.</b> The handler lambda captures <code>self</code>, a <code>shared_ptr</code> to the widget, and the widget stores the handler in its own <code>handlers</code> vector. Widget owns closure owns widget, so the count never drops below 1 and <code>~Widget</code> never prints. Fix: capture <code>this</code> (the widget owns the handler, so it cannot outlive the widget), or <code>weak_from_this()</code> if handlers can be copied out.</p>
+    <p><b>Why.</b> <code>use_count</code> 2 is the giveaway: one owner is <code>w</code>, the other is hidden inside a <code>std::function</code>. Cycles through captures do not show up in the class definition, which is why reviewers should treat <code>[self = shared_from_this()]</code> in a stored callback as a red flag.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>When does the destructor run relative to the weak pointer's lifetime?</p>
+<pre data-run="ch13-r-weak-life" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Big</span> {
+    <span class="hljs-type">char</span> payload[<span class="hljs-number">4096</span>];
+    ~<span class="hljs-built_in">Big</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;~Big&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::weak_ptr&lt;Big&gt; w;
+    {
+        <span class="hljs-keyword">auto</span> sp = std::<span class="hljs-built_in">make_shared</span>&lt;Big&gt;();
+        w = sp;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;inside: expired %d, use_count %ld\n&quot;</span>, w.<span class="hljs-built_in">expired</span>(), w.<span class="hljs-built_in">use_count</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;outside: expired %d, use_count %ld\n&quot;</span>, w.<span class="hljs-built_in">expired</span>(), w.<span class="hljs-built_in">use_count</span>());
+    <span class="hljs-keyword">auto</span> again = w.<span class="hljs-built_in">lock</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;lock gave %s\n&quot;</span>, again ? <span class="hljs-string">&quot;an object&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>);
+    w.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;weak reset: now the 4 KiB block is freed&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch13-r-weak-life">inside: expired 0, use_count 1
+~Big
+outside: expired 1, use_count 0
+lock gave null
+weak reset: now the 4 KiB block is freed</pre>
+    <p><b>Answer.</b> <code>~Big</code> runs at the end of the inner scope, when the strong count reaches 0, even though <code>w</code> still exists. After that <code>w</code> is expired and <code>lock()</code> returns null. The allocation (control block plus the 4 KiB payload, since it came from <code>make_shared</code>) is freed only when <code>w</code> is reset.</p>
+    <p><b>Why.</b> Destruction is driven by the strong count, deallocation by both counts. A <code>weak_ptr</code> cannot keep an object alive and cannot revive it. The last line is a comment about memory, not something the program can observe without a custom allocator.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This weak cache never leaks objects, yet a long-running service using it grows without bound. Why?</p>
+<pre data-run="ch13-r-cache-growth" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Glyph</span> { <span class="hljs-type">int</span> code; };
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">GlyphCache</span> {
+    std::map&lt;<span class="hljs-type">int</span>, std::weak_ptr&lt;Glyph&gt;&gt; entries;
+    <span class="hljs-function">std::shared_ptr&lt;Glyph&gt; <span class="hljs-title">get</span><span class="hljs-params">(<span class="hljs-type">int</span> code)</span> </span>{
+        <span class="hljs-keyword">auto</span>&amp; slot = entries[code];
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> sp = slot.<span class="hljs-built_in">lock</span>()) <span class="hljs-keyword">return</span> sp;
+        <span class="hljs-keyword">auto</span> sp = std::<span class="hljs-built_in">make_shared</span>&lt;Glyph&gt;(Glyph{code});
+        slot = sp;
+        <span class="hljs-keyword">return</span> sp;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    GlyphCache cache;
+    <span class="hljs-type">long</span> used = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> code = <span class="hljs-number">0</span>; code &lt; <span class="hljs-number">1000</span>; ++code) used += cache.<span class="hljs-built_in">get</span>(code)-&gt;code;   <span class="hljs-comment">// each glyph used once</span>
+    std::<span class="hljs-type">size_t</span> expired = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; [code, w] : cache.entries) expired += w.<span class="hljs-built_in">expired</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;entries %zu, expired %zu, sum %ld\n&quot;</span>, cache.entries.<span class="hljs-built_in">size</span>(), expired, used);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch13-r-cache-growth">entries 1000, expired 1000, sum 499500</pre>
+    <p><b>Answer.</b> The glyphs themselves are destroyed, but every expired <code>weak_ptr</code> stays in the map, and each one pins its control block, which (because of <code>make_shared</code>) also contains the dead glyph's storage. The map grows with every distinct key. Fix: purge expired entries (on lookup misses, periodically, or from a custom deleter that erases the key).</p>
+    <p><b>Why.</b> <code>weak_ptr</code> solves ownership, not eviction. A cache keyed by an unbounded set of keys needs a removal policy regardless of how the values are held.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch11-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a tree of named nodes with shared ownership of children and <code>weak_ptr</code> parents. Provide <code>add_child(parent, name)</code>, <code>path(node)</code> (from the root, separated by <code>/</code>), <code>depth(node)</code> and <code>detach(node)</code>, which removes a node (and its subtree) from its parent. Prove with an instance counter that detached subtrees are freed once no one else holds them, and that dropping the root frees everything.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Each node owns <code>vector&lt;shared_ptr&lt;Node&gt;&gt; children</code> and observes <code>weak_ptr&lt;Node&gt; parent</code>. <code>path</code> and <code>depth</code> walk up with <code>lock()</code>. <code>detach</code> locks the parent, erases the child from the parent's vector (comparing raw addresses) and resets the child's parent link. Freeing then follows automatically from the counts.</p>
+<pre data-run="ch13-k-tree" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> live = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+    std::string name;
+    std::weak_ptr&lt;Node&gt; parent;
+    std::vector&lt;std::shared_ptr&lt;Node&gt;&gt; children;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Node</span><span class="hljs-params">(std::string n)</span> : name(std::move(n)) {</span> ++live; }
+    ~<span class="hljs-built_in">Node</span>() { --live; }
+};
+<span class="hljs-keyword">using</span> NodePtr = std::shared_ptr&lt;Node&gt;;
+
+<span class="hljs-function"><span class="hljs-type">static</span> NodePtr <span class="hljs-title">add_child</span><span class="hljs-params">(<span class="hljs-type">const</span> NodePtr&amp; parent, std::string name)</span> </span>{
+    <span class="hljs-keyword">auto</span> c = std::<span class="hljs-built_in">make_shared</span>&lt;Node&gt;(std::<span class="hljs-built_in">move</span>(name));
+    c-&gt;parent = parent;
+    parent-&gt;children.<span class="hljs-built_in">push_back</span>(c);
+    <span class="hljs-keyword">return</span> c;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string <span class="hljs-title">path</span><span class="hljs-params">(NodePtr n)</span> </span>{
+    std::string out;
+    <span class="hljs-keyword">for</span> (; n; n = n-&gt;parent.<span class="hljs-built_in">lock</span>()) out = <span class="hljs-string">&quot;/&quot;</span> + n-&gt;name + out;
+    <span class="hljs-keyword">return</span> out;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">depth</span><span class="hljs-params">(<span class="hljs-type">const</span> NodePtr&amp; n)</span> </span>{
+    <span class="hljs-type">int</span> d = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> p = n-&gt;parent.<span class="hljs-built_in">lock</span>(); p; p = p-&gt;parent.<span class="hljs-built_in">lock</span>()) ++d;
+    <span class="hljs-keyword">return</span> d;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">detach</span><span class="hljs-params">(<span class="hljs-type">const</span> NodePtr&amp; n)</span> </span>{
+    <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> p = n-&gt;parent.<span class="hljs-built_in">lock</span>()) {
+        <span class="hljs-keyword">auto</span>&amp; v = p-&gt;children;
+        v.<span class="hljs-built_in">erase</span>(std::<span class="hljs-built_in">remove_if</span>(v.<span class="hljs-built_in">begin</span>(), v.<span class="hljs-built_in">end</span>(), [&amp;](<span class="hljs-type">const</span> NodePtr&amp; c) { <span class="hljs-keyword">return</span> c.<span class="hljs-built_in">get</span>() == n.<span class="hljs-built_in">get</span>(); }), v.<span class="hljs-built_in">end</span>());
+    }
+    n-&gt;parent.<span class="hljs-built_in">reset</span>();
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> root = std::<span class="hljs-built_in">make_shared</span>&lt;Node&gt;(<span class="hljs-string">&quot;root&quot;</span>);
+    <span class="hljs-keyword">auto</span> home = <span class="hljs-built_in">add_child</span>(root, <span class="hljs-string">&quot;home&quot;</span>);
+    <span class="hljs-keyword">auto</span> ana = <span class="hljs-built_in">add_child</span>(home, <span class="hljs-string">&quot;ana&quot;</span>);
+    <span class="hljs-built_in">add_child</span>(ana, <span class="hljs-string">&quot;notes&quot;</span>);
+    <span class="hljs-built_in">add_child</span>(root, <span class="hljs-string">&quot;tmp&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s depth %d, live %d\n&quot;</span>, <span class="hljs-built_in">path</span>(ana).<span class="hljs-built_in">c_str</span>(), <span class="hljs-built_in">depth</span>(ana), live);
+
+    <span class="hljs-built_in">detach</span>(home);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after detach: %s, root children %zu, live %d\n&quot;</span>, <span class="hljs-built_in">path</span>(ana).<span class="hljs-built_in">c_str</span>(), root-&gt;children.<span class="hljs-built_in">size</span>(), live);
+    home.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ana still held: live %d\n&quot;</span>, live);
+    ana.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;subtree released: live %d\n&quot;</span>, live);
+    root.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;all released: live %d\n&quot;</span>, live);
+}</code></pre>
+<pre class="out" data-out="ch13-k-tree">/root/home/ana depth 2, live 5
+after detach: /home/ana, root children 1, live 5
+ana still held: live 4
+subtree released: live 2
+all released: live 0</pre>
+    <p><b>Complexity and pitfalls.</b> <code>path</code> and <code>depth</code> are O(depth) with two atomics per step; <code>detach</code> is O(siblings). After <code>home.reset()</code> the <code>home</code> node is freed (live 4), but <code>ana</code> survives because the local variable owns it, and its parent link is now expired, which is exactly what <code>weak_ptr</code> is for. Pitfalls: a <code>shared_ptr</code> parent (cycle), forgetting to reset the parent link on detach, recursion depth on destruction of very deep trees.</p>
+    <p class="rating">Estimated rating: ~1400 · straightforward once the owning direction is chosen correctly</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>DList&lt;T&gt;</code>, a doubly linked list with <code>shared_ptr</code> forward links and <code>weak_ptr</code> backward links. Support <code>push_back</code>, <code>push_front</code>, <code>pop_back</code>, forward and backward traversal, and a destructor that frees 200000 nodes without recursing (no stack overflow). Count live nodes to prove nothing leaks.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>head</code> is the only outside owner; <code>next</code> owns and <code>prev</code> observes, and <code>tail</code> is a <code>weak_ptr</code> too. <code>pop_back</code> locks the tail, finds its predecessor through <code>prev</code>, and resets that node's <code>next</code> (which destroys the old tail). The destructor detaches nodes one at a time: move <code>head-&gt;next</code> out before releasing <code>head</code>, so each node dies with a null <code>next</code> and destruction never recurses.</p>
+<pre data-run="ch13-k-dlist" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">long</span> live = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">DList</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+        T value;
+        std::shared_ptr&lt;Node&gt; next;
+        std::weak_ptr&lt;Node&gt; prev;
+        <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Node</span><span class="hljs-params">(T v)</span> : value(std::move(v)) {</span> ++live; }
+        ~<span class="hljs-built_in">Node</span>() { --live; }
+    };
+    std::shared_ptr&lt;Node&gt; head_;
+    std::weak_ptr&lt;Node&gt; tail_;
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">DList</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">DList</span>(<span class="hljs-type">const</span> DList&amp;) = <span class="hljs-keyword">delete</span>;
+    DList&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> DList&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">DList</span>() { <span class="hljs-built_in">clear</span>(); }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">clear</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">while</span> (head_) head_ = std::<span class="hljs-built_in">move</span>(head_-&gt;next);   <span class="hljs-comment">// old head dies with next already empty</span>
+        tail_.<span class="hljs-built_in">reset</span>();
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(T v)</span> </span>{
+        <span class="hljs-keyword">auto</span> n = std::<span class="hljs-built_in">make_shared</span>&lt;Node&gt;(std::<span class="hljs-built_in">move</span>(v));
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> t = tail_.<span class="hljs-built_in">lock</span>()) { n-&gt;prev = t; t-&gt;next = n; }
+        <span class="hljs-keyword">else</span> head_ = n;
+        tail_ = n;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_front</span><span class="hljs-params">(T v)</span> </span>{
+        <span class="hljs-keyword">auto</span> n = std::<span class="hljs-built_in">make_shared</span>&lt;Node&gt;(std::<span class="hljs-built_in">move</span>(v));
+        n-&gt;next = head_;
+        <span class="hljs-keyword">if</span> (head_) head_-&gt;prev = n; <span class="hljs-keyword">else</span> tail_ = n;
+        head_ = std::<span class="hljs-built_in">move</span>(n);
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">pop_back</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">auto</span> t = tail_.<span class="hljs-built_in">lock</span>();
+        <span class="hljs-keyword">if</span> (!t) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> p = t-&gt;prev.<span class="hljs-built_in">lock</span>()) { p-&gt;next.<span class="hljs-built_in">reset</span>(); tail_ = p; }
+        <span class="hljs-keyword">else</span> { head_.<span class="hljs-built_in">reset</span>(); tail_.<span class="hljs-built_in">reset</span>(); }
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">for_each</span><span class="hljs-params">(F f)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> n = head_; n; n = n-&gt;next) <span class="hljs-built_in">f</span>(n-&gt;value);
+    }
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">for_each_reverse</span><span class="hljs-params">(F f)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> n = tail_.<span class="hljs-built_in">lock</span>(); n; n = n-&gt;prev.<span class="hljs-built_in">lock</span>()) <span class="hljs-built_in">f</span>(n-&gt;value);
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        DList&lt;<span class="hljs-type">int</span>&gt; l;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">1</span>; i &lt;= <span class="hljs-number">3</span>; ++i) l.<span class="hljs-built_in">push_back</span>(i);
+        l.<span class="hljs-built_in">push_front</span>(<span class="hljs-number">0</span>);
+        l.<span class="hljs-built_in">pop_back</span>();
+        l.for_each([](<span class="hljs-type">int</span> v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d &quot;</span>, v); });
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;| &quot;</span>);
+        l.for_each_reverse([](<span class="hljs-type">int</span> v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d &quot;</span>, v); });
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;| live %ld\n&quot;</span>, live);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after small list: live %ld\n&quot;</span>, live);
+    {
+        DList&lt;<span class="hljs-type">int</span>&gt; big;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">200000</span>; ++i) big.<span class="hljs-built_in">push_back</span>(i);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;big list: live %ld\n&quot;</span>, live);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after big list: live %ld\n&quot;</span>, live);
+}</code></pre>
+<pre class="out" data-out="ch13-k-dlist">0 1 2 | 2 1 0 | live 3
+after small list: live 0
+big list: live 200000
+after big list: live 0</pre>
+    <p><b>Complexity and pitfalls.</b> Pushes and <code>pop_back</code> are O(1); every backward step costs a <code>lock()</code>. The non-recursive <code>clear</code> works because <code>head_ = std::move(head_-&gt;next)</code> empties the old head's <code>next</code> before the old head is released, so each node is destroyed with nothing left to cascade into. Without it, destroying 200000 nodes recurses 200000 levels deep, which can overflow the stack (and does under ASan, whose frames are larger). Pitfalls: a <code>shared_ptr</code> <code>prev</code> (every adjacent pair becomes a cycle); forgetting to update <code>tail_</code> in <code>push_front</code> on an empty list; <code>pop_back</code> on a one-element list must reset <code>head_</code>. If the list owns all nodes and never hands them out, raw <code>prev</code> pointers are cheaper and equally safe.</p>
+    <p class="rating">Estimated rating: ~1600 · pointer bookkeeping in both directions plus the non-recursive teardown</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>Subject</code> with <code>subscribe(std::weak_ptr&lt;Observer&gt;)</code> and <code>notify(int event)</code>, where <code>Observer</code> has a virtual <code>on_event(int)</code>. <code>notify</code> must skip and erase observers that have died, return how many observers it delivered to, and remain correct if an observer subscribes another observer from inside <code>on_event</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Store <code>vector&lt;weak_ptr&lt;Observer&gt;&gt;</code>. In <code>notify</code>, first take a snapshot: lock every entry into a local <code>vector&lt;shared_ptr&lt;Observer&gt;&gt;</code> and erase expired entries from the member list. Then call the observers from the snapshot. Holding strong pointers during the calls means no observer dies mid-notification, and iterating the snapshot means subscriptions made during a callback do not invalidate the loop (they take effect on the next notification).</p>
+<pre data-run="ch13-k-observer" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Observer</span> {
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Observer</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">on_event</span><span class="hljs-params">(<span class="hljs-type">int</span> e)</span> </span>= <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Subject</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">subscribe</span><span class="hljs-params">(std::weak_ptr&lt;Observer&gt; o)</span> </span>{ observers_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(o)); }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">notify</span><span class="hljs-params">(<span class="hljs-type">int</span> event)</span> </span>{
+        std::vector&lt;std::shared_ptr&lt;Observer&gt;&gt; live;
+        live.<span class="hljs-built_in">reserve</span>(observers_.<span class="hljs-built_in">size</span>());
+        std::<span class="hljs-built_in">erase_if</span>(observers_, [&amp;](<span class="hljs-type">const</span> std::weak_ptr&lt;Observer&gt;&amp; w) {
+            <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> sp = w.<span class="hljs-built_in">lock</span>()) { live.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(sp)); <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>; }
+            <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+        });
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; o : live) o-&gt;<span class="hljs-built_in">on_event</span>(event);
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(live.<span class="hljs-built_in">size</span>());
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> observers_.<span class="hljs-built_in">size</span>(); }
+<span class="hljs-keyword">private</span>:
+    std::vector&lt;std::weak_ptr&lt;Observer&gt;&gt; observers_;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Printer</span> : Observer {
+    std::string name;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Printer</span><span class="hljs-params">(std::string n)</span> : name(std::move(n)) {</span>}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">on_event</span><span class="hljs-params">(<span class="hljs-type">int</span> e)</span> <span class="hljs-keyword">override</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s got %d\n&quot;</span>, name.<span class="hljs-built_in">c_str</span>(), e); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Recruiter</span> : Observer {
+    Subject* subject;
+    std::shared_ptr&lt;Observer&gt; recruit = std::<span class="hljs-built_in">make_shared</span>&lt;Printer&gt;(<span class="hljs-string">&quot;recruit&quot;</span>);
+    <span class="hljs-type">bool</span> done = <span class="hljs-literal">false</span>;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Recruiter</span><span class="hljs-params">(Subject* s)</span> : subject(s) {</span>}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">on_event</span><span class="hljs-params">(<span class="hljs-type">int</span> e)</span> <span class="hljs-keyword">override</span> </span>{
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;recruiter got %d\n&quot;</span>, e);
+        <span class="hljs-keyword">if</span> (!done) { subject-&gt;<span class="hljs-built_in">subscribe</span>(recruit); done = <span class="hljs-literal">true</span>; }   <span class="hljs-comment">// subscribe during notify</span>
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Subject s;
+    <span class="hljs-keyword">auto</span> a = std::<span class="hljs-built_in">make_shared</span>&lt;Printer&gt;(<span class="hljs-string">&quot;a&quot;</span>);
+    <span class="hljs-keyword">auto</span> r = std::<span class="hljs-built_in">make_shared</span>&lt;Recruiter&gt;(&amp;s);
+    s.<span class="hljs-built_in">subscribe</span>(a);
+    s.<span class="hljs-built_in">subscribe</span>(r);
+    {
+        <span class="hljs-keyword">auto</span> temp = std::<span class="hljs-built_in">make_shared</span>&lt;Printer&gt;(<span class="hljs-string">&quot;temp&quot;</span>);
+        s.<span class="hljs-built_in">subscribe</span>(temp);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;delivered %d\n&quot;</span>, s.<span class="hljs-built_in">notify</span>(<span class="hljs-number">1</span>));
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;delivered %d\n&quot;</span>, s.<span class="hljs-built_in">notify</span>(<span class="hljs-number">2</span>));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;registered %zu\n&quot;</span>, s.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch13-k-observer">a got 1
+recruiter got 1
+temp got 1
+delivered 3
+a got 2
+recruiter got 2
+recruit got 2
+delivered 3
+registered 3</pre>
+    <p><b>Complexity and pitfalls.</b> O(n) per notification plus two atomics per observer; the snapshot costs one allocation, which a reused member buffer can avoid. Pitfalls: calling <code>on_event</code> while iterating <code>observers_</code> (a subscribe inside the callback reallocates the vector and invalidates the iterator); <code>expired()</code> followed by <code>lock()</code>; storing <code>shared_ptr</code>, which keeps observers alive forever. With threads, guard <code>observers_</code> with a mutex during the snapshot only, and never hold it while calling observers (a callback that subscribes would deadlock).</p>
+    <p class="rating">Estimated rating: ~1600 · weak_ptr purge plus re-entrancy during notification</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write an <code>EventLoop</code> with <code>post(std::function&lt;void()&gt;)</code> and <code>run()</code>, and a <code>Connection</code> class owned by <code>shared_ptr</code> with two methods: <code>ping()</code>, which posts a callback that runs only if the connection is still alive, and <code>send(msg)</code>, which posts a callback that must keep the connection alive until the message has been sent. Show that a connection dropped by its owner is destroyed immediately unless a <code>send</code> is pending, and destroyed right after its last pending <code>send</code> runs.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>Connection</code> inherits <code>enable_shared_from_this</code> and has a private constructor plus a static <code>create</code> factory, so it can only be owned by <code>shared_ptr</code> (otherwise <code>shared_from_this</code> would throw). <code>ping</code> captures <code>weak_from_this()</code> and locks inside. <code>send</code> captures <code>shared_from_this()</code>: the loop owns that closure, so this is temporary ownership, not a cycle. <code>run</code> moves the queue out before executing it so that callbacks can post safely and so that each closure is destroyed right after it runs.</p>
+<pre data-run="ch13-k-loop" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;deque&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">EventLoop</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">post</span><span class="hljs-params">(std::function&lt;<span class="hljs-type">void</span>()&gt; f)</span> </span>{ q_.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(f)); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">run</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">while</span> (!q_.<span class="hljs-built_in">empty</span>()) {
+            <span class="hljs-keyword">auto</span> f = std::<span class="hljs-built_in">move</span>(q_.<span class="hljs-built_in">front</span>());
+            q_.<span class="hljs-built_in">pop_front</span>();
+            <span class="hljs-built_in">f</span>();
+        }                                   <span class="hljs-comment">// f, and anything it captured, dies here</span>
+    }
+<span class="hljs-keyword">private</span>:
+    std::deque&lt;std::function&lt;<span class="hljs-type">void</span>()&gt;&gt; q_;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Connection</span> : <span class="hljs-keyword">public</span> std::enable_shared_from_this&lt;Connection&gt; {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Key</span> {};
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Connection</span>(Key, EventLoop&amp; loop, <span class="hljs-type">int</span> id) : <span class="hljs-built_in">loop_</span>(loop), <span class="hljs-built_in">id_</span>(id) {}
+    <span class="hljs-function"><span class="hljs-type">static</span> std::shared_ptr&lt;Connection&gt; <span class="hljs-title">create</span><span class="hljs-params">(EventLoop&amp; loop, <span class="hljs-type">int</span> id)</span> </span>{
+        <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_shared</span>&lt;Connection&gt;(Key{}, loop, id);
+    }
+    ~<span class="hljs-built_in">Connection</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;~Connection %d\n&quot;</span>, id_); }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">ping</span><span class="hljs-params">()</span> </span>{
+        loop_.<span class="hljs-built_in">post</span>([w = <span class="hljs-built_in">weak_from_this</span>()] {
+            <span class="hljs-keyword">if</span> (<span class="hljs-keyword">auto</span> self = w.<span class="hljs-built_in">lock</span>()) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ping %d\n&quot;</span>, self-&gt;id_);
+            <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ping dropped&quot;</span>);
+        });
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">send</span><span class="hljs-params">(std::string msg)</span> </span>{
+        loop_.<span class="hljs-built_in">post</span>([self = <span class="hljs-built_in">shared_from_this</span>(), msg = std::<span class="hljs-built_in">move</span>(msg)] {
+            std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;conn %d sent &#x27;%s&#x27;\n&quot;</span>, self-&gt;id_, msg.<span class="hljs-built_in">c_str</span>());
+        });
+    }
+<span class="hljs-keyword">private</span>:
+    EventLoop&amp; loop_;
+    <span class="hljs-type">int</span> id_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    EventLoop loop;
+    <span class="hljs-keyword">auto</span> c1 = Connection::<span class="hljs-built_in">create</span>(loop, <span class="hljs-number">1</span>);
+    <span class="hljs-keyword">auto</span> c2 = Connection::<span class="hljs-built_in">create</span>(loop, <span class="hljs-number">2</span>);
+    c1-&gt;<span class="hljs-built_in">ping</span>();
+    c2-&gt;<span class="hljs-built_in">ping</span>();
+    c2-&gt;<span class="hljs-built_in">send</span>(<span class="hljs-string">&quot;bye&quot;</span>);
+    c1.<span class="hljs-built_in">reset</span>();                 <span class="hljs-comment">// no send pending: destroyed now</span>
+    c2.<span class="hljs-built_in">reset</span>();                 <span class="hljs-comment">// a send is pending: kept alive by the loop</span>
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;running loop&quot;</span>);
+    loop.<span class="hljs-built_in">run</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;loop done&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch13-k-loop">~Connection 1
+running loop
+ping dropped
+ping 2
+conn 2 sent 'bye'
+~Connection 2
+loop done</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per post and per callback. Connection 1 has no pending strong capture, so <code>c1.reset()</code> destroys it at once and its ping is dropped. Connection 2 is owned only by the queued <code>send</code> closure after <code>c2.reset()</code>; its ping still succeeds, because <code>lock()</code> only needs <i>some</i> owner to exist. When the <code>send</code> closure has run and is destroyed, the count reaches 0. Pitfalls: running callbacks while iterating the queue (a callback that posts invalidates the iteration); keeping executed closures in the queue, which would keep connection 2 alive forever; capturing <code>this</code> in <code>ping</code> (use-after-free for connection 1); a public constructor, which lets someone create a stack <code>Connection</code> whose <code>send</code> throws <code>bad_weak_ptr</code>.</p>
+    <p class="rating">Estimated rating: ~1700 · choosing weak vs strong capture per callback and keeping closures short-lived</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Simulate both memory managers on an ownership graph. Input: <code>n</code> objects, a list of owning edges <code>u → v</code> and a set of roots (objects owned by the stack). When the program drops all roots, which objects does reference counting free and which does it leak? Which would a tracing collector free? Print the leaked objects for each strategy.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Reference counting: once the stack references are gone, an object's count is its number of incoming owning edges. Put every object with count 0 on a worklist; freeing one decrements each object it owns, and any that reach 0 join the worklist (Kahn's algorithm). Whatever is never freed is the refcount leak: exactly the objects on a cycle or reachable from one. A tracing collector with no roots left frees everything, so the interesting comparison is <i>while the roots are alive</i>: tracing frees everything unreachable from the roots right away, including unreachable cycles. The program reports both.</p>
+<pre data-run="ch13-k-leakfinder" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Graph</span> {
+    <span class="hljs-type">int</span> n;
+    std::vector&lt;std::vector&lt;<span class="hljs-type">int</span>&gt;&gt; owns;
+    std::vector&lt;<span class="hljs-type">int</span>&gt; roots;
+};
+
+<span class="hljs-comment">// Objects that reference counting never frees after every root is dropped.</span>
+<span class="hljs-function"><span class="hljs-type">static</span> std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">refcount_leaks</span><span class="hljs-params">(<span class="hljs-type">const</span> Graph&amp; g)</span> </span>{
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">count</span><span class="hljs-params">(g.n, <span class="hljs-number">0</span>)</span></span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> u = <span class="hljs-number">0</span>; u &lt; g.n; ++u) <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> v : g.owns[u]) ++count[v];
+    <span class="hljs-comment">// Each root adds one stack reference, and dropping the roots removes it again,</span>
+    <span class="hljs-comment">// so after the drop the count is the in-degree. Zero means &quot;freed&quot;.</span>
+    std::vector&lt;<span class="hljs-type">int</span>&gt; work;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> u = <span class="hljs-number">0</span>; u &lt; g.n; ++u) <span class="hljs-keyword">if</span> (count[u] == <span class="hljs-number">0</span>) work.<span class="hljs-built_in">push_back</span>(u);
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">bool</span>&gt; <span class="hljs-title">freed</span><span class="hljs-params">(g.n, <span class="hljs-literal">false</span>)</span></span>;
+    <span class="hljs-keyword">while</span> (!work.<span class="hljs-built_in">empty</span>()) {
+        <span class="hljs-type">int</span> u = work.<span class="hljs-built_in">back</span>(); work.<span class="hljs-built_in">pop_back</span>();
+        freed[u] = <span class="hljs-literal">true</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> v : g.owns[u]) <span class="hljs-keyword">if</span> (--count[v] == <span class="hljs-number">0</span>) work.<span class="hljs-built_in">push_back</span>(v);
+    }
+    std::vector&lt;<span class="hljs-type">int</span>&gt; leaked;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> u = <span class="hljs-number">0</span>; u &lt; g.n; ++u) <span class="hljs-keyword">if</span> (!freed[u]) leaked.<span class="hljs-built_in">push_back</span>(u);
+    <span class="hljs-keyword">return</span> leaked;
+}
+
+<span class="hljs-comment">// Objects unreachable from the roots while the roots are still alive: tracing frees them now.</span>
+<span class="hljs-function"><span class="hljs-type">static</span> std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">unreachable_now</span><span class="hljs-params">(<span class="hljs-type">const</span> Graph&amp; g)</span> </span>{
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">bool</span>&gt; <span class="hljs-title">seen</span><span class="hljs-params">(g.n, <span class="hljs-literal">false</span>)</span></span>;
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">st</span><span class="hljs-params">(g.roots.begin(), g.roots.end())</span></span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> r : g.roots) seen[r] = <span class="hljs-literal">true</span>;
+    <span class="hljs-keyword">while</span> (!st.<span class="hljs-built_in">empty</span>()) {
+        <span class="hljs-type">int</span> u = st.<span class="hljs-built_in">back</span>(); st.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> v : g.owns[u]) <span class="hljs-keyword">if</span> (!seen[v]) { seen[v] = <span class="hljs-literal">true</span>; st.<span class="hljs-built_in">push_back</span>(v); }
+    }
+    std::vector&lt;<span class="hljs-type">int</span>&gt; out;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> u = <span class="hljs-number">0</span>; u &lt; g.n; ++u) <span class="hljs-keyword">if</span> (!seen[u]) out.<span class="hljs-built_in">push_back</span>(u);
+    <span class="hljs-keyword">return</span> out;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">print</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* label, <span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">int</span>&gt;&amp; v)</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s:&quot;</span>, label);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> x : v) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot; %d&quot;</span>, x);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, v.<span class="hljs-built_in">empty</span>() ? <span class="hljs-string">&quot; none&quot;</span> : <span class="hljs-string">&quot;&quot;</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-comment">// 0 -&gt; 1 -&gt; 2 -&gt; 1 (cycle 1,2), 2 -&gt; 3, 0 -&gt; 4, 5 &lt;-&gt; 6 never reachable, 7 isolated</span>
+    Graph g{<span class="hljs-number">8</span>, {{<span class="hljs-number">1</span>, <span class="hljs-number">4</span>}, {<span class="hljs-number">2</span>}, {<span class="hljs-number">1</span>, <span class="hljs-number">3</span>}, {}, {}, {<span class="hljs-number">6</span>}, {<span class="hljs-number">5</span>}, {}}, {<span class="hljs-number">0</span>}};
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">&quot;refcount leaks after dropping roots&quot;</span>, <span class="hljs-built_in">refcount_leaks</span>(g));
+    <span class="hljs-built_in">print</span>(<span class="hljs-string">&quot;tracing frees while roots alive&quot;</span>, <span class="hljs-built_in">unreachable_now</span>(g));
+}</code></pre>
+<pre class="out" data-out="ch13-k-leakfinder">refcount leaks after dropping roots: 1 2 3 5 6
+tracing frees while roots alive: 5 6 7</pre>
+    <p><b>Complexity and pitfalls.</b> Both passes are O(n + e). Object 7 has no owner at all, so reference counting frees it immediately (in C++ it would have died with its last owner), and tracing also lists it as unreachable. Objects 5 and 6 are the unreachable cycle that only tracing can free. Object 3 is not on a cycle, but it leaks under reference counting because a cycle owns it. Pitfalls: forgetting that objects reachable from a cycle leak too; treating a root that is also owned by another object as freed when the stack drops it (its count stays above 0).</p>
+    <p class="rating">Estimated rating: ~1500 · topological worklist plus DFS, framed as a memory-management question</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Some graphs really are cyclic (A → B → A, self-loops). Store one without any <code>shared_ptr</code>: a <code>Graph</code> owns every node, and edges are non-owning. Provide <code>add_node(name)</code>, which returns a stable <code>NodeId</code>; <code>add_edge(a, b)</code>; <code>remove_node(id)</code>, which also removes every edge into the node; <code>neighbours(id)</code>; and detection of stale ids, so a removed node's id does not silently refer to a newer node that reuses its slot. Prove with an instance counter that destroying the graph frees every node, cycles included.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> This is ownership rule 4: one owning container, non-owning edges. Slots hold a <code>unique_ptr&lt;Node&gt;</code> and a generation counter. A <code>NodeId</code> is (slot index, generation), and it is valid only while the generation matches. Removing a node destroys it, bumps the slot's generation (so every old id goes stale), puts the slot on a free list and erases the edges that point to it. Edges are ids, so they can form any cycle, and destroying the graph destroys the slot vector, which frees every node whatever the edges look like.</p>
+<pre data-run="ch13-k-graph" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> live = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">NodeId</span> { std::<span class="hljs-type">uint32_t</span> index, gen; };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Graph</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+        std::string name;
+        std::vector&lt;NodeId&gt; out;                 <span class="hljs-comment">// non-owning edges</span>
+        <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Node</span><span class="hljs-params">(std::string n)</span> : name(std::move(n)) {</span> ++live; }
+        ~<span class="hljs-built_in">Node</span>() { --live; }
+    };
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Slot</span> { std::unique_ptr&lt;Node&gt; node; std::<span class="hljs-type">uint32_t</span> gen = <span class="hljs-number">0</span>; };
+    std::vector&lt;Slot&gt; slots_;                   <span class="hljs-comment">// the only owner of nodes</span>
+    std::vector&lt;std::<span class="hljs-type">uint32_t</span>&gt; free_;
+
+    <span class="hljs-function">Node* <span class="hljs-title">get</span><span class="hljs-params">(NodeId id)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">if</span> (id.index &gt;= slots_.<span class="hljs-built_in">size</span>()) <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+        <span class="hljs-type">const</span> Slot&amp; s = slots_[id.index];
+        <span class="hljs-keyword">return</span> s.gen == id.gen ? s.node.<span class="hljs-built_in">get</span>() : <span class="hljs-literal">nullptr</span>;
+    }
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">NodeId <span class="hljs-title">add_node</span><span class="hljs-params">(std::string name)</span> </span>{
+        std::<span class="hljs-type">uint32_t</span> i;
+        <span class="hljs-keyword">if</span> (!free_.<span class="hljs-built_in">empty</span>()) { i = free_.<span class="hljs-built_in">back</span>(); free_.<span class="hljs-built_in">pop_back</span>(); }
+        <span class="hljs-keyword">else</span> { i = <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">uint32_t</span>&gt;(slots_.<span class="hljs-built_in">size</span>()); slots_.<span class="hljs-built_in">emplace_back</span>(); }
+        slots_[i].node = std::<span class="hljs-built_in">make_unique</span>&lt;Node&gt;(std::<span class="hljs-built_in">move</span>(name));
+        <span class="hljs-keyword">return</span> {i, slots_[i].gen};
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">add_edge</span><span class="hljs-params">(NodeId from, NodeId to)</span> </span>{
+        Node* f = <span class="hljs-built_in">get</span>(from);
+        <span class="hljs-keyword">if</span> (!f || !<span class="hljs-built_in">get</span>(to)) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        f-&gt;out.<span class="hljs-built_in">push_back</span>(to);
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">remove_node</span><span class="hljs-params">(NodeId id)</span> </span>{
+        <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">get</span>(id)) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        Slot&amp; s = slots_[id.index];
+        s.node.<span class="hljs-built_in">reset</span>();
+        ++s.gen;                                  <span class="hljs-comment">// every old id for this slot is now stale</span>
+        free_.<span class="hljs-built_in">push_back</span>(id.index);
+        <span class="hljs-keyword">for</span> (Slot&amp; other : slots_)
+            <span class="hljs-keyword">if</span> (other.node)
+                std::<span class="hljs-built_in">erase_if</span>(other.node-&gt;out, [&amp;](NodeId e) { <span class="hljs-keyword">return</span> e.index == id.index &amp;&amp; e.gen == id.gen; });
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">alive</span><span class="hljs-params">(NodeId id)</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">get</span>(id) != <span class="hljs-literal">nullptr</span>; }
+    <span class="hljs-function">std::string <span class="hljs-title">neighbours</span><span class="hljs-params">(NodeId id)</span> <span class="hljs-type">const</span> </span>{
+        std::string out;
+        <span class="hljs-keyword">if</span> (Node* n = <span class="hljs-built_in">get</span>(id))
+            <span class="hljs-keyword">for</span> (NodeId e : n-&gt;out)
+                <span class="hljs-keyword">if</span> (Node* t = <span class="hljs-built_in">get</span>(e)) out += t-&gt;name + <span class="hljs-string">&quot; &quot;</span>;
+        <span class="hljs-keyword">return</span> out;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        Graph g;
+        NodeId a = g.<span class="hljs-built_in">add_node</span>(<span class="hljs-string">&quot;a&quot;</span>), b = g.<span class="hljs-built_in">add_node</span>(<span class="hljs-string">&quot;b&quot;</span>), c = g.<span class="hljs-built_in">add_node</span>(<span class="hljs-string">&quot;c&quot;</span>);
+        g.<span class="hljs-built_in">add_edge</span>(a, b);
+        g.<span class="hljs-built_in">add_edge</span>(b, a);                         <span class="hljs-comment">// a 2-cycle</span>
+        g.<span class="hljs-built_in">add_edge</span>(b, c);
+        g.<span class="hljs-built_in">add_edge</span>(c, c);                         <span class="hljs-comment">// a self-loop</span>
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;b -&gt; %s| live %d\n&quot;</span>, g.<span class="hljs-built_in">neighbours</span>(b).<span class="hljs-built_in">c_str</span>(), live);
+        g.<span class="hljs-built_in">remove_node</span>(a);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after removing a: b -&gt; %s| live %d\n&quot;</span>, g.<span class="hljs-built_in">neighbours</span>(b).<span class="hljs-built_in">c_str</span>(), live);
+        NodeId d = g.<span class="hljs-built_in">add_node</span>(<span class="hljs-string">&quot;d&quot;</span>);               <span class="hljs-comment">// reuses a&#x27;s slot</span>
+        <span class="hljs-type">bool</span> stale_edge = g.<span class="hljs-built_in">add_edge</span>(a, d);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;d in slot %u, old id a alive %d, edge from a accepted %d\n&quot;</span>, d.index, g.<span class="hljs-built_in">alive</span>(a), stale_edge);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;graph destroyed: live %d\n&quot;</span>, live);
+}</code></pre>
+<pre class="out" data-out="ch13-k-graph">b -&gt; a c | live 3
+after removing a: b -&gt; c | live 2
+d in slot 0, old id a alive 0, edge from a accepted 0
+graph destroyed: live 0</pre>
+    <p><b>Complexity and pitfalls.</b> <code>add_node</code>, <code>add_edge</code> and lookups are O(1); <code>remove_node</code> is O(V + E) because it scans for incoming edges (keep reverse edge lists if removals are frequent). Pitfalls: storing raw <code>Node*</code> edges without removing them (dangling after a removal); reusing a slot without a generation, so an old id silently names the new node (the ABA problem); storing nodes by value in the vector and handing out <code>Node*</code>, which dangle when the vector reallocates. With <code>shared_ptr</code> edges, the 2-cycle and the self-loop would both leak.</p>
+    <p class="rating">Estimated rating: ~1600 · generation-checked handles plus edge cleanup, the standard answer for genuinely cyclic data</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch11-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li>Reference counting frees an object when its strong count hits 0. Objects in a cycle keep each other at 1 or more, so their destructors never run.</li>
+<li>Break each cycle with one non-owning edge, pointing back toward the owner: <code>weak_ptr</code> if the target may die first, a raw pointer if structure guarantees it outlives the pointer.</li>
+<li>Use a <code>weak_ptr</code> only through <code>if (auto sp = w.lock())</code>. Never <code>expired()</code> then <code>lock()</code>; <code>use_count()</code> is a hint.</li>
+<li>Captured <code>shared_ptr</code>s are owning edges. A callback stored in the object captures <code>this</code>; a callback stored elsewhere captures <code>weak_from_this()</code>; a one-shot async handler may capture <code>shared_from_this()</code>.</li>
+<li><code>shared_from_this()</code> needs public <code>enable_shared_from_this</code> and an existing owner; it throws <code>bad_weak_ptr</code> in constructors, destructors and on unowned objects (C++17).</li>
+<li>The destructor runs at strong count 0, the block is freed at weak count 0; with <code>make_shared</code>, lingering <code>weak_ptr</code>s pin the object's memory.</li>
+<li>Prove leaks with instance counters or a <code>weak_ptr</code> probe in tests; LeakSanitizer (default with ASan on Linux; Apple's clang lacks it on macOS).</li>
+<li>Design rule: one clear owner, owning graph is a DAG, arbitrary graphs live in an owning container with non-owning edges.</li>
+</ul>
+</section>

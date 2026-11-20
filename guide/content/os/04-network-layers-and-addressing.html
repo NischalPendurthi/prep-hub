@@ -1,0 +1,1201 @@
+---
+title: Network layers and addressing
+part: Part B · Networks
+lede: How a packet is wrapped, addressed and delivered: the OSI and TCP/IP layer models, encapsulation, MAC and IP addresses, ARP, subnetting, IPv6, routing, NAT, DNS, DHCP and ICMP. Interviewers for backend, systems and low-latency roles use these questions to check that you can reason about what actually happens on the wire, and subnet arithmetic is a favourite whiteboard warm-up.
+desc: OSI vs TCP/IP, encapsulation, MAC, IP, ARP, subnetting, NAT, DNS, DHCP
+hours: 4
+prereqs: binary and hexadecimal, bitwise operators in C++
+---
+<section id="ch04-layers" data-roles="th"><div class="sec-head"><h2>Layer models: OSI and TCP/IP</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A network stack is a pile of services. Each layer solves one problem, uses only the layer below it, and offers a service to the layer above. The link layer moves a frame to the next box on the same wire. The network layer moves a packet across many links to the right machine. The transport layer moves bytes or datagrams to the right <i>process</i> on that machine. The application layer decides what the bytes mean.</p>
+
+<h3 id="ch04-osi-seven">The OSI seven layers</h3>
+<p>The OSI reference model (ISO/IEC 7498-1) has seven layers. Interviewers expect you to recite them, give one protocol per layer and know which device works where. A mnemonic from the bottom up: "Please Do Not Throw Sausage Pizza Away" (Physical, Data link, Network, Transport, Session, Presentation, Application).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>OSI layer</th><th>Job</th><th>PDU</th><th>Examples</th><th>Device</th></tr></thead>
+<tbody>
+<tr><td>7</td><td>Application</td><td>Meaning of the data for the program</td><td>message / data</td><td>HTTP, DNS, SMTP, SSH</td><td>proxy, load balancer (L7)</td></tr>
+<tr><td>6</td><td>Presentation</td><td>Encoding, compression, encryption</td><td>data</td><td>TLS (often placed here), JPEG, ASN.1</td><td>(software only)</td></tr>
+<tr><td>5</td><td>Session</td><td>Dialogue setup, checkpoints, resume</td><td>data</td><td>RPC sessions, NetBIOS</td><td>(software only)</td></tr>
+<tr><td>4</td><td>Transport</td><td>Process to process delivery, ports, reliability</td><td>segment (TCP), datagram (UDP)</td><td>TCP, UDP, QUIC</td><td>L4 load balancer, stateful firewall</td></tr>
+<tr><td>3</td><td>Network</td><td>Host to host delivery across networks, routing</td><td>packet</td><td>IPv4, IPv6, ICMP</td><td>router, L3 switch</td></tr>
+<tr><td>2</td><td>Data link</td><td>Delivery to the next node on one link, MAC addressing, error detection</td><td>frame</td><td>Ethernet, Wi-Fi (802.11), ARP (sits between 2 and 3)</td><td>switch, bridge, NIC</td></tr>
+<tr><td>1</td><td>Physical</td><td>Bits as voltages, light or radio</td><td>bit</td><td>copper, fibre, radio</td><td>hub, repeater, cable</td></tr>
+</tbody></table></div>
+
+<h3 id="ch04-tcpip-four">The TCP/IP four layers</h3>
+<p>The Internet was built on a simpler model. RFC 1122 names four layers: <b>link</b>, <b>internet</b>, <b>transport</b> and <b>application</b>. OSI 5, 6 and 7 fold into the application layer (TLS, for example, is just a library the application calls), and OSI 1 and 2 fold into the link layer. Many textbooks use a five-layer hybrid that keeps physical and data link separate. If an interviewer says "layer 4" or "layer 7" they are using OSI numbers, even when talking about TCP/IP.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>TCP/IP layer (RFC 1122)</th><th>OSI layers it covers</th><th>Addressing at this layer</th></tr></thead>
+<tbody>
+<tr><td>Application</td><td>5, 6, 7</td><td>names and URLs (www.example.com)</td></tr>
+<tr><td>Transport</td><td>4</td><td>port numbers (16 bit)</td></tr>
+<tr><td>Internet</td><td>3</td><td>IP addresses (32 or 128 bit)</td></tr>
+<tr><td>Link</td><td>1, 2</td><td>MAC addresses (48 bit)</td></tr>
+</tbody></table></div>
+
+<h3 id="ch04-devices">Hub, switch and router</h3>
+<ul>
+<li><b>Hub (layer 1).</b> Repeats every incoming bit out of every other port. All ports share one collision domain, so only one station can talk at a time. Hubs are obsolete, but they remain a standard interview contrast.</li>
+<li><b>Switch (layer 2).</b> Learns which MAC address lives behind which port by reading the <i>source</i> MAC of incoming frames (the MAC address table, or CAM table). It forwards a frame only out of the port where the destination MAC lives. Unknown destinations and broadcasts (ff:ff:ff:ff:ff:ff) are flooded out of every port. Each port is its own collision domain, but the whole switch is one <b>broadcast domain</b> unless you split it into VLANs (802.1Q).</li>
+<li><b>Router (layer 3).</b> Connects different IP networks. It reads the destination IP, looks it up in its routing table (longest-prefix match), decrements the TTL, and sends the packet out of the chosen interface inside a <i>new</i> link-layer frame. Routers do not forward broadcasts, so each router interface bounds a broadcast domain.</li>
+</ul>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"A switch works on IP addresses" is wrong for a plain switch: it never looks above the Ethernet header. A "layer 3 switch" is a switch with routing hardware, so it is a router in function. Similarly, a home "router" is really a router, a switch, a Wi-Fi access point, a NAT box, a DHCP server and a DNS forwarder in one case.</p></div>
+</section>
+
+<section id="ch04-encap" data-roles="th"><div class="sec-head"><h2>Encapsulation and decapsulation</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Sending is putting a letter in an envelope, then that envelope in a bigger envelope, once per layer. Each layer prepends its own header (and the link layer also appends a trailer) and treats everything above as opaque payload. Receiving reverses this: each layer checks and strips its own header, then uses a field in it to pick the next layer up.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 270" role="img" aria-label="Each layer prepends its header: TCP segment inside an IP packet inside an Ethernet frame">
+<defs><marker id="ch04-c07a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="16" y="44" class="t-bold">Application</text><text x="16" y="60" class="t-small t-muted">message</text>
+<text x="16" y="99" class="t-bold">Transport</text><text x="16" y="115" class="t-small t-muted">segment</text>
+<text x="16" y="154" class="t-bold">Internet</text><text x="16" y="170" class="t-small t-muted">packet</text>
+<text x="16" y="209" class="t-bold">Link</text><text x="16" y="225" class="t-small t-muted">frame</text>
+<line x1="140" y1="36" x2="140" y2="222" class="d-line-acc" marker-end="url(#ch07-c07a)"/>
+<text x="16" y="256" class="t-small t-acc">send: each layer adds a header</text>
+<rect x="440" y="30" width="200" height="36" class="d-soft"/><text x="540" y="53" text-anchor="middle" class="t-small">HTTP request bytes</text>
+<rect x="360" y="85" width="80" height="36" class="d-acc"/><text x="400" y="108" text-anchor="middle" class="t-small t-mono">TCP 20 B</text>
+<rect x="440" y="85" width="200" height="36" class="d-soft"/><text x="540" y="108" text-anchor="middle" class="t-small">payload</text>
+<rect x="280" y="140" width="80" height="36" class="d-key"/><text x="320" y="163" text-anchor="middle" class="t-small t-mono">IPv4 20 B</text>
+<rect x="360" y="140" width="80" height="36" class="d-acc"/><text x="400" y="163" text-anchor="middle" class="t-small t-mono">TCP</text>
+<rect x="440" y="140" width="200" height="36" class="d-soft"/><text x="540" y="163" text-anchor="middle" class="t-small">payload</text>
+<rect x="180" y="195" width="100" height="36" class="d-rs"/><text x="230" y="218" text-anchor="middle" class="t-small t-mono">Ethernet 14 B</text>
+<rect x="280" y="195" width="80" height="36" class="d-key"/><text x="320" y="218" text-anchor="middle" class="t-small t-mono">IPv4</text>
+<rect x="360" y="195" width="80" height="36" class="d-acc"/><text x="400" y="218" text-anchor="middle" class="t-small t-mono">TCP</text>
+<rect x="440" y="195" width="200" height="36" class="d-soft"/><text x="540" y="218" text-anchor="middle" class="t-small">payload (MSS ≤ 1460)</text>
+<rect x="640" y="195" width="60" height="36" class="d-rs"/><text x="670" y="218" text-anchor="middle" class="t-small t-mono">FCS 4</text>
+<text x="700" y="256" text-anchor="end" class="t-small t-muted">IP MTU 1500 = 20 (IP) + 20 (TCP) + 1460 (payload)</text>
+</svg></div><figcaption><b>Every layer wraps the one above.</b> The TCP header turns application bytes into a segment, the IP header turns the segment into a packet, and the Ethernet header plus the frame check sequence turn the packet into a frame. The receiver strips them in reverse order.</figcaption></figure>
+
+<h3 id="ch04-demux">How the receiver picks the next layer</h3>
+<p>Each header carries a "what is inside me" field, which is how decapsulation knows which code to run next:</p>
+<ul>
+<li>Ethernet <b>EtherType</b>: 0x0800 IPv4, 0x86DD IPv6, 0x0806 ARP.</li>
+<li>IPv4 <b>Protocol</b> (IPv6 <b>Next Header</b>): 1 ICMP, 6 TCP, 17 UDP, 58 ICMPv6.</li>
+<li>TCP or UDP <b>destination port</b>: which socket gets the payload (80 HTTP, 443 HTTPS, 53 DNS, 22 SSH).</li>
+</ul>
+<p>A server socket is found by the destination port (and address). An established TCP connection is identified by the full 5-tuple: protocol, source IP, source port, destination IP, destination port. That is why one server port 443 can serve millions of clients at once.</p>
+
+<h3 id="ch04-mtu">MTU, MSS and fragmentation</h3>
+<p>The <b>MTU</b> is the largest IP packet a link carries: 1500 bytes on standard Ethernet (jumbo frames go to about 9000). The Ethernet frame on the wire is bigger (14 header + 4 FCS, plus preamble and inter-frame gap). TCP announces an <b>MSS</b> (maximum segment size) in its SYN, normally MTU minus 40 for IPv4, so 1460. If an IPv4 packet is larger than the next link's MTU, a router may fragment it, unless the Don't Fragment (DF) bit is set, in which case it drops it and sends ICMP "fragmentation needed" (type 3, code 4). Path MTU discovery (RFC 1191) relies on that ICMP message, so firewalls that block all ICMP cause mysterious hangs on large transfers. IPv6 routers never fragment; only the sender can (RFC 8200), and every IPv6 link must carry at least 1280 bytes.</p>
+</section>
+
+<section id="ch04-mac-arp" data-roles="th"><div class="sec-head"><h2>MAC addresses, IP addresses and ARP</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> The IP address says <i>where the packet is ultimately going</i>; the MAC address says <i>which box on this wire picks it up next</i>. The IP destination stays the same end to end. The MAC destination changes at every router.</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>MAC address</th><th>IPv4 address</th></tr></thead>
+<tbody>
+<tr><td>Layer</td><td>Link (2)</td><td>Network (3)</td></tr>
+<tr><td>Size</td><td>48 bits, written 3c:22:fb:0a:11:7e</td><td>32 bits, written 192.168.1.10</td></tr>
+<tr><td>Assigned by</td><td>Manufacturer (first 24 bits are the OUI), or randomised by the OS for privacy</td><td>Network administrator or DHCP; depends on where the host is</td></tr>
+<tr><td>Structure</td><td>Flat: no routing information</td><td>Hierarchical: network prefix + host part</td></tr>
+<tr><td>Scope</td><td>One link (one broadcast domain)</td><td>Global (or private behind NAT)</td></tr>
+<tr><td>Broadcast</td><td>ff:ff:ff:ff:ff:ff</td><td>255.255.255.255 (limited) or the subnet broadcast</td></tr>
+</tbody></table></div>
+<p>Two bits in the first octet of a MAC address carry meaning: the least significant bit is the I/G bit (1 means multicast or broadcast), and the next bit is the U/L bit (1 means locally administered, which is what randomised Wi-Fi MACs use).</p>
+
+<h3 id="ch04-arp">ARP: from IP to MAC</h3>
+<p>To send an IPv4 packet on Ethernet the host needs the MAC of the next hop. ARP (RFC 826) finds it:</p>
+<ol>
+<li>The host decides the next hop. If the destination is inside its own subnet (destination AND mask equals own network), the next hop is the destination itself. Otherwise it is the <b>default gateway</b>.</li>
+<li>It checks its ARP cache (<code>ip neigh</code> on Linux). On a miss it broadcasts an ARP request to ff:ff:ff:ff:ff:ff: "who has 192.168.1.1? tell 192.168.1.10" (opcode 1).</li>
+<li>The owner answers with a unicast ARP reply (opcode 2) carrying its MAC. Both sides cache the mapping for a while (Linux keeps entries reachable for tens of seconds, then revalidates).</li>
+<li>The queued packet goes out with that MAC as the frame destination.</li>
+</ol>
+<p>A <b>gratuitous ARP</b> is an unsolicited announcement of your own mapping, sent at boot or after a failover so that neighbours update their caches. ARP has no authentication, which is why <b>ARP spoofing</b> (answering for someone else's IP) enables man-in-the-middle attacks on a LAN. IPv6 replaces ARP with Neighbor Discovery (NDP, RFC 4861), which uses ICMPv6 and multicast instead of broadcast.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 250" role="img" aria-label="MAC addresses change at every router hop while the IP addresses stay the same">
+<defs><marker id="ch04-c07b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="20" y="36" width="120" height="50" class="d-box"/><text x="80" y="57" text-anchor="middle" class="t-bold">Host A</text><text x="80" y="75" text-anchor="middle" class="t-small t-mono">10.0.1.10</text>
+<rect x="190" y="36" width="90" height="50" class="d-soft"/><text x="235" y="65" text-anchor="middle" class="t-small">switch</text>
+<rect x="330" y="30" width="150" height="62" class="d-key"/><text x="405" y="50" text-anchor="middle" class="t-bold">Router</text><text x="405" y="67" text-anchor="middle" class="t-small t-mono">eth0 10.0.1.1 (R1)</text><text x="405" y="83" text-anchor="middle" class="t-small t-mono">eth1 10.0.2.1 (R2)</text>
+<rect x="560" y="36" width="140" height="50" class="d-box"/><text x="630" y="57" text-anchor="middle" class="t-bold">Host B</text><text x="630" y="75" text-anchor="middle" class="t-small t-mono">10.0.2.20</text>
+<line x1="140" y1="61" x2="190" y2="61" class="d-line"/><line x1="280" y1="61" x2="330" y2="61" class="d-line"/><line x1="480" y1="61" x2="560" y2="61" class="d-line"/>
+<text x="185" y="112" text-anchor="middle" class="t-small t-muted">LAN 1: 10.0.1.0/24</text>
+<text x="520" y="112" text-anchor="middle" class="t-small t-muted">LAN 2: 10.0.2.0/24</text>
+<rect x="20" y="122" width="320" height="90" class="d-soft"/>
+<text x="32" y="142" class="t-small t-bold">Frame on LAN 1</text>
+<text x="32" y="161" class="t-small t-mono t-acc">dst MAC = R1 (router eth0)</text>
+<text x="32" y="178" class="t-small t-mono t-acc">src MAC = A</text>
+<text x="32" y="198" class="t-small t-mono t-key">IP 10.0.1.10 → 10.0.2.20, TTL 64</text>
+<rect x="380" y="122" width="320" height="90" class="d-soft"/>
+<text x="392" y="142" class="t-small t-bold">Frame on LAN 2</text>
+<text x="392" y="161" class="t-small t-mono t-acc">dst MAC = B</text>
+<text x="392" y="178" class="t-small t-mono t-acc">src MAC = R2 (router eth1)</text>
+<text x="392" y="198" class="t-small t-mono t-key">IP 10.0.1.10 → 10.0.2.20, TTL 63</text>
+<line x1="342" y1="167" x2="376" y2="167" class="d-line-acc" marker-end="url(#ch07-c07b)"/>
+<text x="360" y="238" text-anchor="middle" class="t-small t-muted">The router strips frame 1, decrements TTL, fixes the IP checksum, and builds frame 2.</text>
+</svg></div><figcaption><b>Link addresses are per hop, IP addresses are end to end.</b> Host A ARPs for the router's MAC (not for B, which is on another subnet), and the router ARPs for B on LAN 2. The IP source and destination never change on the way, unless a NAT device rewrites them.</figcaption></figure>
+</section>
+
+<section id="ch04-ipv4" data-roles="th"><div class="sec-head"><h2>IPv4 addressing, CIDR and subnetting</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> An IPv4 address is one 32-bit number. A prefix length <code>/n</code> splits it: the top <code>n</code> bits name the network, the remaining <code>32 − n</code> bits name a host inside it. Every subnetting question is bit masking on that 32-bit number.</p>
+
+<h3 id="ch04-cidr">CIDR notation and masks</h3>
+<p>Classful addressing (class A /8, B /16, C /24) was replaced by CIDR in 1993 (now RFC 4632). <code>192.168.10.77/26</code> means the first 26 bits are the network. The subnet mask is those 26 one-bits followed by zeros: 255.255.255.192. With address <code>a</code>, prefix <code>n</code> and mask <code>m</code>:</p>
+<ul>
+<li>mask: <i>m</i> = ¬(2<sup>32−n</sup> − 1), written in C++ as <code>n == 0 ? 0 : 0xFFFFFFFFu &lt;&lt; (32 - n)</code> (shifting a 32-bit value by 32 is undefined).</li>
+<li>network address: <code>a &amp; m</code> (all host bits 0).</li>
+<li>broadcast address: <code>a | ~m</code> (all host bits 1).</li>
+<li>usable hosts: 2<sup>32−n</sup> − 2, because the network and broadcast addresses are reserved. Exceptions: a /31 has 2 usable addresses on point-to-point links (RFC 3021) and a /32 is a single host route.</li>
+<li>two hosts are on the same subnet when <code>(a &amp; m) == (b &amp; m)</code>.</li>
+</ul>
+<p>The fast mental method is the <b>block size</b>: in the octet where the mask stops being 255, the block size is 256 minus that mask octet. Networks start at multiples of the block size.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="192.168.10.77/26 splits into 26 network bits and 6 host bits; host bits all zero give the network, all one give the broadcast">
+<rect x="252" y="42" width="342" height="144" class="d-acc"/>
+<rect x="597" y="42" width="58" height="144" class="d-key"/>
+<text x="423" y="32" text-anchor="middle" class="t-small t-acc t-bold">network part: 26 bits</text>
+<text x="626" y="32" text-anchor="middle" class="t-small t-key t-bold">host: 6</text>
+<text x="16" y="68" class="t-bold">Address</text><text x="110" y="68" class="t-mono t-small">192.168.10.77</text>
+<text x="260" y="68" class="t-mono">11000000</text><text x="365" y="68" class="t-mono">10101000</text><text x="470" y="68" class="t-mono">00001010</text><text x="575" y="68" class="t-mono">01</text><text x="602" y="68" class="t-mono">001101</text>
+<text x="16" y="103" class="t-bold">Mask</text><text x="110" y="103" class="t-mono t-small">255.255.255.192</text>
+<text x="260" y="103" class="t-mono">11111111</text><text x="365" y="103" class="t-mono">11111111</text><text x="470" y="103" class="t-mono">11111111</text><text x="575" y="103" class="t-mono">11</text><text x="602" y="103" class="t-mono">000000</text>
+<text x="16" y="138" class="t-bold">Network</text><text x="110" y="138" class="t-mono t-small">192.168.10.64</text>
+<text x="260" y="138" class="t-mono">11000000</text><text x="365" y="138" class="t-mono">10101000</text><text x="470" y="138" class="t-mono">00001010</text><text x="575" y="138" class="t-mono">01</text><text x="602" y="138" class="t-mono">000000</text>
+<text x="16" y="173" class="t-bold">Broadcast</text><text x="110" y="173" class="t-mono t-small">192.168.10.127</text>
+<text x="260" y="173" class="t-mono">11000000</text><text x="365" y="173" class="t-mono">10101000</text><text x="470" y="173" class="t-mono">00001010</text><text x="575" y="173" class="t-mono">01</text><text x="602" y="173" class="t-mono">111111</text>
+<text x="16" y="214" class="t-small">Usable hosts = 2⁶ − 2 = 62, from 192.168.10.65 to 192.168.10.126. Block size in the last octet = 256 − 192 = 64.</text>
+</svg></div><figcaption><b>Subnetting is masking.</b> AND with the mask clears the host bits to give the network address; OR with the inverted mask sets them to give the broadcast address. Everything strictly between the two is assignable.</figcaption></figure>
+
+<h3 id="ch04-subnet-examples">Worked subnetting examples</h3>
+<p><b>Example 1: 192.168.10.77/26.</b> Mask 255.255.255.192, block size 64 in the last octet. 77 lies in the block 64 to 127. Network 192.168.10.64, broadcast 192.168.10.127, hosts .65 to .126, 62 usable.</p>
+<p><b>Example 2: 10.20.30.40/19.</b> 19 bits = 8 + 8 + 3, so the mask is 255.255.224.0 and the block size in the third octet is 256 − 224 = 32. 30 lies in 0 to 31. Network 10.20.0.0, broadcast 10.20.31.255, first host 10.20.0.1, last host 10.20.31.254, usable 2<sup>13</sup> − 2 = 8190.</p>
+<p><b>Example 3: same subnet?</b> Are 10.1.1.100/25 and 10.1.1.200/25 neighbours? The /25 block size is 128. 100 is in 0 to 127 (network 10.1.1.0), 200 is in 128 to 255 (network 10.1.1.128). Different subnets, so traffic between them goes through a router even though the first three octets match.</p>
+<p><b>Example 4: VLSM.</b> Carve 172.16.0.0/22 (1024 addresses) for LANs of 200, 100 and 50 hosts plus one point-to-point link. Allocate largest first so each block stays aligned:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Need</th><th>Smallest prefix</th><th>Subnet</th><th>Usable range</th></tr></thead>
+<tbody>
+<tr><td>200 hosts</td><td>/24 (254)</td><td>172.16.0.0/24</td><td>172.16.0.1 to 172.16.0.254</td></tr>
+<tr><td>100 hosts</td><td>/25 (126)</td><td>172.16.1.0/25</td><td>172.16.1.1 to 172.16.1.126</td></tr>
+<tr><td>50 hosts</td><td>/26 (62)</td><td>172.16.1.128/26</td><td>172.16.1.129 to 172.16.1.190</td></tr>
+<tr><td>2 (router link)</td><td>/30 (2), or /31 per RFC 3021</td><td>172.16.1.192/30</td><td>172.16.1.193 to 172.16.1.194</td></tr>
+</tbody></table></div>
+<p>172.16.1.196 to 172.16.1.255 and all of 172.16.2.0/23 remain free. The smallest prefix for <code>h</code> hosts is the largest <code>n</code> with 2<sup>32−n</sup> − 2 ≥ <i>h</i>.</p>
+<p><b>Example 5: supernetting.</b> 192.168.0.0/24 through 192.168.3.0/24 share their first 22 bits, so a router can advertise one summary route 192.168.0.0/22. Summarising only works when the block is aligned: 192.168.1.0/24 to 192.168.4.0/24 cannot be one prefix.</p>
+
+<h3 id="ch04-special-ranges">Special address ranges (key facts)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Range</th><th>Meaning</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16</td><td>Private, not routed on the public Internet. 172.16.0.0/12 is 172.16.0.0 to 172.31.255.255.</td><td>RFC 1918</td></tr>
+<tr><td>127.0.0.0/8</td><td>Loopback. Every address in it, not just 127.0.0.1, stays inside the host.</td><td>RFC 1122, RFC 6890</td></tr>
+<tr><td>169.254.0.0/16</td><td>Link-local, self-assigned when DHCP fails ("APIPA"); also cloud metadata at 169.254.169.254</td><td>RFC 3927</td></tr>
+<tr><td>100.64.0.0/10</td><td>Shared space for carrier-grade NAT</td><td>RFC 6598</td></tr>
+<tr><td>0.0.0.0</td><td>"This host, unspecified": source address before DHCP; as a bind address it means all interfaces (INADDR_ANY)</td><td>RFC 1122</td></tr>
+<tr><td>255.255.255.255</td><td>Limited broadcast, never forwarded by routers</td><td>RFC 919</td></tr>
+<tr><td>224.0.0.0/4</td><td>Multicast (224.0.0.0 to 239.255.255.255)</td><td>RFC 5771</td></tr>
+<tr><td>192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24</td><td>Documentation examples</td><td>RFC 5737</td></tr>
+</tbody></table></div>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>172.32.0.1 is a <i>public</i> address. The private block is a /12, which covers second octets 16 to 31 only. Candidates who remember "172.something is private" get this wrong.</p></div>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>Prefix to mask: /8 = 255.0.0.0, /16 = 255.255.0.0, /20 = 255.255.240.0, /22 = 255.255.252.0, /24 = 255.255.255.0, /25 = .128, /26 = .192, /27 = .224, /28 = .240, /29 = .248, /30 = .252. Usable hosts: /24 254, /25 126, /26 62, /27 30, /28 14, /29 6, /30 2.</p></div>
+</section>
+
+<section id="ch04-ipv6" data-roles="th"><div class="sec-head"><h2>IPv6 basics</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>IPv6 (RFC 8200, addressing in RFC 4291) uses 128-bit addresses, written as eight groups of 16 bits in hexadecimal: <code>2001:0db8:0000:0000:0000:ff00:0042:8329</code>. The canonical text form (RFC 5952) drops leading zeros in each group, uses lowercase, and replaces the <i>longest</i> run of two or more all-zero groups with <code>::</code>, once: <code>2001:db8::ff00:42:8329</code>. Using <code>::</code> twice would be ambiguous, so it is illegal.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Feature</th><th>IPv4</th><th>IPv6</th></tr></thead>
+<tbody>
+<tr><td>Address size</td><td>32 bits</td><td>128 bits</td></tr>
+<tr><td>Header</td><td>20 to 60 bytes, has a checksum</td><td>fixed 40 bytes, no header checksum, options in extension headers</td></tr>
+<tr><td>Hop counter</td><td>TTL</td><td>Hop Limit</td></tr>
+<tr><td>Fragmentation</td><td>by sender or routers</td><td>by the sender only; minimum link MTU 1280</td></tr>
+<tr><td>Address resolution</td><td>ARP (broadcast)</td><td>Neighbor Discovery over ICMPv6 (multicast)</td></tr>
+<tr><td>Broadcast</td><td>yes</td><td>none; multicast such as ff02::1 (all nodes) instead</td></tr>
+<tr><td>Configuration</td><td>static or DHCP</td><td>SLAAC (RFC 4862), DHCPv6, or static</td></tr>
+<tr><td>Loopback</td><td>127.0.0.0/8</td><td>::1 (a single address)</td></tr>
+<tr><td>Private-style space</td><td>RFC 1918 + NAT</td><td>unique local fc00::/7 (fd00::/8 in practice); global addresses usually make NAT unnecessary</td></tr>
+</tbody></table></div>
+<p>Other prefixes to recognise: <code>fe80::/10</code> link-local (every interface has one, valid only on that link, so you need a zone id like <code>fe80::1%eth0</code>), <code>2000::/3</code> global unicast, <code>ff00::/8</code> multicast, <code>::/128</code> unspecified, and <code>::ffff:0:0/96</code> IPv4-mapped addresses (<code>::ffff:192.0.2.1</code>), which a dual-stack socket uses to show IPv4 peers. A typical LAN is a <b>/64</b>: 64 bits of routing prefix and 64 bits of interface identifier, which SLAAC fills from a random or stable value.</p>
+</section>
+
+<section id="ch04-routing" data-roles="th"><div class="sec-head"><h2>Routing, the default gateway and TTL</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Each router only knows the next step. It holds a table of prefixes and, for each one, the next hop and the outgoing interface. Packets travel hop by hop; no router knows the full path.</p>
+
+<h3 id="ch04-lpm">Longest-prefix match</h3>
+<p>For a destination address, the router considers every route whose prefix contains that address and picks the one with the <b>longest</b> prefix, because it is the most specific. With routes 10.0.0.0/8 via A, 10.1.0.0/16 via B and 0.0.0.0/0 via C, a packet to 10.1.2.3 goes to B, a packet to 10.9.9.9 goes to A, and a packet to 8.8.8.8 goes to C. Hardware routers implement this with tries or TCAMs; the Linux kernel uses an LC-trie.</p>
+<pre><code class="language-bash hljs">$ ip route
+default via 192.168.1.1 dev wlan0 proto dhcp metric 600
+192.168.1.0/24 dev wlan0 proto kernel scope <span class="hljs-built_in">link</span> src 192.168.1.23 metric 600
+$ ip route get 8.8.8.8
+8.8.8.8 via 192.168.1.1 dev wlan0 src 192.168.1.23</code></pre>
+<p>The <b>default route</b> 0.0.0.0/0 matches every address with prefix length 0, so it only wins when nothing more specific does. Its next hop is the <b>default gateway</b>. A host with a directly connected route ("scope link") sends straight to the destination's MAC; for anything else it sends the frame to the gateway's MAC. Routing tables are filled statically or by routing protocols: OSPF and IS-IS inside an organisation, BGP between organisations on the Internet.</p>
+
+<h3 id="ch04-ttl">TTL and hop limit</h3>
+<p>Every router decrements the IPv4 TTL (IPv6 Hop Limit) by one. If it reaches 0, the router drops the packet and sends ICMP Time Exceeded (type 11) back to the source. TTL exists to kill packets caught in routing loops; despite its name it counts hops, not seconds. Linux sends with TTL 64 by default (<code>net.ipv4.ip_default_ttl</code>), Windows with 128, so a received TTL of 57 suggests a Linux sender 7 hops away. Because the TTL changes, every IPv4 router must also recompute the header checksum, which is one reason IPv6 dropped it.</p>
+</section>
+
+<section id="ch04-nat" data-roles="th"><div class="sec-head"><h2>NAT and port mapping</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A NAT router sits between private addresses and one (or a few) public addresses, rewriting packets on the way through and remembering how to rewrite the replies. NAT exists because IPv4 ran out of addresses.</p>
+<p>The common form is <b>NAPT</b> (network address and port translation, RFC 3022), also called PAT or "masquerading". On an outgoing packet the router replaces the private source address and port with its public address and a free public port, and stores the mapping. Replies to that public port are translated back:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Inside (private) socket</th><th>Outside (public) socket</th><th>Remote peer</th><th>Protocol</th></tr></thead>
+<tbody>
+<tr><td>192.168.1.23:51000</td><td>203.0.113.5:40001</td><td>198.51.100.7:443</td><td>TCP</td></tr>
+<tr><td>192.168.1.42:51000</td><td>203.0.113.5:40002</td><td>198.51.100.7:443</td><td>TCP</td></tr>
+<tr><td>192.168.1.23:5353</td><td>203.0.113.5:40003</td><td>192.0.2.53:53</td><td>UDP</td></tr>
+</tbody></table></div>
+<p>Two inside hosts can use the same private port because the router gives them different public ports. The router also recalculates IP and TCP/UDP checksums, since both cover the addresses. Mappings time out: UDP mappings after an idle period (RFC 4787 asks for at least 2 minutes, but real home routers often use 30 to 60 seconds), TCP mappings when the router sees FIN/RST or after a long idle timeout. Long-lived idle connections therefore need keep-alives.</p>
+<ul>
+<li><b>Port forwarding</b> (static DNAT): a fixed rule "public port 8080 → 192.168.1.50:80" lets outside clients reach an inside server.</li>
+<li><b>Consequences.</b> NAT breaks the end-to-end model: an outside host cannot start a connection to an inside host without a forwarding rule. Peer-to-peer apps use STUN, TURN and ICE (as WebRTC does) to traverse NAT. Protocols that put IP addresses inside the payload (classic FTP active mode, SIP) need application-level helpers.</li>
+<li><b>Carrier-grade NAT</b> puts another NAT layer at the ISP, using 100.64.0.0/10 between the two.</li>
+<li>NAT is not a firewall, although dropping unsolicited inbound traffic is a side effect people rely on.</li>
+</ul>
+</section>
+
+<section id="ch04-dns" data-roles="th"><div class="sec-head"><h2>DNS: names to addresses</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> DNS (RFC 1034 and RFC 1035) is a distributed, cached, hierarchical database. The namespace is a tree read right to left: the root (an empty label, written as the trailing dot), then a top-level domain such as <code>com</code>, then <code>example</code>, then <code>www</code>. Each zone's <b>authoritative</b> servers answer for their part of the tree and delegate sub-trees with NS records.</p>
+
+<h3 id="ch04-dns-steps">Resolution step by step</h3>
+<ol>
+<li>The application calls <code>getaddrinfo("www.example.com", ...)</code>. The C library (the <b>stub resolver</b>) checks <code>/etc/hosts</code> (order set by <code>/etc/nsswitch.conf</code>) and any local cache such as systemd-resolved.</li>
+<li>On a miss the stub sends a <b>recursive</b> query (the RD, "recursion desired", bit set) to the configured resolver from <code>/etc/resolv.conf</code>: the ISP's resolver, a corporate one or a public one like 1.1.1.1 or 8.8.8.8.</li>
+<li>The recursive resolver checks its cache. On a miss it performs <b>iterative</b> queries, starting from the root servers (13 named root server identities, a to m, each served by many anycast instances; their addresses ship with the resolver as "root hints").</li>
+<li>A root server does not know the answer. It returns a <b>referral</b>: the NS records for <code>com.</code> plus their addresses (glue).</li>
+<li>The resolver asks a <code>com</code> TLD server, which refers it to the NS records for <code>example.com.</code></li>
+<li>The resolver asks an authoritative server for <code>example.com</code>, which returns the A record with the authoritative-answer (AA) bit set. If the name is a CNAME, the resolver restarts resolution for the target name.</li>
+<li>The resolver caches every record it learned for its TTL and returns the answer to the stub, which returns a <code>sockaddr</code> list to the application.</li>
+</ol>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="The stub sends one recursive query; the recursive resolver iterates through root, TLD and authoritative servers">
+<defs><marker id="ch04-c07c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="16" y="118" width="120" height="56" class="d-box"/><text x="76" y="142" text-anchor="middle" class="t-bold">Your host</text><text x="76" y="160" text-anchor="middle" class="t-small t-muted">stub resolver</text>
+<rect x="226" y="20" width="150" height="250" class="d-key"/><text x="301" y="200" text-anchor="middle" class="t-bold">Recursive</text><text x="301" y="216" text-anchor="middle" class="t-bold">resolver</text><text x="301" y="234" text-anchor="middle" class="t-small t-muted">has a cache</text>
+<rect x="520" y="20" width="184" height="46" class="d-soft"/><text x="612" y="40" text-anchor="middle" class="t-bold">Root server</text><text x="612" y="56" text-anchor="middle" class="t-small t-mono">.</text>
+<rect x="520" y="122" width="184" height="46" class="d-soft"/><text x="612" y="142" text-anchor="middle" class="t-bold">TLD server</text><text x="612" y="158" text-anchor="middle" class="t-small t-mono">com.</text>
+<rect x="520" y="224" width="184" height="46" class="d-acc"/><text x="612" y="244" text-anchor="middle" class="t-bold">Authoritative</text><text x="612" y="260" text-anchor="middle" class="t-small t-mono">example.com.</text>
+<line x1="136" y1="136" x2="224" y2="136" class="d-line-acc" marker-end="url(#ch07-c07c)"/>
+<text x="180" y="128" text-anchor="middle" class="t-small t-acc">1 query, RD=1</text>
+<line x1="226" y1="158" x2="138" y2="158" class="d-line-key" marker-end="url(#ch07-c07c)"/>
+<text x="180" y="176" text-anchor="middle" class="t-small t-key">8 answer</text>
+<line x1="376" y1="36" x2="518" y2="36" class="d-line" marker-end="url(#ch07-c07c)"/><text x="447" y="30" text-anchor="middle" class="t-small">2 query</text>
+<line x1="518" y1="52" x2="378" y2="52" class="d-line d-dash" marker-end="url(#ch07-c07c)"/><text x="447" y="68" text-anchor="middle" class="t-small t-muted">3 refer: com NS</text>
+<line x1="376" y1="138" x2="518" y2="138" class="d-line" marker-end="url(#ch07-c07c)"/><text x="447" y="132" text-anchor="middle" class="t-small">4 query</text>
+<line x1="518" y1="154" x2="378" y2="154" class="d-line d-dash" marker-end="url(#ch07-c07c)"/><text x="447" y="170" text-anchor="middle" class="t-small t-muted">5 refer: example.com NS</text>
+<line x1="376" y1="240" x2="518" y2="240" class="d-line" marker-end="url(#ch07-c07c)"/><text x="447" y="234" text-anchor="middle" class="t-small">6 query</text>
+<line x1="518" y1="256" x2="378" y2="256" class="d-line-key" marker-end="url(#ch07-c07c)"/><text x="447" y="272" text-anchor="middle" class="t-small t-key">7 A 192.0.2.10</text>
+<text x="16" y="294" class="t-small t-muted">1 and 8: recursive (the resolver does the work). 2 to 7: iterative (each server answers or refers).</text>
+</svg></div><figcaption><b>One recursive query fans out into iterative ones.</b> Your host asks once and waits. The resolver walks the tree from the root, caching each referral and the final answer (here with its TTL, for example 3600 seconds), so the next lookup under <code>com.</code> skips steps 2 and 3, and the next lookup of the same name is answered from cache.</figcaption></figure>
+
+<h3 id="ch04-dns-records">Record types</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Type</th><th>Holds</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td>A</td><td>IPv4 address</td><td>a name can have several (round-robin)</td></tr>
+<tr><td>AAAA</td><td>IPv6 address</td><td>RFC 3596; clients ask for A and AAAA, then race connections (Happy Eyeballs, RFC 8305)</td></tr>
+<tr><td>CNAME</td><td>alias to another name</td><td>cannot coexist with other data at the same name, so it is not allowed at the zone apex</td></tr>
+<tr><td>MX</td><td>mail server name + preference</td><td>lower preference value is tried first; must point to a name with A/AAAA, not a CNAME (RFC 2181)</td></tr>
+<tr><td>NS</td><td>authoritative server names for a zone</td><td>used for delegation</td></tr>
+<tr><td>SOA</td><td>zone metadata: serial, refresh, negative-cache TTL</td><td>one per zone, at the apex</td></tr>
+<tr><td>PTR</td><td>reverse mapping, IP to name</td><td>10.2.0.192.in-addr.arpa for 192.0.2.10</td></tr>
+<tr><td>TXT, SRV, CAA</td><td>text (SPF, domain verification), service location with port, allowed certificate authorities</td><td></td></tr>
+</tbody></table></div>
+
+<h3 id="ch04-dns-transport">Caching, TTL and transport</h3>
+<ul>
+<li>Every record carries a <b>TTL</b> in seconds. Caches (browser, OS, resolver) may reuse it until the TTL expires. This is why a DNS change "takes time to propagate": nothing propagates, old copies simply expire. Lower the TTL well before a migration.</li>
+<li><b>Negative caching</b> (RFC 2308): NXDOMAIN answers are cached too, for a time taken from the zone's SOA record.</li>
+<li><b>Transport:</b> queries use <b>UDP port 53</b> by default because one request and one reply fit in a datagram with no handshake. Classic DNS limits UDP messages to 512 bytes; EDNS(0) (RFC 6891) lets the client advertise a bigger buffer. If the answer still does not fit, the server sets the TC (truncated) bit and the client retries over <b>TCP port 53</b>. Zone transfers (AXFR/IXFR) use TCP. RFC 7766 makes TCP support mandatory. Encrypted variants: DNS over TLS on port 853 (RFC 7858) and DNS over HTTPS on 443 (RFC 8484).</li>
+</ul>
+</section>
+
+<section id="ch04-dhcp-icmp" data-roles="th"><div class="sec-head"><h2>DHCP, ICMP, ping and traceroute</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch04-dhcp">DHCP: DORA</h3>
+<p>A new host has no address, no mask, no gateway and no DNS server. DHCP (RFC 2131) supplies all of them as a <b>lease</b>. The client uses UDP port 68 and the server port 67. Because the client has no address yet, the first messages are broadcasts from source 0.0.0.0.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 240" role="img" aria-label="DHCP DORA timeline: Discover, Offer, Request, Ack">
+<defs><marker id="ch04-c07d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="130" y="26" text-anchor="middle" class="t-bold">Client (port 68)</text>
+<text x="590" y="26" text-anchor="middle" class="t-bold">DHCP server (port 67)</text>
+<line x1="130" y1="36" x2="130" y2="226" class="d-line d-dash"/><line x1="590" y1="36" x2="590" y2="226" class="d-line d-dash"/>
+<line x1="130" y1="70" x2="588" y2="80" class="d-line-acc" marker-end="url(#ch07-c07d)"/>
+<text x="360" y="64" text-anchor="middle" class="t-small t-acc">DISCOVER: 0.0.0.0 → 255.255.255.255, "any server?"</text>
+<line x1="590" y1="104" x2="132" y2="114" class="d-line-key" marker-end="url(#ch07-c07d)"/>
+<text x="360" y="100" text-anchor="middle" class="t-small t-key">OFFER: yiaddr 192.168.1.50, mask, router, DNS, lease 24 h</text>
+<line x1="130" y1="140" x2="588" y2="150" class="d-line-acc" marker-end="url(#ch07-c07d)"/>
+<text x="360" y="134" text-anchor="middle" class="t-small t-acc">REQUEST (still broadcast): "I take server S's offer"</text>
+<line x1="590" y1="176" x2="132" y2="186" class="d-line-key" marker-end="url(#ch07-c07d)"/>
+<text x="360" y="172" text-anchor="middle" class="t-small t-key">ACK: lease confirmed; client configures the interface</text>
+<text x="360" y="216" text-anchor="middle" class="t-small t-muted">Renew at T1 (50% of lease, unicast); rebind at T2 (87.5%, broadcast)</text>
+</svg></div><figcaption><b>DORA: Discover, Offer, Request, Acknowledge.</b> The Request is broadcast so that every server that made an offer learns which one was accepted and can release its own. A relay agent on the router forwards these broadcasts to a central server on another subnet.</figcaption></figure>
+<p>Before using the address, many clients send an ARP probe for it to detect a conflict (and decline the lease if someone answers). A DHCP NAK tells a client its requested address is no longer valid, for example after it moved to another network. DHCPv6 (RFC 8415) uses ports 546 and 547; many IPv6 networks use SLAAC instead, with DNS servers in router advertisements.</p>
+
+<h3 id="ch04-icmp">ICMP</h3>
+<p>ICMP (RFC 792; ICMPv6 is RFC 4443) carries control and error messages for IP. It sits directly on IP (protocol 1) and has <b>no ports</b>. Common types:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Type / code</th><th>Meaning</th><th>Used by</th></tr></thead>
+<tbody>
+<tr><td>8 / 0</td><td>Echo request</td><td>ping (ICMPv6 type 128)</td></tr>
+<tr><td>0 / 0</td><td>Echo reply</td><td>ping (ICMPv6 type 129)</td></tr>
+<tr><td>3 / 3</td><td>Destination unreachable: port unreachable (a closed UDP port)</td><td>end of a UDP traceroute</td></tr>
+<tr><td>3 / 4</td><td>Fragmentation needed and DF set (carries the next-hop MTU)</td><td>path MTU discovery</td></tr>
+<tr><td>11 / 0</td><td>Time exceeded: TTL reached 0 in transit</td><td>traceroute</td></tr>
+<tr><td>5</td><td>Redirect: use a better gateway</td><td>routers on the same LAN</td></tr>
+</tbody></table></div>
+<p><b>ping</b> sends echo requests with an identifier and a sequence number and times the replies, reporting round-trip time and loss. A failed ping does not prove a host is down (ICMP is often filtered), and a successful ping does not prove a TCP service is reachable.</p>
+<p><b>traceroute</b> sends probes with TTL 1, 2, 3 and so on. The router at hop <code>k</code> decrements TTL <code>k</code> to 0, drops the probe and returns ICMP Time Exceeded from its own address, revealing itself. Classic Unix traceroute sends three UDP probes per hop to high ports starting at 33434; the destination answers with port unreachable, which ends the trace. Windows <code>tracert</code> uses ICMP echo, and <code>traceroute -T</code> uses TCP SYN to get through firewalls. A line of <code>* * *</code> means no ICMP came back for that hop (often rate limiting or filtering), not necessarily packet loss, especially if later hops answer.</p>
+<pre><code class="language-bash hljs">$ traceroute -n example.org
+ 1  192.168.1.1   1.2 ms  1.0 ms  1.1 ms
+ 2  100.64.0.1    8.4 ms  8.1 ms  8.9 ms
+ 3  * * *
+ 4  198.51.100.9 12.7 ms 12.5 ms 12.9 ms</code></pre>
+</section>
+
+<section id="ch04-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>List the OSI layers from the bottom with one protocol and one device for each. Where do TCP, IP, Ethernet and HTTP sit, and how do the TCP/IP layers map onto them?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> 1 Physical (cables, hub), 2 Data link (Ethernet, switch), 3 Network (IP, router), 4 Transport (TCP and UDP, L4 load balancer), 5 Session, 6 Presentation, 7 Application (HTTP, L7 proxy). TCP/IP (RFC 1122) has link (OSI 1 and 2), internet (3), transport (4) and application (5 to 7).</p>
+    <p><b>Why.</b> Each layer adds one capability: bits on a medium, frames to a neighbour, packets across networks, data to a process, and meaning for the application. Session and presentation have no separate protocols in the Internet stack, which is why TCP/IP folds them into the application. A common wrong answer puts TLS at layer 4 because it runs "on top of TCP"; it is above TCP, so it is usually placed at 6 or simply treated as part of the application layer. ARP is awkward too: it is carried directly in Ethernet frames but resolves layer 3 addresses, so it is often called "layer 2.5".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Host A (10.0.1.10) sends a packet to host B (10.0.2.20) through one router, with no NAT. Of the source MAC, destination MAC, source IP and destination IP, which change when the packet crosses the router?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Both MAC addresses change; both IP addresses stay the same. The TTL drops by one and the IPv4 header checksum is recomputed.</p>
+    <p><b>Why.</b> On LAN 1 the frame goes from A's MAC to the router's eth0 MAC, because A sends off-subnet traffic to its gateway. The router discards that frame, routes the packet, and builds a new frame from its eth1 MAC to B's MAC (found with ARP on LAN 2). MAC addresses only have meaning on one link; IP addresses are end to end. People who say "the destination MAC is B's MAC from the start" forget that A cannot ARP for a host outside its subnet. With NAT the source IP (and port) would also change.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Host 192.168.1.10/24 wants to reach 192.168.2.5. Whose MAC address does it ARP for? What changes if the host is misconfigured with a /16 mask?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> With /24 it ARPs for its default gateway, because 192.168.2.5 is off-subnet. With /16 it believes 192.168.2.5 is on its own link and ARPs for 192.168.2.5 directly. Nobody on the LAN answers, so the connection fails (unless the router does proxy ARP).</p>
+    <p><b>Why.</b> The on-link decision is purely <code>(dst &amp; mask) == (own &amp; mask)</code>. With mask 255.255.255.0 the networks are 192.168.1.0 and 192.168.2.0, which differ. With 255.255.0.0 both are 192.168.0.0, so the host skips the gateway. This is the classic "I can reach the Internet but not the other office subnet" (or the reverse) symptom of a wrong mask. A wrong answer is "it ARPs for 192.168.2.5 in both cases": hosts never ARP for off-subnet addresses.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Name the PDU at the link, network and transport layers. What are the MTU and the MSS on standard Ethernet with IPv4 and TCP, and why do they differ?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Frame, packet, segment (TCP) or datagram (UDP). The MTU is 1500 bytes and the MSS is 1460 bytes.</p>
+    <p><b>Why.</b> The MTU is the largest IP packet the link carries, counting the IP header. The MSS is the largest TCP payload, so it is the MTU minus the 20-byte IPv4 header and the 20-byte TCP header (minus more if TCP options such as timestamps are used in every segment, which is why you often see 1448 bytes of data per segment). The Ethernet header and FCS (18 bytes) are outside the MTU. With IPv6 the header is 40 bytes, so the MSS is 1440. A frequent mistake is to subtract the Ethernet header from 1500.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Which of these are private (RFC 1918) addresses: 10.255.0.1, 172.31.200.1, 172.32.0.1, 192.168.0.0, 192.169.1.1, 100.64.0.1?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> 10.255.0.1, 172.31.200.1 and 192.168.0.0 are private. 172.32.0.1 and 192.169.1.1 are public. 100.64.0.1 is shared carrier-grade NAT space (RFC 6598), not RFC 1918.</p>
+    <p><b>Why.</b> The ranges are 10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16. A /12 fixes the first 12 bits, so the second octet of 172.16.0.0/12 ranges over 16 to 31 only. 192.168.0.0 is inside 192.168.0.0/16 (it is the network address of that block, and also a valid host address inside a larger subnet). 100.64.0.0/10 is also non-public, but it is meant for ISPs, and using it on a home LAN can collide with the ISP's CGNAT.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>The formula for usable hosts is "2 to the host bits, minus 2". How many usable hosts are in a /31 and in a /32?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A /31 has 2 usable addresses when used on a point-to-point link (RFC 3021), and a /32 identifies exactly 1 host. The naive formula gives 0 and −1.</p>
+    <p><b>Why.</b> The minus 2 reserves the network address (host bits all 0) and the directed broadcast (host bits all 1). A point-to-point link has only two ends and no need for a broadcast address, so RFC 3021 lets both addresses of a /31 be hosts, which saves half the space of a /30 on router links. A /32 is a host route, used for loopback interfaces on routers, for anycast service addresses and in routing tables. Linux and modern routers accept /31 links. Answering "0 and none" is the textbook answer that interviewers use this question to filter out.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Compare a hub, a switch and a router in terms of collision domains, broadcast domains and what each one reads in a frame.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A hub reads nothing: one collision domain, one broadcast domain. A switch reads destination and source MACs: one collision domain per port, still one broadcast domain (per VLAN). A router reads the destination IP: it separates broadcast domains, one per interface.</p>
+    <p><b>Why.</b> A hub is an electrical repeater, so two stations transmitting at once collide (CSMA/CD in half-duplex Ethernet). A switch learns MAC to port mappings from source addresses and forwards selectively, and modern full-duplex links have no collisions at all. Broadcast frames (ARP requests, DHCP discovers) are flooded by switches but never forwarded by routers. VLANs split one physical switch into several broadcast domains, and traffic between VLANs must then be routed.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does DNS run over UDP or TCP?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Both, on port 53. Ordinary queries use UDP. TCP is used when a response is truncated (TC bit set), for zone transfers (AXFR/IXFR), and whenever the client chooses it; RFC 7766 requires every DNS implementation to support TCP.</p>
+    <p><b>Why.</b> UDP avoids a handshake, so a lookup costs one round trip. Classic DNS (RFC 1035) limits UDP payloads to 512 bytes. EDNS(0) (RFC 6891) lets clients advertise larger buffers, but large answers (DNSSEC signatures, many records) still risk IP fragmentation, so servers truncate and the client retries over TCP. The answer "UDP only" is the common wrong one, and it leads to firewalls that block TCP 53 and break large responses. Encrypted DNS uses TCP-based transports: DoT on 853, DoH on 443 (HTTP/3 makes DoH run over QUIC/UDP).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the difference between a recursive and an iterative DNS query, and who performs each in a normal lookup?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> In a recursive query the server must return the final answer (or an error), doing all the work itself. In an iterative query the server returns the best it knows, usually a referral to servers closer to the answer. Your stub resolver sends one recursive query to its resolver; the resolver sends iterative queries to the root, the TLD and the authoritative servers.</p>
+    <p><b>Why.</b> Putting recursion in a shared resolver concentrates caching: thousands of clients share cached referrals and answers, so root and TLD servers see a tiny fraction of lookups. Authoritative servers normally refuse recursion (the RA bit is clear in their replies) to avoid being used for amplification attacks. Saying "the root server forwards the query to the TLD server" is wrong: servers do not forward on your behalf in the iterative chain, the resolver chases each referral itself.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>You want <code>example.com</code> (the bare domain) to point to your load balancer, whose provider gives you only a hostname. Can you create a CNAME record at <code>example.com</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. A CNAME cannot coexist with any other record at the same name, and the zone apex must hold SOA and NS records. DNS providers offer non-standard ALIAS/ANAME records or "CNAME flattening", which resolve the target on the provider's side and serve plain A/AAAA records at the apex.</p>
+    <p><b>Why.</b> A CNAME says "this name is an alias, look up the other name for every type", so other data at the same owner name would be contradictory (RFC 1034 section 3.6.2, clarified in RFC 2181). <code>www.example.com</code> can be a CNAME because nothing else lives there. A related rule: MX and NS records must point to names with address records, not to CNAMEs (RFC 2181 section 10.3). Newer SVCB/HTTPS records (RFC 9460) also address the apex problem.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Walk through DHCP. Why is the DHCPREQUEST broadcast even though the client already knows which server made the offer? What happens if no server answers?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Discover (broadcast), Offer (from each server), Request (broadcast, naming the chosen server and address), Ack. The Request is broadcast so that every server that made an offer learns its offer was declined and can return that address to its pool. With no server, the client keeps retrying and many operating systems self-assign a link-local 169.254.x.y address (RFC 3927).</p>
+    <p><b>Why.</b> The client has no IP address until the Ack, so it sends from 0.0.0.0 port 68 to 255.255.255.255 port 67. The Offer reserves an address tentatively; the Ack commits the lease, with mask, default gateway, DNS servers and lease time as options. Renewal is unicast to the server at T1 (half the lease); if that fails, the client broadcasts a rebind at T2. A 169.254 address on a laptop is the classic sign of "DHCP is broken", not of a network problem elsewhere. Routers forward DHCP to other subnets only through a relay agent (often called an IP helper).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Which port does ping use? Your web server answers ping. Does that mean it can serve HTTP?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> None. ping sends ICMP echo requests, and ICMP has no ports. A ping reply proves only IP reachability and that ICMP is allowed; the web server can still be down, or TCP port 443 can be filtered.</p>
+    <p><b>Why.</b> ICMP is carried directly in IP (protocol number 1). Echo messages have an identifier and sequence number instead of ports, which is how the kernel matches replies to the right ping process (and how NAT boxes translate them). The reverse also holds: many hosts drop ICMP, so a failed ping does not prove the service is down. To test a service, connect to it (<code>curl</code>, <code>nc -vz host 443</code>) or use a TCP traceroute.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A traceroute shows <code>* * *</code> at hop 3, but hops 4 to 10 answer normally and the destination is reached. Is there packet loss at hop 3?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Almost certainly not. Hop 3 forwards packets fine (later hops answer), it just does not send ICMP Time Exceeded messages back, or rate-limits them, or sends them from an address that is filtered on the way back.</p>
+    <p><b>Why.</b> Routers forward packets in hardware but generate ICMP in a slow control-plane path, so many rate-limit or disable it. Loss that matters shows up as lost probes at the final destination and at every hop after the problem. The same reasoning explains why a middle hop can show a high RTT while later hops are fast: generating ICMP is low priority on that router. Concluding that "hop 3 is dropping my traffic" is the classic misreading.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Two laptops behind the same home router both open TCP connections from source port 51000 to the same server on port 443. How does the NAT keep them apart, and why can the server not open a connection back to a laptop?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The router translates each connection to its public address with a different public source port (for example 40001 and 40002) and records both mappings. Replies are matched on the public port and translated back. An unsolicited inbound connection has no mapping, so the router does not know which inside host should get it and drops it.</p>
+    <p><b>Why.</b> NAPT (RFC 3022) multiplexes many private sockets onto one public IP by rewriting the transport port, so up to about 64 thousand concurrent flows per public address per remote endpoint and protocol. Inbound access needs an explicit port forward, or a NAT traversal technique (STUN, TURN, ICE, UDP hole punching) where both sides send outbound first. The router must also recompute the IP and TCP checksums, because the TCP checksum covers a pseudo-header containing the IP addresses.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A server inside a Docker container listens on 127.0.0.1:8080. Requests from the host to the published port fail. Why? And does 127.0.0.2 reach anything?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> 127.0.0.1 is the container's own loopback interface. Traffic forwarded from the host arrives on the container's eth0 address, where nothing listens. Bind to 0.0.0.0 (INADDR_ANY, every interface) or to the container's address instead. And yes: the whole 127.0.0.0/8 block is loopback, so on Linux 127.0.0.2 reaches local services bound to 0.0.0.0 or to 127.0.0.2.</p>
+    <p><b>Why.</b> A socket bound to a specific address only accepts packets whose destination is that address. Each network namespace (each container) has its own loopback. Binding a production service to 0.0.0.0 exposes it on every interface, so the safe choice depends on intent: 127.0.0.1 for local-only admin ports, 0.0.0.0 or a specific interface for services. In IPv6 the loopback is the single address ::1, and <code>::</code> is the "any" address.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Give four structural differences between IPv4 and IPv6, and compress <code>2001:0db8:0000:0000:0001:0000:0000:0001</code>.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> 128-bit addresses; a fixed 40-byte header with no checksum; no broadcast (multicast instead) and Neighbor Discovery instead of ARP; fragmentation only at the source, with a 1280-byte minimum MTU; SLAAC autoconfiguration. The canonical compressed form is <code>2001:db8::1:0:0:1</code>.</p>
+    <p><b>Why.</b> RFC 5952 says: drop leading zeros in each group, then replace the longest run of zero groups with <code>::</code>; if two runs tie, compress the first. Here the runs are groups 3 and 4 and groups 6 and 7, both of length two, so the first run is compressed. (Compressing the second run gives <code>2001:db8:0:0:1::1</code>, which is a valid address but not the canonical form.) Writing <code>::</code> twice is never valid, because the reader could not tell how many zeros each one hides. Removing the header checksum is safe because link layers (Ethernet FCS) and transports (TCP, UDP checksums, mandatory for UDP over IPv6) already check integrity.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A DNS record has TTL 300 and an IP packet arrives with TTL 52. What does each TTL measure, and what does the 52 suggest?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The DNS TTL is in seconds: caches may keep the record for 5 minutes. The IP TTL is a hop count: each router decrements it and drops the packet at 0. A received TTL of 52 suggests a sender that started at 64 (Linux, macOS) and is 12 hops away.</p>
+    <p><b>Why.</b> RFC 791 originally defined the IP TTL in seconds, with every router subtracting at least 1, but in practice packets spend far less than a second per hop, so it became a pure hop counter (IPv6 renamed it Hop Limit). Common initial values are 64, 128 (Windows) and 255 (many network devices), so you infer the start value as the next one above the received value. Mixing up the two TTLs is a common interview slip, as is thinking that IP packets "expire" after some time.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is ARP spoofing, why does it work, how far can it reach, and how do networks defend against it?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> An attacker on the same LAN sends forged ARP replies ("192.168.1.1 is at <i>my</i> MAC") to a victim, and usually the reverse to the gateway. Both update their caches, so their traffic flows through the attacker, who forwards it on: a man in the middle. It only works inside one broadcast domain. Defences: Dynamic ARP Inspection on managed switches (which checks ARP replies against a DHCP snooping table), static ARP entries for critical hosts, port security, and end-to-end encryption such as TLS or SSH, which does not stop the poisoning but keeps the attacker from reading or changing the data.</p>
+    <p><b>Why.</b> ARP (RFC 826) has no authentication, and most stacks accept unsolicited replies and gratuitous ARPs, because failover depends on that. Routers never forward ARP, so an attacker elsewhere on the Internet cannot poison your cache. The common wrong answer is "HTTPS prevents ARP spoofing". It does not: the attacker still controls the path and can drop traffic, read DNS over UDP and attempt downgrades. TLS only makes the content safe when the client validates certificates. A related attack is MAC flooding: the attacker fills the switch's CAM table with fake source MACs, and the switch then floods unknown unicast frames out of every port, like a hub. IPv6 Neighbor Discovery has the same weakness, and the IPv6 counterpart of Dynamic ARP Inspection is RA Guard together with ND inspection.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Over a new VPN, SSH logins work, ping works and small web pages load, but large downloads and <code>git clone</code> hang right after the connection opens. What is the likely cause and the fix?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A path MTU discovery black hole. The tunnel adds headers, so the path MTU drops below 1500 (often to about 1400 to 1420). TCP sends full-size segments with DF set, and the tunnel router drops them and returns ICMP "fragmentation needed" (type 3, code 4). A firewall on the way back blocks that ICMP, so the sender never learns the smaller MTU and keeps retransmitting packets that are too large. Fixes: allow ICMP type 3 code 4 (ICMPv6 Packet Too Big, type 2), clamp the TCP MSS on the tunnel router (for example the iptables <code>TCPMSS --clamp-mss-to-pmtu</code> target), or lower the interface MTU.</p>
+    <p><b>Why.</b> Small packets (handshakes, keystrokes, short pages, the default 84-byte ping) fit within the smaller MTU, so only bulk transfers fail. The wrong answers are "the routers will just fragment it" (TCP sets DF for PMTUD on Linux, and IPv6 routers never fragment) and "blocking all ICMP is a harmless security measure" (this failure is what it costs). To test, send pings with DF set and growing sizes: <code>ping -M do -s 1472 host</code> sends a full 1500-byte packet on Linux. Packetization-layer PMTUD (RFC 4821, the <code>net.ipv4.tcp_mtu_probing</code> sysctl on Linux) finds the MTU without relying on ICMP.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch04-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+<p>All programs assume a little-endian machine (x86-64 or ARM64), which is what every interview laptop and server uses. Byte order is the point of several of them.</p>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this program print?</p>
+<pre data-run="ch07-masks"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">print_ip</span><span class="hljs-params">(<span class="hljs-type">uint32_t</span> a)</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%u.%u.%u.%u\n&quot;</span>, a &gt;&gt; <span class="hljs-number">24</span>, (a &gt;&gt; <span class="hljs-number">16</span>) &amp; <span class="hljs-number">255</span>, (a &gt;&gt; <span class="hljs-number">8</span>) &amp; <span class="hljs-number">255</span>, a &amp; <span class="hljs-number">255</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> p : {<span class="hljs-number">8</span>, <span class="hljs-number">20</span>, <span class="hljs-number">26</span>, <span class="hljs-number">30</span>}) {
+        <span class="hljs-type">uint32_t</span> mask = <span class="hljs-number">0xFFFFFFFF</span>u &lt;&lt; (<span class="hljs-number">32</span> - p);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;/%d &quot;</span>, p);
+        <span class="hljs-built_in">print_ip</span>(mask);
+    }
+    <span class="hljs-type">uint32_t</span> a = (<span class="hljs-number">10u</span> &lt;&lt; <span class="hljs-number">24</span>) | (<span class="hljs-number">20u</span> &lt;&lt; <span class="hljs-number">16</span>) | (<span class="hljs-number">30u</span> &lt;&lt; <span class="hljs-number">8</span>) | <span class="hljs-number">40u</span>;
+    <span class="hljs-type">uint32_t</span> m = <span class="hljs-number">0xFFFFFFFF</span>u &lt;&lt; (<span class="hljs-number">32</span> - <span class="hljs-number">19</span>);
+    <span class="hljs-built_in">print_ip</span>(a &amp; m);
+    <span class="hljs-built_in">print_ip</span>(a | ~m);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch07-masks">/8 255.0.0.0
+/20 255.255.240.0
+/26 255.255.255.192
+/30 255.255.255.252
+10.20.0.0
+10.20.31.255</pre>
+    <p><b>Why.</b> Shifting all-ones left by <code>32 − p</code> leaves exactly <code>p</code> one-bits at the top. /20 leaves four ones in the third octet: 11110000 = 240. For 10.20.30.40/19 the third octet is masked with 224 (block size 32), and 30 lies in block 0 to 31, so AND gives the network 10.20.0.0 and OR with the inverted mask gives the broadcast 10.20.31.255. The literal is <code>0xFFFFFFFFu</code>, unsigned, which matters: shifting a negative signed value was undefined before C++20.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This route parser works for every route in the table except one. Which one, and what is the bug?</p>
+<pre data-run="ch07-shift32" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">uint32_t</span> <span class="hljs-title">mask_of</span><span class="hljs-params">(<span class="hljs-type">int</span> prefix)</span> </span>{
+    <span class="hljs-keyword">return</span> <span class="hljs-number">0xFFFFFFFF</span>u &lt;&lt; (<span class="hljs-number">32</span> - prefix);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* routes[] = {<span class="hljs-string">&quot;10.0.0.0/8&quot;</span>, <span class="hljs-string">&quot;192.168.1.0/24&quot;</span>, <span class="hljs-string">&quot;0.0.0.0/0&quot;</span>};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* r : routes) {
+        <span class="hljs-type">unsigned</span> a, b, c, d;
+        <span class="hljs-type">int</span> prefix;
+        <span class="hljs-keyword">if</span> (std::<span class="hljs-built_in">sscanf</span>(r, <span class="hljs-string">&quot;%u.%u.%u.%u/%d&quot;</span>, &amp;a, &amp;b, &amp;c, &amp;d, &amp;prefix) != <span class="hljs-number">5</span>) <span class="hljs-keyword">continue</span>;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%-15s mask 0x%08X\n&quot;</span>, r, <span class="hljs-built_in">mask_of</span>(prefix));
+    }
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The default route 0.0.0.0/0. For prefix 0 the code shifts a 32-bit value by 32, which is undefined behaviour ([expr.shift]: the right operand must be less than the width of the promoted left operand). UBSan reports "shift exponent 32 is too large for 32-bit type". Fix: <code>return prefix == 0 ? 0 : 0xFFFFFFFFu &lt;&lt; (32 - prefix);</code>.</p>
+    <p><b>Why.</b> Without the sanitizer the program usually prints 0xFFFFFFFF for /0, the mask of a /32, because x86 and ARM64 shift instructions use only the low 5 bits of the count, so a shift by 32 becomes a shift by 0. The default route then matches only 0.0.0.0 itself, and every packet to the Internet is dropped. The output is not compared here because it is undefined. People expect the "obvious" answer 0x00000000, and that is what you only get by handling 0 explicitly. The same trap applies to <code>1u &lt;&lt; 32</code> when counting addresses in a /0; use 64-bit arithmetic.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print on a little-endian machine?</p>
+<pre data-run="ch07-endian"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">uint32_t</span> host = <span class="hljs-number">0x0A000001</span>;  <span class="hljs-comment">// 10.0.0.1</span>
+    <span class="hljs-type">unsigned</span> <span class="hljs-type">char</span> b[<span class="hljs-number">4</span>];
+    std::<span class="hljs-built_in">memcpy</span>(b, &amp;host, <span class="hljs-number">4</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;host order bytes: %d %d %d %d\n&quot;</span>, b[<span class="hljs-number">0</span>], b[<span class="hljs-number">1</span>], b[<span class="hljs-number">2</span>], b[<span class="hljs-number">3</span>]);
+    <span class="hljs-type">uint32_t</span> net = <span class="hljs-built_in">htonl</span>(host);
+    std::<span class="hljs-built_in">memcpy</span>(b, &amp;net, <span class="hljs-number">4</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;network order bytes: %d %d %d %d\n&quot;</span>, b[<span class="hljs-number">0</span>], b[<span class="hljs-number">1</span>], b[<span class="hljs-number">2</span>], b[<span class="hljs-number">3</span>]);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;htons(80) = %d\n&quot;</span>, <span class="hljs-built_in">htons</span>(<span class="hljs-number">80</span>));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch07-endian">host order bytes: 1 0 0 10
+network order bytes: 10 0 0 1
+htons(80) = 20480</pre>
+    <p><b>Why.</b> Little-endian machines store the least significant byte first, so 0x0A000001 sits in memory as 01 00 00 0A. Network byte order is big-endian (RFC 791 appendix B; every IP, TCP and UDP header field uses it), so <code>htonl</code> swaps it to 0A 00 00 01, which is the order the address appears on the wire and in <code>in_addr</code>. <code>htons(80)</code> swaps 0x0050 to 0x5000 = 20480. On a big-endian machine both functions are no-ops, which is why code that forgets them can pass tests on one platform and fail on another.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this validator print for the three inputs?</p>
+<pre data-run="ch07-inetaddr"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">check</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s)</span> </span>{
+    <span class="hljs-type">in_addr_t</span> a = <span class="hljs-built_in">inet_addr</span>(s);
+    <span class="hljs-keyword">if</span> (a == INADDR_NONE) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s: invalid\n&quot;</span>, s);
+    <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s: ok\n&quot;</span>, s);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">check</span>(<span class="hljs-string">&quot;192.168.1.1&quot;</span>);
+    <span class="hljs-built_in">check</span>(<span class="hljs-string">&quot;255.255.255.255&quot;</span>);
+    <span class="hljs-built_in">check</span>(<span class="hljs-string">&quot;300.1.1.1&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch07-inetaddr">192.168.1.1: ok
+255.255.255.255: invalid
+300.1.1.1: invalid</pre>
+    <p><b>Why.</b> <code>inet_addr</code> returns the address as a 32-bit value, and it signals errors with <code>INADDR_NONE</code>, which is 0xFFFFFFFF. That is also the valid limited broadcast address 255.255.255.255, so the function cannot tell them apart. This is why <code>inet_addr</code> is considered obsolete. Use <code>inet_pton(AF_INET, s, &amp;addr)</code>, which returns 1 on success, 0 for invalid text and −1 for a bad address family, and writes the result separately.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Your SSRF filter blocks the string "127.0.0.1". An attacker sends other strings. What does this print?</p>
+<pre data-run="ch07-aton"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* inputs[] = {<span class="hljs-string">&quot;127.1&quot;</span>, <span class="hljs-string">&quot;1.2.3&quot;</span>, <span class="hljs-string">&quot;0x7f.0.0.1&quot;</span>, <span class="hljs-string">&quot;10.0.0.1&quot;</span>};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s : inputs) {
+        in_addr a{};
+        <span class="hljs-type">int</span> ok_aton = <span class="hljs-built_in">inet_aton</span>(s, &amp;a);
+        <span class="hljs-type">char</span> text[INET_ADDRSTRLEN];
+        <span class="hljs-built_in">inet_ntop</span>(AF_INET, &amp;a, text, <span class="hljs-keyword">sizeof</span> text);
+        in_addr b{};
+        <span class="hljs-type">int</span> ok_pton = <span class="hljs-built_in">inet_pton</span>(AF_INET, s, &amp;b);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%-11s aton=%d (%s) pton=%d\n&quot;</span>, s, ok_aton, text, ok_pton);
+    }
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch07-aton">127.1       aton=1 (127.0.0.1) pton=0
+1.2.3       aton=1 (1.2.0.3) pton=0
+0x7f.0.0.1  aton=1 (127.0.0.1) pton=0
+10.0.0.1    aton=1 (10.0.0.1) pton=1</pre>
+    <p><b>Why.</b> <code>inet_aton</code> (and therefore <code>inet_addr</code>, <code>ping</code>, browsers and <code>getaddrinfo</code> in many configurations) accepts the old BSD shorthand: <code>a.b</code> means a 24-bit last part, <code>a.b.c</code> means a 16-bit last part, and each part may be hex (<code>0x</code>) or octal (leading 0). So "127.1" is 127.0.0.1 and "1.2.3" is 1.2.0.3. <code>inet_pton</code> accepts only four decimal parts. An SSRF filter that compares strings is bypassed by these spellings; the fix is to parse to a binary address first and filter on the number (and to recheck after DNS resolution). Leading zeros are a portability trap: glibc's <code>inet_pton</code> rejects "01.2.3.4" but macOS accepts it as decimal, and <code>inet_aton</code> reads it as octal.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This prints 0 for two hosts in the same /24. Why, and for which inputs would it ever return true?</p>
+<pre data-run="ch07-prec"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">same_subnet</span><span class="hljs-params">(<span class="hljs-type">uint32_t</span> a, <span class="hljs-type">uint32_t</span> b, <span class="hljs-type">uint32_t</span> m)</span> </span>{
+    <span class="hljs-keyword">return</span> (a &amp; m) == b &amp; m;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">uint32_t</span> mask = <span class="hljs-number">0xFFFFFF00</span>;  <span class="hljs-comment">// /24</span>
+    <span class="hljs-type">uint32_t</span> a = <span class="hljs-number">0xC0A8010A</span>;     <span class="hljs-comment">// 192.168.1.10</span>
+    <span class="hljs-type">uint32_t</span> b = <span class="hljs-number">0xC0A80114</span>;     <span class="hljs-comment">// 192.168.1.20</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, <span class="hljs-built_in">same_subnet</span>(a, b, mask));
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It prints 0. <code>==</code> binds tighter than <code>&amp;</code>, so the expression is <code>((a &amp; m) == b) &amp; m</code>. The comparison yields 0 or 1, and 1 AND 0xFFFFFF00 is 0, so for any mask shorter than /32 the function always returns false. Fix: <code>(a &amp; m) == (b &amp; m)</code>.</p>
+<pre class="out" data-out="ch07-prec">0</pre>
+    <p><b>Why.</b> The bitwise operators <code>&amp;</code>, <code>^</code> and <code>|</code> have lower precedence than the comparisons, a leftover from early C where <code>&amp;</code> doubled as logical AND. GCC and Clang warn with <code>-Wparentheses</code> ("suggest parentheses around comparison in operand of '&amp;'"), which is one more reason to compile with <code>-Wall</code> and read the warnings. The function could only return true for a mask with the lowest bit set (a /32) and <code>b == (a &amp; m)</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this host counter print, and which lines are wrong for real networks?</p>
+<pre data-run="ch07-hosts"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> p : {<span class="hljs-number">24</span>, <span class="hljs-number">30</span>, <span class="hljs-number">31</span>, <span class="hljs-number">32</span>}) {
+        <span class="hljs-type">int</span> usable = (<span class="hljs-number">1</span> &lt;&lt; (<span class="hljs-number">32</span> - p)) - <span class="hljs-number">2</span>;
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;/%d: %d\n&quot;</span>, p, usable);
+    }
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch07-hosts">/24: 254
+/30: 2
+/31: 0
+/32: -1</pre>
+    <p><b>Why.</b> The arithmetic is right; the formula is not. A /31 point-to-point link has 2 usable addresses (RFC 3021) and a /32 is one host, so a real calculator special-cases them. The code also hides two integer traps for small prefixes: for /1, <code>1 &lt;&lt; 31</code> is <code>INT_MIN</code> in C++20 (undefined in C and C++11, implementation-defined in C++14 and C++17) and subtracting 2 then overflows, which is undefined; for /0 the shift by 32 is undefined. Use <code>uint64_t</code> and <code>1ull &lt;&lt; (32 - p)</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A server sets its port like this, and clients connecting to 8080 get "connection refused". What port is it really on?</p>
+<pre data-run="ch07-port"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;netinet/in.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = <span class="hljs-number">8080</span>;  <span class="hljs-comment">// passed to bind() later</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;port on the wire: %d\n&quot;</span>, <span class="hljs-built_in">ntohs</span>(addr.sin_port));
+    addr.sin_port = <span class="hljs-built_in">htons</span>(<span class="hljs-number">8080</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;port on the wire: %d\n&quot;</span>, <span class="hljs-built_in">ntohs</span>(addr.sin_port));
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Port 36895. <code>sin_port</code> must be in network byte order, so the first assignment needs <code>htons(8080)</code>.</p>
+<pre class="out" data-out="ch07-port">port on the wire: 36895
+port on the wire: 8080</pre>
+    <p><b>Why.</b> 8080 is 0x1F90. Stored in host order on a little-endian machine, the bytes are 90 1F, and the kernel reads <code>sin_port</code> as a big-endian 16-bit value: 0x901F = 36895. <code>ss -ltn</code> would show the server listening on 36895. The same applies to <code>sin_addr.s_addr</code>: use <code>htonl(INADDR_LOOPBACK)</code>, although <code>INADDR_ANY</code> is 0 and so happens to work without conversion, which hides the bug.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>DNS messages carry names in a label format. What does this encoder print?</p>
+<pre data-run="ch07-labels"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::vector&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt; <span class="hljs-title">encode_name</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; name)</span> </span>{
+    std::vector&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt; out;
+    <span class="hljs-type">size_t</span> start = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">while</span> (start &lt;= name.<span class="hljs-built_in">size</span>()) {
+        <span class="hljs-type">size_t</span> dot = name.<span class="hljs-built_in">find</span>(<span class="hljs-string">&#x27;.&#x27;</span>, start);
+        <span class="hljs-keyword">if</span> (dot == std::string::npos) dot = name.<span class="hljs-built_in">size</span>();
+        <span class="hljs-type">size_t</span> len = dot - start;
+        <span class="hljs-keyword">if</span> (len == <span class="hljs-number">0</span>) <span class="hljs-keyword">break</span>;
+        out.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(len));
+        out.<span class="hljs-built_in">insert</span>(out.<span class="hljs-built_in">end</span>(), name.<span class="hljs-built_in">begin</span>() + start, name.<span class="hljs-built_in">begin</span>() + dot);
+        start = dot + <span class="hljs-number">1</span>;
+    }
+    out.<span class="hljs-built_in">push_back</span>(<span class="hljs-number">0</span>);
+    <span class="hljs-keyword">return</span> out;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> wire = <span class="hljs-built_in">encode_name</span>(<span class="hljs-string">&quot;www.example.com&quot;</span>);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span> c : wire) {
+        <span class="hljs-keyword">if</span> (c &lt; <span class="hljs-number">32</span>) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;[%d]&quot;</span>, c);
+        <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%c&quot;</span>, c);
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\nlength %zu\n&quot;</span>, wire.<span class="hljs-built_in">size</span>());
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch07-labels">[3]www[7]example[3]com[0]
+length 17</pre>
+    <p><b>Why.</b> RFC 1035 section 3.1 encodes a name as a sequence of labels, each a length byte followed by that many characters, ended by the zero-length root label. There are no dots on the wire. Length bytes are at most 63 because the top two bits are reserved: 11 marks a compression pointer to an earlier name in the message (see the decoder in the coding section). The whole name is limited to 255 bytes in this form.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Trace this routing table lookup. What does it print?</p>
+<pre data-run="ch07-lpm"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Route</span> { <span class="hljs-type">uint32_t</span> prefix; <span class="hljs-type">int</span> len; std::string via; };
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">uint32_t</span> <span class="hljs-title">ip</span><span class="hljs-params">(<span class="hljs-type">unsigned</span> a, <span class="hljs-type">unsigned</span> b, <span class="hljs-type">unsigned</span> c, <span class="hljs-type">unsigned</span> d)</span> </span>{ <span class="hljs-keyword">return</span> a &lt;&lt; <span class="hljs-number">24</span> | b &lt;&lt; <span class="hljs-number">16</span> | c &lt;&lt; <span class="hljs-number">8</span> | d; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">uint32_t</span> <span class="hljs-title">mask</span><span class="hljs-params">(<span class="hljs-type">int</span> len)</span> </span>{ <span class="hljs-keyword">return</span> len == <span class="hljs-number">0</span> ? <span class="hljs-number">0</span> : <span class="hljs-number">0xFFFFFFFF</span>u &lt;&lt; (<span class="hljs-number">32</span> - len); }
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string <span class="hljs-title">lookup</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;Route&gt;&amp; table, <span class="hljs-type">uint32_t</span> dst)</span> </span>{
+    <span class="hljs-type">const</span> Route* best = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Route&amp; r : table)
+        <span class="hljs-keyword">if</span> ((dst &amp; <span class="hljs-built_in">mask</span>(r.len)) == r.prefix &amp;&amp; (!best || r.len &gt; best-&gt;len)) best = &amp;r;
+    <span class="hljs-keyword">return</span> best ? best-&gt;via : <span class="hljs-string">&quot;drop&quot;</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Route&gt; table = {
+        {<span class="hljs-built_in">ip</span>(<span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>), <span class="hljs-number">0</span>, <span class="hljs-string">&quot;isp&quot;</span>},
+        {<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>), <span class="hljs-number">8</span>, <span class="hljs-string">&quot;core&quot;</span>},
+        {<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>), <span class="hljs-number">16</span>, <span class="hljs-string">&quot;lab&quot;</span>},
+        {<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">0</span>), <span class="hljs-number">24</span>, <span class="hljs-string">&quot;rack&quot;</span>},
+        {<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">128</span>), <span class="hljs-number">25</span>, <span class="hljs-string">&quot;tor&quot;</span>},
+    };
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">uint32_t</span> d : {<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">200</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">5</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">9</span>, <span class="hljs-number">9</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">200</span>, <span class="hljs-number">0</span>, <span class="hljs-number">1</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">8</span>, <span class="hljs-number">8</span>, <span class="hljs-number">8</span>, <span class="hljs-number">8</span>)})
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">lookup</span>(table, d).<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b></p>
+<pre class="out" data-out="ch07-lpm">tor
+rack
+lab
+core
+isp</pre>
+    <p><b>Why.</b> 10.1.2.200 matches all five routes and the /25 (10.1.2.128 to 10.1.2.255) is the longest. 10.1.2.5 is below .128, so the /25 does not match and the /24 wins. 10.1.9.9 matches the /16, 10.200.0.1 only the /8, and 8.8.8.8 only the default route. Order in the table does not matter, only prefix length. A common wrong answer takes the first match, which would send everything to "isp".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This should print the /24 network of 192.168.1.10. What does it print, and why?</p>
+<pre data-run="ch07-netorder"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;arpa/inet.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    in_addr a{};
+    <span class="hljs-built_in">inet_pton</span>(AF_INET, <span class="hljs-string">&quot;192.168.1.10&quot;</span>, &amp;a);
+    <span class="hljs-type">uint32_t</span> mask = <span class="hljs-number">0xFFFFFF00</span>;    <span class="hljs-comment">// /24, written in host order</span>
+    in_addr net{};
+    net.s_addr = a.s_addr &amp; mask;
+    <span class="hljs-type">char</span> text[INET_ADDRSTRLEN];
+    <span class="hljs-built_in">inet_ntop</span>(AF_INET, &amp;net, text, <span class="hljs-keyword">sizeof</span> text);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;network: %s\n&quot;</span>, text);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It mixes byte orders. <code>s_addr</code> is in network order but the mask is in host order.</p>
+<pre class="out" data-out="ch07-netorder">network: 0.168.1.10</pre>
+    <p><b>Why.</b> <code>inet_pton</code> stores the bytes C0 A8 01 0A in memory. Read as a little-endian integer that is 0x0A01A8C0, and AND with 0xFFFFFF00 clears the lowest-valued byte, which is the <i>first</i> byte in memory, 192. Fix it by doing arithmetic in host order: <code>uint32_t h = ntohl(a.s_addr); net.s_addr = htonl(h &amp; mask);</code>, or by converting the mask with <code>htonl</code>. A good rule: convert at the boundary (parsing and socket calls) and keep all arithmetic in host order.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch04-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+<p>These problems are all deterministic bit manipulation and parsing, so each reference solution runs with a test <code>main</code>. Keep addresses as <code>uint32_t</code> in host order inside your logic and convert only at the edges.</p>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>std::optional&lt;uint32_t&gt; parse_ipv4(std::string_view s)</code>. Accept exactly four decimal parts 0 to 255 separated by single dots. Reject empty parts, leading zeros ("01"), signs, spaces, trailing characters and overflow. Return the address in host order. Do not call any library parser.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Scan left to right with an index. For each of the four parts, require at least one digit, accumulate the value and fail as soon as it exceeds 255 (which also prevents integer overflow on long digit runs). Reject a multi-digit part that starts with 0. Between parts require exactly one dot, and after the fourth part require the end of the string.</p>
+<pre data-run="ch07-parse"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+
+<span class="hljs-function">std::optional&lt;<span class="hljs-type">uint32_t</span>&gt; <span class="hljs-title">parse_ipv4</span><span class="hljs-params">(std::string_view s)</span> </span>{
+    <span class="hljs-type">uint32_t</span> result = <span class="hljs-number">0</span>;
+    <span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> part = <span class="hljs-number">0</span>; part &lt; <span class="hljs-number">4</span>; ++part) {
+        <span class="hljs-keyword">if</span> (part &gt; <span class="hljs-number">0</span>) {
+            <span class="hljs-keyword">if</span> (i &gt;= s.<span class="hljs-built_in">size</span>() || s[i] != <span class="hljs-string">&#x27;.&#x27;</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+            ++i;
+        }
+        <span class="hljs-type">size_t</span> start = i;
+        <span class="hljs-type">unsigned</span> value = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">while</span> (i &lt; s.<span class="hljs-built_in">size</span>() &amp;&amp; s[i] &gt;= <span class="hljs-string">&#x27;0&#x27;</span> &amp;&amp; s[i] &lt;= <span class="hljs-string">&#x27;9&#x27;</span>) {
+            value = value * <span class="hljs-number">10</span> + <span class="hljs-built_in">unsigned</span>(s[i] - <span class="hljs-string">&#x27;0&#x27;</span>);
+            <span class="hljs-keyword">if</span> (value &gt; <span class="hljs-number">255</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+            ++i;
+        }
+        <span class="hljs-keyword">if</span> (i == start) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;                       <span class="hljs-comment">// empty part</span>
+        <span class="hljs-keyword">if</span> (i - start &gt; <span class="hljs-number">1</span> &amp;&amp; s[start] == <span class="hljs-string">&#x27;0&#x27;</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>; <span class="hljs-comment">// leading zero</span>
+        result = (result &lt;&lt; <span class="hljs-number">8</span>) | value;
+    }
+    <span class="hljs-keyword">if</span> (i != s.<span class="hljs-built_in">size</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    <span class="hljs-keyword">return</span> result;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* tests[] = {<span class="hljs-string">&quot;192.168.1.1&quot;</span>, <span class="hljs-string">&quot;0.0.0.0&quot;</span>, <span class="hljs-string">&quot;255.255.255.255&quot;</span>, <span class="hljs-string">&quot;256.1.1.1&quot;</span>, <span class="hljs-string">&quot;1.2.3&quot;</span>,
+                           <span class="hljs-string">&quot;1.2.3.4.&quot;</span>, <span class="hljs-string">&quot;01.2.3.4&quot;</span>, <span class="hljs-string">&quot;1..2.3&quot;</span>, <span class="hljs-string">&quot; 1.2.3.4&quot;</span>, <span class="hljs-string">&quot;1.2.3.4a&quot;</span>, <span class="hljs-string">&quot;99999999999.1.1.1&quot;</span>};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* t : tests) {
+        <span class="hljs-keyword">auto</span> r = <span class="hljs-built_in">parse_ipv4</span>(t);
+        <span class="hljs-keyword">if</span> (r) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\&quot;%s\&quot; -&gt; 0x%08x\n&quot;</span>, t, *r);
+        <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\&quot;%s\&quot; -&gt; invalid\n&quot;</span>, t);
+    }
+}</code></pre>
+<pre class="out" data-out="ch07-parse">"192.168.1.1" -&gt; 0xc0a80101
+"0.0.0.0" -&gt; 0x00000000
+"255.255.255.255" -&gt; 0xffffffff
+"256.1.1.1" -&gt; invalid
+"1.2.3" -&gt; invalid
+"1.2.3.4." -&gt; invalid
+"01.2.3.4" -&gt; invalid
+"1..2.3" -&gt; invalid
+" 1.2.3.4" -&gt; invalid
+"1.2.3.4a" -&gt; invalid
+"99999999999.1.1.1" -&gt; invalid</pre>
+    <p><b>Complexity and pitfalls.</b> O(n) time, O(1) space. Common bugs: using <code>std::stoi</code> (accepts leading spaces, signs and trailing junk, and throws on overflow), splitting on dots and missing the empty-part and trailing-dot cases, and allowing leading zeros, which other parsers read as octal (so "010.0.0.1" means 8.0.0.1 to <code>inet_aton</code>). The early <code>value &gt; 255</code> check is what makes the overflow test safe.</p>
+    <p class="rating">Estimated rating: ~1200 · straightforward parsing, but the edge cases decide whether it is accepted</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a subnet calculator. Given a string "a.b.c.d/n", print the network address, broadcast address, first and last usable host, and the number of usable hosts. Handle /0 to /32, treat /31 as a point-to-point link (RFC 3021, both addresses usable, no broadcast) and /32 as a single host. Reject malformed input and prefixes above 32.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Split at the slash, parse the address strictly and the prefix as one or two digits. Build the mask with an explicit case for /0 to avoid the undefined shift by 32. Network is <code>addr &amp; mask</code>, broadcast is <code>network | ~mask</code>. For prefixes up to /30 the usable range excludes both ends; count in 64-bit because /0 has 2<sup>32</sup> addresses.</p>
+<pre data-run="ch07-subnet"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::optional&lt;<span class="hljs-type">uint32_t</span>&gt; <span class="hljs-title">parse_ipv4</span><span class="hljs-params">(std::string_view s)</span> </span>{
+    <span class="hljs-type">uint32_t</span> result = <span class="hljs-number">0</span>;
+    <span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> part = <span class="hljs-number">0</span>; part &lt; <span class="hljs-number">4</span>; ++part) {
+        <span class="hljs-keyword">if</span> (part &gt; <span class="hljs-number">0</span>) {
+            <span class="hljs-keyword">if</span> (i &gt;= s.<span class="hljs-built_in">size</span>() || s[i] != <span class="hljs-string">&#x27;.&#x27;</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+            ++i;
+        }
+        <span class="hljs-type">size_t</span> start = i;
+        <span class="hljs-type">unsigned</span> value = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">while</span> (i &lt; s.<span class="hljs-built_in">size</span>() &amp;&amp; s[i] &gt;= <span class="hljs-string">&#x27;0&#x27;</span> &amp;&amp; s[i] &lt;= <span class="hljs-string">&#x27;9&#x27;</span>) {
+            value = value * <span class="hljs-number">10</span> + <span class="hljs-built_in">unsigned</span>(s[i] - <span class="hljs-string">&#x27;0&#x27;</span>);
+            <span class="hljs-keyword">if</span> (value &gt; <span class="hljs-number">255</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+            ++i;
+        }
+        <span class="hljs-keyword">if</span> (i == start || (i - start &gt; <span class="hljs-number">1</span> &amp;&amp; s[start] == <span class="hljs-string">&#x27;0&#x27;</span>)) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        result = (result &lt;&lt; <span class="hljs-number">8</span>) | value;
+    }
+    <span class="hljs-keyword">if</span> (i != s.<span class="hljs-built_in">size</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    <span class="hljs-keyword">return</span> result;
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Subnet</span> {
+    <span class="hljs-type">int</span> prefix;
+    <span class="hljs-type">uint32_t</span> network, broadcast, first, last;
+    <span class="hljs-type">uint64_t</span> usable;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::optional&lt;Subnet&gt; <span class="hljs-title">calc</span><span class="hljs-params">(std::string_view cidr)</span> </span>{
+    <span class="hljs-type">size_t</span> slash = cidr.<span class="hljs-built_in">find</span>(<span class="hljs-string">&#x27;/&#x27;</span>);
+    <span class="hljs-keyword">if</span> (slash == std::string_view::npos) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    <span class="hljs-keyword">auto</span> addr = <span class="hljs-built_in">parse_ipv4</span>(cidr.<span class="hljs-built_in">substr</span>(<span class="hljs-number">0</span>, slash));
+    std::string_view ps = cidr.<span class="hljs-built_in">substr</span>(slash + <span class="hljs-number">1</span>);
+    <span class="hljs-keyword">if</span> (!addr || ps.<span class="hljs-built_in">empty</span>() || ps.<span class="hljs-built_in">size</span>() &gt; <span class="hljs-number">2</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    <span class="hljs-type">int</span> prefix = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">char</span> c : ps) {
+        <span class="hljs-keyword">if</span> (c &lt; <span class="hljs-string">&#x27;0&#x27;</span> || c &gt; <span class="hljs-string">&#x27;9&#x27;</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        prefix = prefix * <span class="hljs-number">10</span> + (c - <span class="hljs-string">&#x27;0&#x27;</span>);
+    }
+    <span class="hljs-keyword">if</span> (prefix &gt; <span class="hljs-number">32</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    <span class="hljs-type">uint32_t</span> mask = prefix == <span class="hljs-number">0</span> ? <span class="hljs-number">0</span> : <span class="hljs-number">0xFFFFFFFF</span>u &lt;&lt; (<span class="hljs-number">32</span> - prefix);
+    Subnet s{};
+    s.prefix = prefix;
+    s.network = *addr &amp; mask;
+    s.broadcast = s.network | ~mask;
+    <span class="hljs-keyword">if</span> (prefix &gt;= <span class="hljs-number">31</span>) {  <span class="hljs-comment">// RFC 3021 point-to-point link, or a host route</span>
+        s.first = s.network;
+        s.last = s.broadcast;
+        s.usable = prefix == <span class="hljs-number">31</span> ? <span class="hljs-number">2</span> : <span class="hljs-number">1</span>;
+    } <span class="hljs-keyword">else</span> {
+        s.first = s.network + <span class="hljs-number">1</span>;
+        s.last = s.broadcast - <span class="hljs-number">1</span>;
+        s.usable = (<span class="hljs-type">uint64_t</span>{<span class="hljs-number">1</span>} &lt;&lt; (<span class="hljs-number">32</span> - prefix)) - <span class="hljs-number">2</span>;
+    }
+    <span class="hljs-keyword">return</span> s;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string <span class="hljs-title">dotted</span><span class="hljs-params">(<span class="hljs-type">uint32_t</span> a)</span> </span>{
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">to_string</span>(a &gt;&gt; <span class="hljs-number">24</span>) + <span class="hljs-string">&#x27;.&#x27;</span> + std::<span class="hljs-built_in">to_string</span>((a &gt;&gt; <span class="hljs-number">16</span>) &amp; <span class="hljs-number">255</span>) + <span class="hljs-string">&#x27;.&#x27;</span> +
+           std::<span class="hljs-built_in">to_string</span>((a &gt;&gt; <span class="hljs-number">8</span>) &amp; <span class="hljs-number">255</span>) + <span class="hljs-string">&#x27;.&#x27;</span> + std::<span class="hljs-built_in">to_string</span>(a &amp; <span class="hljs-number">255</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* in : {<span class="hljs-string">&quot;192.168.10.77/26&quot;</span>, <span class="hljs-string">&quot;10.20.30.40/19&quot;</span>, <span class="hljs-string">&quot;172.16.5.4/31&quot;</span>, <span class="hljs-string">&quot;8.8.8.8/32&quot;</span>,
+                           <span class="hljs-string">&quot;0.0.0.0/0&quot;</span>, <span class="hljs-string">&quot;10.0.0.1/33&quot;</span>, <span class="hljs-string">&quot;10.0.0.1&quot;</span>}) {
+        <span class="hljs-keyword">auto</span> s = <span class="hljs-built_in">calc</span>(in);
+        <span class="hljs-keyword">if</span> (!s) {
+            std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s: invalid\n&quot;</span>, in);
+            <span class="hljs-keyword">continue</span>;
+        }
+        std::string bcast = s-&gt;prefix &gt;= <span class="hljs-number">31</span> ? <span class="hljs-string">&quot;n/a&quot;</span> : <span class="hljs-built_in">dotted</span>(s-&gt;broadcast);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s: net %s bcast %s hosts %s-%s (%llu)\n&quot;</span>, in, <span class="hljs-built_in">dotted</span>(s-&gt;network).<span class="hljs-built_in">c_str</span>(), bcast.<span class="hljs-built_in">c_str</span>(),
+                    <span class="hljs-built_in">dotted</span>(s-&gt;first).<span class="hljs-built_in">c_str</span>(), <span class="hljs-built_in">dotted</span>(s-&gt;last).<span class="hljs-built_in">c_str</span>(), <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;(s-&gt;usable));
+    }
+}</code></pre>
+<pre class="out" data-out="ch07-subnet">192.168.10.77/26: net 192.168.10.64 bcast 192.168.10.127 hosts 192.168.10.65-192.168.10.126 (62)
+10.20.30.40/19: net 10.20.0.0 bcast 10.20.31.255 hosts 10.20.0.1-10.20.31.254 (8190)
+172.16.5.4/31: net 172.16.5.4 bcast n/a hosts 172.16.5.4-172.16.5.5 (2)
+8.8.8.8/32: net 8.8.8.8 bcast n/a hosts 8.8.8.8-8.8.8.8 (1)
+0.0.0.0/0: net 0.0.0.0 bcast 255.255.255.255 hosts 0.0.0.1-255.255.255.254 (4294967294)
+10.0.0.1/33: invalid
+10.0.0.1: invalid</pre>
+    <p><b>Complexity and pitfalls.</b> O(length of input). The three classic bugs are the shift by 32 for /0, 32-bit overflow when counting addresses, and the naive "minus 2" for /31 and /32. Interviewers often follow up with "is host X in this subnet?" (compare <code>x &amp; mask</code> with the network) or "what is the smallest prefix for 500 hosts?" (/23, since 2<sup>9</sup> − 2 = 510).</p>
+    <p class="rating">Estimated rating: ~1300 · simple bit arithmetic with three well-known edge cases</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a routing table with longest-prefix match using a binary trie: <code>insert(prefix, len, next_hop)</code> and <code>lookup(addr)</code>, which returns the next hop of the most specific matching route, or "drop" if none matches. Lookups must cost O(32), independent of the number of routes.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Each trie level consumes one address bit from the most significant end. A route of length <code>len</code> marks the node at depth <code>len</code> with its next hop; the default route marks the root. A lookup walks down following the address bits and remembers the last marked node it passed, which is by construction the longest matching prefix.</p>
+<pre data-run="ch07-trie" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">RouteTrie</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+        std::unique_ptr&lt;Node&gt; child[<span class="hljs-number">2</span>];
+        <span class="hljs-type">const</span> <span class="hljs-type">char</span>* next_hop = <span class="hljs-literal">nullptr</span>;
+    };
+    Node root_;
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">insert</span><span class="hljs-params">(<span class="hljs-type">uint32_t</span> prefix, <span class="hljs-type">int</span> len, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* hop)</span> </span>{
+        Node* n = &amp;root_;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; len; ++i) {
+            <span class="hljs-type">int</span> bit = (prefix &gt;&gt; (<span class="hljs-number">31</span> - i)) &amp; <span class="hljs-number">1</span>;
+            <span class="hljs-keyword">if</span> (!n-&gt;child[bit]) n-&gt;child[bit] = std::<span class="hljs-built_in">make_unique</span>&lt;Node&gt;();
+            n = n-&gt;child[bit].<span class="hljs-built_in">get</span>();
+        }
+        n-&gt;next_hop = hop;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">lookup</span><span class="hljs-params">(<span class="hljs-type">uint32_t</span> addr)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-type">const</span> Node* n = &amp;root_;
+        <span class="hljs-type">const</span> <span class="hljs-type">char</span>* best = n-&gt;next_hop;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">32</span> &amp;&amp; n; ++i) {
+            n = n-&gt;child[(addr &gt;&gt; (<span class="hljs-number">31</span> - i)) &amp; <span class="hljs-number">1</span>].<span class="hljs-built_in">get</span>();
+            <span class="hljs-keyword">if</span> (n &amp;&amp; n-&gt;next_hop) best = n-&gt;next_hop;
+        }
+        <span class="hljs-keyword">return</span> best ? best : <span class="hljs-string">&quot;drop&quot;</span>;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">uint32_t</span> <span class="hljs-title">ip</span><span class="hljs-params">(<span class="hljs-type">unsigned</span> a, <span class="hljs-type">unsigned</span> b, <span class="hljs-type">unsigned</span> c, <span class="hljs-type">unsigned</span> d)</span> </span>{ <span class="hljs-keyword">return</span> a &lt;&lt; <span class="hljs-number">24</span> | b &lt;&lt; <span class="hljs-number">16</span> | c &lt;&lt; <span class="hljs-number">8</span> | d; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    RouteTrie t;
+    t.<span class="hljs-built_in">insert</span>(<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>), <span class="hljs-number">8</span>, <span class="hljs-string">&quot;core&quot;</span>);
+    t.<span class="hljs-built_in">insert</span>(<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>), <span class="hljs-number">16</span>, <span class="hljs-string">&quot;lab&quot;</span>);
+    t.<span class="hljs-built_in">insert</span>(<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">0</span>), <span class="hljs-number">24</span>, <span class="hljs-string">&quot;rack&quot;</span>);
+    t.<span class="hljs-built_in">insert</span>(<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">128</span>), <span class="hljs-number">25</span>, <span class="hljs-string">&quot;tor&quot;</span>);
+    t.<span class="hljs-built_in">insert</span>(<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">200</span>), <span class="hljs-number">32</span>, <span class="hljs-string">&quot;host&quot;</span>);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">uint32_t</span> a : {<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">200</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">201</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">5</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">1</span>, <span class="hljs-number">9</span>, <span class="hljs-number">9</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">200</span>, <span class="hljs-number">0</span>, <span class="hljs-number">1</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">8</span>, <span class="hljs-number">8</span>, <span class="hljs-number">8</span>, <span class="hljs-number">8</span>)})
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%u.%u.%u.%u -&gt; %s\n&quot;</span>, a &gt;&gt; <span class="hljs-number">24</span>, (a &gt;&gt; <span class="hljs-number">16</span>) &amp; <span class="hljs-number">255</span>, (a &gt;&gt; <span class="hljs-number">8</span>) &amp; <span class="hljs-number">255</span>, a &amp; <span class="hljs-number">255</span>, t.<span class="hljs-built_in">lookup</span>(a));
+    t.<span class="hljs-built_in">insert</span>(<span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-string">&quot;isp&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after default route: 8.8.8.8 -&gt; %s\n&quot;</span>, t.<span class="hljs-built_in">lookup</span>(<span class="hljs-built_in">ip</span>(<span class="hljs-number">8</span>, <span class="hljs-number">8</span>, <span class="hljs-number">8</span>, <span class="hljs-number">8</span>)));
+}</code></pre>
+<pre class="out" data-out="ch07-trie">10.1.2.200 -&gt; host
+10.1.2.201 -&gt; tor
+10.1.2.5 -&gt; rack
+10.1.9.9 -&gt; lab
+10.200.0.1 -&gt; core
+8.8.8.8 -&gt; drop
+after default route: 8.8.8.8 -&gt; isp</pre>
+    <p><b>Complexity and pitfalls.</b> Lookup and insert are O(32). Memory is up to 32 nodes per route, which real routers reduce with path compression (Patricia or LC-tries, as in the Linux FIB) or multibit strides of 8 or 16 bits per level, trading memory for fewer memory accesses per lookup. Pitfalls: stopping at the first marked node instead of the last, forgetting that the root itself can hold the default route, and inserting a prefix with host bits set (10.1.2.77/24); production code masks the prefix on insert.</p>
+    <p class="rating">Estimated rating: ~1500 · a standard bitwise trie; the insight is to remember the last match while descending</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement the Internet checksum (RFC 1071) used by the IPv4 header, ICMP, UDP and TCP: the ones' complement of the ones' complement sum of all 16-bit big-endian words, padding an odd final byte with zero. Compute the checksum of an IPv4 header, then show that verifying a correct header yields 0.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Add the 16-bit words into a 32-bit accumulator, which leaves room for the carries. Fold the carries back into the low 16 bits until none remain (this is what makes it a ones' complement sum), then invert. To verify, sum the header including its checksum field: a correct header sums to 0xFFFF, so the inverted result is 0.</p>
+<pre data-run="ch07-csum"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">uint16_t</span> <span class="hljs-title">inet_checksum</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">uint8_t</span>* data, <span class="hljs-type">size_t</span> len)</span> </span>{
+    <span class="hljs-type">uint32_t</span> sum = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i + <span class="hljs-number">1</span> &lt; len; i += <span class="hljs-number">2</span>)
+        sum += <span class="hljs-built_in">uint32_t</span>(data[i]) &lt;&lt; <span class="hljs-number">8</span> | data[i + <span class="hljs-number">1</span>];
+    <span class="hljs-keyword">if</span> (len % <span class="hljs-number">2</span>) sum += <span class="hljs-built_in">uint32_t</span>(data[len - <span class="hljs-number">1</span>]) &lt;&lt; <span class="hljs-number">8</span>;  <span class="hljs-comment">// pad the odd byte with zero</span>
+    <span class="hljs-keyword">while</span> (sum &gt;&gt; <span class="hljs-number">16</span>) sum = (sum &amp; <span class="hljs-number">0xFFFF</span>) + (sum &gt;&gt; <span class="hljs-number">16</span>);
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">uint16_t</span>&gt;(~sum);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">uint8_t</span> hdr[<span class="hljs-number">20</span>] = {<span class="hljs-number">0x45</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x73</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x40</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x40</span>, <span class="hljs-number">0x11</span>,
+                       <span class="hljs-number">0x00</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0xc0</span>, <span class="hljs-number">0xa8</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0x01</span>, <span class="hljs-number">0xc0</span>, <span class="hljs-number">0xa8</span>, <span class="hljs-number">0x00</span>, <span class="hljs-number">0xc7</span>};
+    <span class="hljs-type">uint16_t</span> c = <span class="hljs-built_in">inet_checksum</span>(hdr, <span class="hljs-keyword">sizeof</span> hdr);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;checksum 0x%04x\n&quot;</span>, c);
+    hdr[<span class="hljs-number">10</span>] = <span class="hljs-built_in">uint8_t</span>(c &gt;&gt; <span class="hljs-number">8</span>);  <span class="hljs-comment">// store big-endian</span>
+    hdr[<span class="hljs-number">11</span>] = <span class="hljs-built_in">uint8_t</span>(c &amp; <span class="hljs-number">0xFF</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;verify 0x%04x\n&quot;</span>, <span class="hljs-built_in">inet_checksum</span>(hdr, <span class="hljs-keyword">sizeof</span> hdr));
+    hdr[<span class="hljs-number">8</span>] = <span class="hljs-number">0x3f</span>;  <span class="hljs-comment">// TTL 64 -&gt; 63 without fixing the checksum</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after TTL change, verify 0x%04x\n&quot;</span>, <span class="hljs-built_in">inet_checksum</span>(hdr, <span class="hljs-keyword">sizeof</span> hdr));
+    <span class="hljs-type">const</span> <span class="hljs-type">uint8_t</span> odd[<span class="hljs-number">3</span>] = {<span class="hljs-number">0x01</span>, <span class="hljs-number">0x02</span>, <span class="hljs-number">0x03</span>};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;odd length 0x%04x\n&quot;</span>, <span class="hljs-built_in">inet_checksum</span>(odd, <span class="hljs-keyword">sizeof</span> odd));
+}</code></pre>
+<pre class="out" data-out="ch07-csum">checksum 0xb861
+verify 0x0000
+after TTL change, verify 0x0100
+odd length 0xfbfd</pre>
+    <p><b>Complexity and pitfalls.</b> O(n). Pitfalls: summing in host byte order without care (the ones' complement sum is actually byte-order independent if you read and write the result in the same order, but mixing orders breaks it), a 16-bit accumulator that loses carries, folding only once, and forgetting the odd-byte pad. For TCP and UDP the sum also covers a pseudo-header (source IP, destination IP, protocol, length), which is why NAT must patch transport checksums. Routers update the checksum incrementally after decrementing TTL (RFC 1624) instead of resumming the header.</p>
+    <p class="rating">Estimated rating: ~1300 · short code, but carries and byte order trip people up</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Given an inclusive IPv4 range [lo, hi], return the minimal list of CIDR blocks that covers exactly that range (firewall rule generation; LeetCode 751 is the count-based variant).</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Greedy from the low end. At address <code>start</code>, the largest aligned block that begins there has size equal to the lowest set bit of <code>start</code> (2<sup>32</sup> when start is 0). Halve it until it fits in the remaining range, emit it, and advance. Use 64-bit arithmetic so that 2<sup>32</sup> and <code>hi + 1</code> do not overflow.</p>
+<pre data-run="ch07-cidrs"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> std::vector&lt;std::pair&lt;<span class="hljs-type">uint32_t</span>, <span class="hljs-type">int</span>&gt;&gt; <span class="hljs-built_in">range_to_cidrs</span>(<span class="hljs-type">uint32_t</span> lo, <span class="hljs-type">uint32_t</span> hi) {
+    std::vector&lt;std::pair&lt;<span class="hljs-type">uint32_t</span>, <span class="hljs-type">int</span>&gt;&gt; out;
+    <span class="hljs-type">uint64_t</span> start = lo, end = hi;
+    <span class="hljs-keyword">while</span> (start &lt;= end) {
+        <span class="hljs-type">uint64_t</span> size = start == <span class="hljs-number">0</span> ? (<span class="hljs-type">uint64_t</span>{<span class="hljs-number">1</span>} &lt;&lt; <span class="hljs-number">32</span>) : (start &amp; (~start + <span class="hljs-number">1</span>));  <span class="hljs-comment">// lowest set bit</span>
+        <span class="hljs-keyword">while</span> (size &gt; end - start + <span class="hljs-number">1</span>) size &gt;&gt;= <span class="hljs-number">1</span>;
+        <span class="hljs-type">int</span> len = <span class="hljs-number">32</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">uint64_t</span> s = size; s &gt; <span class="hljs-number">1</span>; s &gt;&gt;= <span class="hljs-number">1</span>) --len;
+        out.<span class="hljs-built_in">push_back</span>({<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">uint32_t</span>&gt;(start), len});
+        start += size;
+    }
+    <span class="hljs-keyword">return</span> out;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">uint32_t</span> <span class="hljs-title">ip</span><span class="hljs-params">(<span class="hljs-type">unsigned</span> a, <span class="hljs-type">unsigned</span> b, <span class="hljs-type">unsigned</span> c, <span class="hljs-type">unsigned</span> d)</span> </span>{ <span class="hljs-keyword">return</span> a &lt;&lt; <span class="hljs-number">24</span> | b &lt;&lt; <span class="hljs-number">16</span> | c &lt;&lt; <span class="hljs-number">8</span> | d; }
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(<span class="hljs-type">uint32_t</span> lo, <span class="hljs-type">uint32_t</span> hi)</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> [net, len] : <span class="hljs-built_in">range_to_cidrs</span>(lo, hi))
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%u.%u.%u.%u/%d &quot;</span>, net &gt;&gt; <span class="hljs-number">24</span>, (net &gt;&gt; <span class="hljs-number">16</span>) &amp; <span class="hljs-number">255</span>, (net &gt;&gt; <span class="hljs-number">8</span>) &amp; <span class="hljs-number">255</span>, net &amp; <span class="hljs-number">255</span>, len);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">show</span>(<span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">5</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">10</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">20</span>));
+    <span class="hljs-built_in">show</span>(<span class="hljs-built_in">ip</span>(<span class="hljs-number">192</span>, <span class="hljs-number">168</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">192</span>, <span class="hljs-number">168</span>, <span class="hljs-number">3</span>, <span class="hljs-number">255</span>));
+    <span class="hljs-built_in">show</span>(<span class="hljs-built_in">ip</span>(<span class="hljs-number">192</span>, <span class="hljs-number">168</span>, <span class="hljs-number">1</span>, <span class="hljs-number">0</span>), <span class="hljs-built_in">ip</span>(<span class="hljs-number">192</span>, <span class="hljs-number">168</span>, <span class="hljs-number">4</span>, <span class="hljs-number">255</span>));
+    <span class="hljs-built_in">show</span>(<span class="hljs-number">0</span>, <span class="hljs-number">0xFFFFFFFF</span>u);
+}</code></pre>
+<pre class="out" data-out="ch07-cidrs">10.0.0.5/32 10.0.0.6/31 10.0.0.8/29 10.0.0.16/30 10.0.0.20/32
+192.168.0.0/22
+192.168.1.0/24 192.168.2.0/23 192.168.4.0/24
+0.0.0.0/0</pre>
+    <p><b>Complexity and pitfalls.</b> At most about 62 blocks for any range (two per bit length), each found in O(32), so O(1) in practice. The greedy is optimal because every emitted block is the largest aligned block that starts at the current address and stays inside the range. Pitfalls: <code>hi + 1</code> overflowing for 255.255.255.255, the infinite loop when <code>start</code> is 0 and the lowest-set-bit trick returns 0, and emitting unaligned blocks such as 10.0.0.5/30.</p>
+    <p class="rating">Estimated rating: ~1600 · needs the alignment insight and careful overflow handling</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a DNS name decoder for a received message: <code>read_name(msg, pos)</code> returns the dotted name and the offset just after the name at the original position. Support compression pointers (two bytes, top bits 11, 14-bit offset; RFC 1035 section 4.1.4). It must never read out of bounds or loop forever on a hostile packet.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Read labels until the zero byte. On a pointer, record the "next" offset (pointer position + 2) the first time you jump, then continue at the target. Defences: bounds-check every read, reject the reserved length prefixes 01 and 10, require pointers to point backwards, cap the number of jumps, and cap the decoded wire length at 255 bytes.</p>
+<pre data-run="ch07-dnsname" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Name</span> {
+    std::string text;
+    <span class="hljs-type">size_t</span> next;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::optional&lt;Name&gt; <span class="hljs-title">read_name</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">uint8_t</span>&gt;&amp; msg, <span class="hljs-type">size_t</span> pos)</span> </span>{
+    std::string out;
+    <span class="hljs-type">size_t</span> next = <span class="hljs-number">0</span>;
+    <span class="hljs-type">bool</span> jumped = <span class="hljs-literal">false</span>;
+    <span class="hljs-type">int</span> jumps = <span class="hljs-number">0</span>;
+    <span class="hljs-type">size_t</span> wire_len = <span class="hljs-number">1</span>;  <span class="hljs-comment">// the final root label</span>
+    <span class="hljs-keyword">while</span> (<span class="hljs-literal">true</span>) {
+        <span class="hljs-keyword">if</span> (pos &gt;= msg.<span class="hljs-built_in">size</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        <span class="hljs-type">uint8_t</span> len = msg[pos];
+        <span class="hljs-keyword">if</span> ((len &amp; <span class="hljs-number">0xC0</span>) == <span class="hljs-number">0xC0</span>) {  <span class="hljs-comment">// compression pointer</span>
+            <span class="hljs-keyword">if</span> (pos + <span class="hljs-number">1</span> &gt;= msg.<span class="hljs-built_in">size</span>() || ++jumps &gt; <span class="hljs-number">127</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+            <span class="hljs-type">size_t</span> target = (<span class="hljs-built_in">size_t</span>(len &amp; <span class="hljs-number">0x3F</span>) &lt;&lt; <span class="hljs-number">8</span>) | msg[pos + <span class="hljs-number">1</span>];
+            <span class="hljs-keyword">if</span> (target &gt;= pos) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;  <span class="hljs-comment">// must refer to an earlier name</span>
+            <span class="hljs-keyword">if</span> (!jumped) next = pos + <span class="hljs-number">2</span>;
+            jumped = <span class="hljs-literal">true</span>;
+            pos = target;
+            <span class="hljs-keyword">continue</span>;
+        }
+        <span class="hljs-keyword">if</span> (len &amp; <span class="hljs-number">0xC0</span>) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;  <span class="hljs-comment">// 01 and 10 prefixes are reserved</span>
+        <span class="hljs-keyword">if</span> (len == <span class="hljs-number">0</span>) {
+            <span class="hljs-keyword">if</span> (!jumped) next = pos + <span class="hljs-number">1</span>;
+            <span class="hljs-keyword">return</span> Name{out.<span class="hljs-built_in">empty</span>() ? <span class="hljs-string">&quot;.&quot;</span> : out, next};
+        }
+        wire_len += len + <span class="hljs-number">1u</span>;
+        <span class="hljs-keyword">if</span> (wire_len &gt; <span class="hljs-number">255</span> || pos + <span class="hljs-number">1</span> + len &gt; msg.<span class="hljs-built_in">size</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+        <span class="hljs-keyword">if</span> (!out.<span class="hljs-built_in">empty</span>()) out += <span class="hljs-string">&#x27;.&#x27;</span>;
+        out.<span class="hljs-built_in">append</span>(<span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">char</span>*&gt;(&amp;msg[pos + <span class="hljs-number">1</span>]), len);
+        pos += <span class="hljs-number">1</span> + len;
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">uint8_t</span>&gt; <span class="hljs-title">msg</span><span class="hljs-params">(<span class="hljs-number">12</span>, <span class="hljs-number">0</span>)</span></span>;  <span class="hljs-comment">// the 12-byte header, unused here</span>
+    <span class="hljs-keyword">auto</span> put = [&amp;](std::initializer_list&lt;<span class="hljs-type">int</span>&gt; bytes) {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> b : bytes) msg.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">uint8_t</span>(b));
+    };
+    <span class="hljs-keyword">auto</span> label = [&amp;](<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s) {
+        msg.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">uint8_t</span>(std::<span class="hljs-built_in">strlen</span>(s)));
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* p = s; *p; ++p) msg.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">uint8_t</span>(*p));
+    };
+    <span class="hljs-built_in">label</span>(<span class="hljs-string">&quot;www&quot;</span>); <span class="hljs-built_in">label</span>(<span class="hljs-string">&quot;example&quot;</span>); <span class="hljs-built_in">label</span>(<span class="hljs-string">&quot;com&quot;</span>); <span class="hljs-built_in">put</span>({<span class="hljs-number">0</span>});  <span class="hljs-comment">// question name at offset 12</span>
+    <span class="hljs-built_in">put</span>({<span class="hljs-number">0</span>, <span class="hljs-number">1</span>, <span class="hljs-number">0</span>, <span class="hljs-number">1</span>});                                       <span class="hljs-comment">// QTYPE A, QCLASS IN</span>
+    <span class="hljs-type">size_t</span> mail = msg.<span class="hljs-built_in">size</span>();
+    <span class="hljs-built_in">label</span>(<span class="hljs-string">&quot;mail&quot;</span>); <span class="hljs-built_in">put</span>({<span class="hljs-number">0xC0</span>, <span class="hljs-number">16</span>});                          <span class="hljs-comment">// &quot;mail&quot; + pointer to &quot;example.com&quot;</span>
+    <span class="hljs-type">size_t</span> loop = msg.<span class="hljs-built_in">size</span>();
+    <span class="hljs-built_in">put</span>({<span class="hljs-number">0xC0</span>, <span class="hljs-built_in">int</span>(loop)});                                  <span class="hljs-comment">// a pointer to itself</span>
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">size_t</span> at : {<span class="hljs-type">size_t</span>{<span class="hljs-number">12</span>}, mail, loop}) {
+        <span class="hljs-keyword">auto</span> n = <span class="hljs-built_in">read_name</span>(msg, at);
+        <span class="hljs-keyword">if</span> (n) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;@%zu %s (next %zu)\n&quot;</span>, at, n-&gt;text.<span class="hljs-built_in">c_str</span>(), n-&gt;next);
+        <span class="hljs-keyword">else</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;@%zu invalid\n&quot;</span>, at);
+    }
+}</code></pre>
+<pre class="out" data-out="ch07-dnsname">@12 www.example.com (next 29)
+@33 mail.example.com (next 40)
+@40 invalid</pre>
+    <p><b>Complexity and pitfalls.</b> O(255) work per name thanks to the caps. The "next" offset is the subtle part: after a pointer, parsing of the record continues after the two pointer bytes, not after the name it points to. Real DNS parsers have had remote crashes and infinite loops from exactly the missing checks here (self-referencing pointers, pointer chains, labels running off the end of the packet), so interviewers for network-facing roles like this problem.</p>
+    <p class="rating">Estimated rating: ~1700 · easy happy path, but the safety checks and the "next" offset are where candidates fail</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch04-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>Layers:</b> OSI 7 (physical, data link, network, transport, session, presentation, application) vs TCP/IP 4 (link, internet, transport, application, RFC 1122). PDUs: frame, packet, segment or datagram. Hub L1, switch L2 (MACs), router L3 (IPs).</li>
+<li><b>Encapsulation:</b> Ethernet 14 B + IPv4 20 B + TCP 20 B + payload + FCS 4 B. MTU 1500 means MSS 1460. Demultiplex by EtherType, IP protocol (6 TCP, 17 UDP, 1 ICMP) and port.</li>
+<li><b>Addresses:</b> MAC is per hop and flat (48 bit), IP is end to end and hierarchical (32 or 128 bit). ARP (RFC 826) broadcasts "who has", the owner unicasts the reply; off-subnet traffic ARPs for the gateway.</li>
+<li><b>Subnetting:</b> network = a AND mask, broadcast = network OR NOT mask, usable = 2<sup>32−n</sup> − 2, except /31 = 2 (RFC 3021) and /32 = 1. Block size = 256 − mask octet. Mask /0 needs a special case in C++.</li>
+<li><b>Special ranges:</b> 10/8, 172.16/12 (16 to 31 only), 192.168/16 private; 127/8 loopback; 169.254/16 link-local; 100.64/10 CGNAT. IPv6: ::1, fe80::/10, fc00::/7, one <code>::</code> per address.</li>
+<li><b>Routing:</b> longest-prefix match, default route 0.0.0.0/0 to the gateway; TTL is a hop count (64 Linux, 128 Windows), 0 means drop and ICMP Time Exceeded.</li>
+<li><b>NAT:</b> NAPT rewrites source IP and port, keeps a mapping table, breaks unsolicited inbound connections; port forwarding is a static inbound mapping.</li>
+<li><b>DNS, DHCP, ICMP:</b> stub asks the resolver recursively, the resolver iterates root, TLD, authoritative; records A, AAAA, CNAME (not at apex), MX, NS; UDP 53 with TCP fallback on TC. DHCP DORA on UDP 67/68. ping = ICMP echo (no ports); traceroute = increasing TTL plus Time Exceeded.</li>
+</ul>
+</section>

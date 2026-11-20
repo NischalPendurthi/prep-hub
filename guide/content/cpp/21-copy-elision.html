@@ -1,0 +1,1145 @@
+---
+title: Copy elision
+part: Part D · Move semantics
+lede: Copy elision is the rule that lets (and since C++17, forces) the compiler to build an object directly where it will finally live, so the copy or move that the source code seems to ask for never runs. Interviewers ask about it because it decides how many constructors a line of code calls, why a factory can return a `std::mutex` by value in C++17 but not in C++14, and why `std::move` in the wrong place makes code slower.
+desc: C++17 guaranteed elision, prvalues, when copies still happen
+hours: 3
+prereqs: [Ch 18](#ch18) (value categories, move constructors)
+---
+<section id="ch21-what" data-roles="th"><div class="sec-head"><h2>What copy elision is</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Every object needs storage. When the source code says "make a temporary, then copy it into <code>x</code>", the cheapest implementation is to skip the temporary and construct straight into <code>x</code>. Copy elision is the language rule that permits this: two objects that the abstract machine would create are treated as one, and the copy or move constructor between them (and the matching destructor) is never called.</p>
+<p>There are two quite different forms, and most interview confusion comes from mixing them up:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Form</th><th>Example</th><th>Status in C++17 and later</th><th>Chapter</th></tr></thead>
+<tbody>
+<tr><td>Initialising from a prvalue (unnamed temporary), often called RVO when it is a <code>return</code></td><td><code>return T(args);</code>, <code>T x = T();</code>, <code>f(T())</code></td><td>Guaranteed. No copy or move exists in the abstract machine, so none can run, and the constructor does not even need to exist.</td><td>This chapter</td></tr>
+<tr><td>Returning a named local (NRVO)</td><td><code>T x; ...; return x;</code></td><td>Still optional. The move or copy constructor must be usable even when the compiler elides it.</td><td><a href="#ch22">Ch 22</a></td></tr>
+<tr><td><code>throw</code> of a local, <code>catch</code> by value</td><td><code>throw local;</code>, <code>catch (T e)</code></td><td>Optional. GCC and Clang elide neither in practice.</td><td>This chapter</td></tr>
+</tbody></table></div>
+<p>The rule lives in <code>[class.copy.elision]</code> for the optional cases and in <code>[dcl.init]</code> / <code>[basic.lval]</code> for the guaranteed one. The guaranteed case is not described as "elision" in the C++17 wording at all: it falls out of what a prvalue <em>is</em>, which the next sections explain.</p>
+<h3 id="ch21-why-care">Why it matters in practice</h3>
+<ul>
+<li><b>Counting.</b> "How many constructor calls does this line make?" is a staple question, and the answer depends on knowing which steps are elided.</li>
+<li><b>Types that cannot move.</b> <code>std::mutex</code>, <code>std::atomic</code>, <code>std::lock_guard</code> and any class with deleted copy and move can be returned from a factory by value in C++17. In C++14 that code does not compile.</li>
+<li><b>Performance.</b> A move of a <code>std::vector</code> is cheap but not free (copy three pointers, null the source's three, and later run the destructor on the moved-from shell). For types with inline storage (<code>std::array</code>, small-buffer types) a move is as expensive as a copy, so elision is the only way to make returning by value free.</li>
+<li><b>Observable behaviour.</b> If a copy constructor prints or counts, elision changes the program's output. That is allowed, which makes elision the main exception to the as-if rule.</li>
+</ul>
+</section>
+
+<section id="ch21-pre17" data-roles="th"><div class="sec-head"><h2>The pre-C++17 world: optional elision, required constructors</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>In C++11 and C++14, <code>T x = make();</code> where <code>make</code> does <code>return T();</code> describes three objects in the abstract machine: the temporary <code>T()</code> inside <code>make</code>, the temporary that is the function's return value, and <code>x</code>. Two moves connect them (copies for a type without a move constructor). The standard then <em>allowed</em> the implementation to merge all three into one.</p>
+<p>Two consequences follow from "allowed but not required":</p>
+<ol>
+<li><b>The constructor still had to be accessible and not deleted.</b> The program was checked as if the moves happened, then the compiler was permitted to skip them. A class with a deleted move constructor could not be returned this way even though no move would ever run in the optimised program.</li>
+<li><b>The count was compiler-dependent in principle.</b> In practice every mainstream compiler elided these cases at every optimisation level, because elision is decided in the front end, not by the optimiser.</li>
+</ol>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="C++14 describes three objects joined by two moves; C++17 describes one object">
+<defs><marker id="ch21-c23a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="28" class="t-bold">C++14 abstract machine: T x = make();</text>
+<rect x="20" y="50" width="190" height="56" rx="6" class="d-box"/>
+<text x="115" y="74" text-anchor="middle" class="t-mono">T() in make</text>
+<text x="115" y="94" text-anchor="middle" class="t-small t-muted">temporary 1: ctor</text>
+<rect x="265" y="50" width="190" height="56" rx="6" class="d-box"/>
+<text x="360" y="74" text-anchor="middle" class="t-mono">return value</text>
+<text x="360" y="94" text-anchor="middle" class="t-small t-muted">temporary 2</text>
+<rect x="510" y="50" width="190" height="56" rx="6" class="d-acc"/>
+<text x="605" y="74" text-anchor="middle" class="t-mono">x</text>
+<text x="605" y="94" text-anchor="middle" class="t-small t-muted">caller's variable</text>
+<line x1="210" y1="78" x2="263" y2="78" class="d-line d-dash" marker-end="url(#ch23-c23a)"/>
+<line x1="455" y1="78" x2="508" y2="78" class="d-line d-dash" marker-end="url(#ch23-c23a)"/>
+<text x="237" y="130" text-anchor="middle" class="t-small t-trap">move (may be elided)</text>
+<text x="482" y="130" text-anchor="middle" class="t-small t-trap">move (may be elided)</text>
+<text x="360" y="150" text-anchor="middle" class="t-small t-muted">both moves must be accessible even if skipped</text>
+<line x1="20" y1="170" x2="700" y2="170" class="d-grid"/>
+<text x="20" y="198" class="t-bold">C++17: the prvalue T() is an initialiser, not an object</text>
+<rect x="20" y="216" width="270" height="56" rx="6" class="d-soft"/>
+<text x="155" y="240" text-anchor="middle" class="t-mono">return T();</text>
+<text x="155" y="260" text-anchor="middle" class="t-small t-muted">"initialise the result object with T()"</text>
+<rect x="430" y="216" width="270" height="56" rx="6" class="d-key"/>
+<text x="565" y="240" text-anchor="middle" class="t-mono">x</text>
+<text x="565" y="260" text-anchor="middle" class="t-small t-key">the only object: one ctor, one dtor</text>
+<line x1="290" y1="244" x2="428" y2="244" class="d-line-key" marker-end="url(#ch23-c23a)"/>
+<text x="359" y="234" text-anchor="middle" class="t-small t-key">result object = x</text>
+</svg></div><figcaption><b>C++14 elides; C++17 never creates the extra objects.</b> In C++14 the two moves are part of the program and the compiler may delete them. In C++17 the prvalue carries no storage of its own, so its result object is <code>x</code> from the start.</figcaption></figure>
+<p>You can still see the C++14 abstract machine today. GCC and Clang accept <code>-fno-elide-constructors</code>, which turns off the optional elisions. In C++14 mode it shows every step:</p>
+<pre><code class="language-text hljs">// static T make() { return T(); }   T x = make();
+$ g++-16 -std=c++14 -fno-elide-constructors   (Clang 22 prints the same)
+ctor move dtor move dtor dtor
+//  T()   -&gt;ret  ~T()  -&gt;x  ~ret  ~x
+</code></pre>
+<p>Three constructions and three destructions for one line. With elision (the default) the same C++14 program prints <code>ctor dtor</code>.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"C++14 compilers did not elide, C++17 made them start" is wrong. GCC and Clang elided these cases in C++98 already. What C++17 changed is the <em>rule</em>: the elision is no longer an optimisation that needs a usable move constructor, so non-movable types become returnable and <code>-fno-elide-constructors</code> can no longer undo it.</p></div>
+</section>
+
+<section id="ch21-prvalues" data-roles="th"><div class="sec-head"><h2>C++17: prvalues and temporary materialisation</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>C++17 (paper P0135, "guaranteed copy elision through simplified value categories") redefined what a prvalue is. A <b>prvalue is not an object</b>. It is a recipe for initialising an object: "call <code>T(args)</code> on whatever storage I end up in". The object it initialises is called its <b>result object</b>, and the context decides where that is.</p>
+<ul>
+<li><code>T x = T(1);</code>: the result object of <code>T(1)</code> is <code>x</code>.</li>
+<li><code>return T(1);</code> in a function returning <code>T</code>: the result object is whatever the caller is initialising with the call, which may be the caller's variable, a by-value parameter, a member, or a temporary.</li>
+<li><code>T x = T(T(T()));</code>: the outer <code>T(...)</code> is a prvalue of the same type initialised from a prvalue of the same type, so the rule "a prvalue of the same type initialises the object directly" ([dcl.init]/17.6.1) applies three times. One default construction, into <code>x</code>.</li>
+</ul>
+<h3 id="ch21-materialisation">Temporary materialisation</h3>
+<p>Sometimes a real object is needed: you cannot bind a reference to a recipe or read a member from it. The <b>temporary materialisation conversion</b> ([conv.rval]) turns a prvalue into an xvalue that denotes a fresh temporary object. It happens only when the context needs an object:</p>
+<ul>
+<li>binding a reference: <code>const T&amp; r = T();</code>, <code>T&amp;&amp; r = make();</code>, passing <code>T()</code> to a <code>const T&amp;</code> or <code>T&amp;&amp;</code> parameter (including <code>push_back(T())</code>, see <a href="#ch20">Ch 20</a>);</li>
+<li>member access: <code>make().size()</code>, <code>T().v</code>;</li>
+<li>a discarded-value expression: the statement <code>make();</code> on its own (the temporary is destroyed at the end of the full-expression);</li>
+<li>array-to-pointer conversion on a prvalue array, and <code>std::move(T())</code> (which binds to a reference parameter, so it materialises and then forces a move).</li>
+</ul>
+<p>Unevaluated operands never materialise anything: <code>sizeof(make())</code> and <code>decltype(make())</code> do not call <code>make</code>.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 260" role="img" aria-label="A prvalue initialises its result object directly unless the context needs a real object, in which case it is materialised">
+<defs><marker id="ch21-c23b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="20" y="100" width="170" height="60" rx="8" class="d-soft"/>
+<text x="105" y="126" text-anchor="middle" class="t-mono">prvalue T(...)</text>
+<text x="105" y="146" text-anchor="middle" class="t-small t-muted">a recipe, no storage</text>
+<line x1="190" y1="118" x2="300" y2="58" class="d-line-key" marker-end="url(#ch23-c23b)"/>
+<line x1="190" y1="142" x2="300" y2="200" class="d-line-trap" marker-end="url(#ch23-c23b)"/>
+<rect x="305" y="22" width="395" height="72" rx="8" class="d-key"/>
+<text x="320" y="44" class="t-bold t-key">Initialises an object of the same type</text>
+<text x="320" y="64" class="t-small t-mono">T x = T();  return T();  f(T()) with T param</text>
+<text x="320" y="82" class="t-small">built in place: no copy, no move, no temporary</text>
+<rect x="305" y="164" width="395" height="80" rx="8" class="d-trap"/>
+<text x="320" y="186" class="t-bold t-trap">Context needs a real object: materialise</text>
+<text x="320" y="206" class="t-small t-mono">const T&amp; r = T();  T().v;  make();  std::move(T())</text>
+<text x="320" y="224" class="t-small">a temporary (xvalue) is created; any copy or move</text>
+<text x="320" y="238" class="t-small">into another object after that is a real call</text>
+</svg></div><figcaption><b>Where a prvalue goes decides whether a temporary exists.</b> Same-type initialisation consumes the recipe directly. Reference binding, member access and discarded expressions materialise a temporary, and from then on ordinary copy and move rules apply.</figcaption></figure>
+<h3 id="ch21-key-facts">Key facts</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Expression (T has a tracing ctor/copy/move)</th><th>C++17/20/23 calls</th><th>C++14, default</th><th>C++14, <code>-fno-elide-constructors</code></th></tr></thead>
+<tbody>
+<tr><td><code>T x = T();</code></td><td>ctor</td><td>ctor</td><td>ctor, move</td></tr>
+<tr><td><code>T x = T(T(T()));</code></td><td>ctor</td><td>ctor</td><td>ctor, move, move, move</td></tr>
+<tr><td><code>T x = make();</code> with <code>return T();</code></td><td>ctor</td><td>ctor</td><td>ctor, move, move</td></tr>
+<tr><td><code>take(T());</code> with <code>void take(T)</code></td><td>ctor</td><td>ctor</td><td>ctor, move</td></tr>
+<tr><td><code>T x = std::move(T());</code></td><td>ctor, move</td><td>ctor, move</td><td>ctor, move</td></tr>
+<tr><td><code>T x = b ? T(1) : T(2);</code></td><td>ctor (one branch)</td><td>ctor</td><td>GCC: ctor, move; Clang: ctor, move, move</td></tr>
+<tr><td><code>throw T();</code> then <code>catch (const T&amp;)</code></td><td>ctor</td><td>ctor</td><td>ctor, move</td></tr>
+<tr><td>Non-movable <code>T</code>: <code>T x = make();</code></td><td>compiles</td><td>error: deleted move</td><td>error</td></tr>
+</tbody></table></div>
+<p>All rows were checked on GCC 16 and Clang 22. The only disagreement is the conditional row in the last column: Clang materialises the chosen operand and then moves twice (operand into the conditional's result, result into <code>x</code>), while GCC moves once. Both are valid C++14 abstract machines with optional elision switched off. In C++17 mode <code>-fno-elide-constructors</code> leaves every prvalue row at a single <code>ctor</code>; only named returns (NRVO, <a href="#ch22">Ch 22</a>) change.</p>
+</section>
+
+<section id="ch21-return-slot" data-roles="th"><div class="sec-head"><h2>Where the object is built: the return slot and the calling convention</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>How can a callee construct an object inside the caller's variable? The ABI gives it the address. Under the Itanium C++ ABI (Linux, macOS, every non-Windows platform GCC and Clang target), a function that returns a class type "in memory" receives a <b>hidden pointer argument</b> to uninitialised storage, the <b>return slot</b>. LLVM calls this parameter <code>sret</code> (structure return).</p>
+<ul>
+<li><b>x86-64 System V:</b> the slot address arrives in <code>rdi</code> (so the visible arguments shift to <code>rsi</code>, <code>rdx</code>, ...). The callee returns the same address in <code>rax</code>.</li>
+<li><b>AArch64 (AAPCS64):</b> the slot address arrives in <code>x8</code>, a register reserved for this purpose, so the ordinary arguments keep <code>x0</code> to <code>x7</code>.</li>
+</ul>
+<p>The caller decides what the slot is. For <code>T x = make();</code> it passes <code>&amp;x</code>. For <code>use(make())</code> with a by-value parameter it passes the address of the parameter's storage. For <code>make().size()</code> it passes the address of a temporary it allocated on its own frame. The callee does not know or care: it runs <code>T</code>'s constructor with <code>this</code> equal to the slot.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="The caller passes the address of its uninitialised variable as a hidden argument and the callee constructs into it">
+<defs><marker id="ch21-c23c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="26" class="t-bold">caller: T x = make(42);</text>
+<rect x="20" y="40" width="300" height="230" rx="6" class="d-box"/>
+<text x="34" y="62" class="t-small t-muted">caller stack frame</text>
+<rect x="40" y="80" width="260" height="58" rx="4" class="d-key"/>
+<text x="170" y="104" text-anchor="middle" class="t-mono">x: sizeof(T) bytes</text>
+<text x="170" y="124" text-anchor="middle" class="t-small t-key">uninitialised until make() runs</text>
+<rect x="40" y="160" width="260" height="34" rx="4" class="d-soft"/>
+<text x="170" y="182" text-anchor="middle" class="t-small t-mono">lea rdi, [x]   mov esi, 42</text>
+<rect x="40" y="208" width="260" height="34" rx="4" class="d-soft"/>
+<text x="170" y="230" text-anchor="middle" class="t-small t-mono">call make</text>
+<text x="400" y="26" class="t-bold">callee: T make(int v) { return T(v); }</text>
+<rect x="400" y="40" width="300" height="230" rx="6" class="d-box"/>
+<rect x="420" y="80" width="260" height="58" rx="4" class="d-acc"/>
+<text x="550" y="104" text-anchor="middle" class="t-small t-mono">T::T(this = rdi, v = esi)</text>
+<text x="550" y="124" text-anchor="middle" class="t-small">constructor writes into x</text>
+<rect x="420" y="160" width="260" height="34" rx="4" class="d-soft"/>
+<text x="550" y="182" text-anchor="middle" class="t-small t-mono">mov rax, rdi ; ret</text>
+<text x="550" y="230" text-anchor="middle" class="t-small t-muted">AArch64: slot pointer in x8</text>
+<line x1="300" y1="177" x2="418" y2="110" class="d-line-acc" marker-end="url(#ch23-c23c)"/>
+<text x="356" y="128" text-anchor="middle" class="t-small t-acc">hidden ptr</text>
+<path d="M418,100 C360,60 330,80 302,104" class="d-line-key d-dash" marker-end="url(#ch23-c23c)"/>
+<text x="362" y="62" text-anchor="middle" class="t-small t-key">constructs here</text>
+</svg></div><figcaption><b>The return slot is the caller's storage.</b> The caller passes the address of the object being initialised as a hidden first argument (<code>rdi</code> on x86-64, <code>x8</code> on AArch64). The callee constructs into it and returns the address in <code>rax</code>. No bytes are copied afterwards.</figcaption></figure>
+<h3 id="ch21-in-registers">When the slot is not used</h3>
+<p>Small <b>trivially copyable</b> types are returned in registers instead. Compiling for x86-64 Linux with Clang 22 at <code>-O1</code> gives:</p>
+<pre><code class="language-text hljs">struct Small { long a, b; };            Small small()  -&gt; mov eax, 1 ; mov edx, 2 ; ret
+struct Big   { long a[4]; };            Big big()      -&gt; stores through rdi, mov rax, rdi
+struct NonTriv { long a; NonTriv();
+  NonTriv(const NonTriv&amp;); ~NonTriv(); }; NonTriv nt()  -&gt; call NonTrivC1 with this = rdi, mov rax, rdi
+</code></pre>
+<p><code>NonTriv</code> is only 8 bytes, yet it goes through the hidden pointer. The Itanium ABI rule is that a class that is <b>non-trivial for the purpose of calls</b> (it has a non-trivial copy constructor, move constructor or destructor, or all of its copy and move constructors are deleted) must be passed and returned in memory, because its address is part of its identity: it may store <code>this</code>, and its destructor must run on the object that was constructed. For a trivially copyable type, a register return does physically copy bytes, but no constructor is called and the program cannot tell, so this is not a copy in the C++ sense.</p>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>"Return by value" for a class with a non-trivial constructor or destructor means "the caller lends the callee its storage". Elision is not a trick added on top of the ABI; the ABI was designed for it. The callee that does <code>return T(v);</code> literally runs the constructor on the caller's variable.</p></div>
+</section>
+
+<section id="ch21-nonmovable" data-roles="th"><div class="sec-head"><h2>Returning non-movable and non-copyable types by value</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Because a C++17 prvalue needs no copy or move constructor, a factory can return types that can never be copied or moved: <code>std::mutex</code>, <code>std::atomic&lt;int&gt;</code>, <code>std::lock_guard</code>, <code>std::condition_variable</code>, or your own class with both deleted. The caller can also initialise members, by-value parameters and aggregate elements from such a factory.</p>
+<pre data-run="ch23-factory" data-std="c++17"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pinned</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span>}
+    <span class="hljs-built_in">Pinned</span>(<span class="hljs-type">const</span> Pinned&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Pinned</span>(Pinned&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Pinned <span class="hljs-title">make_pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Pinned</span>(id); }
+<span class="hljs-function"><span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">make_counter</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">atomic</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">5</span>); }
+<span class="hljs-function"><span class="hljs-type">static</span> std::mutex <span class="hljs-title">make_mutex</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">mutex</span>(); }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Holder</span> {
+    Pinned p;
+    <span class="hljs-built_in">Holder</span>() : <span class="hljs-built_in">p</span>(<span class="hljs-built_in">make_pinned</span>(<span class="hljs-number">2</span>)) {}   <span class="hljs-comment">// member initialised from a prvalue</span>
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Agg</span> { Pinned p; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Pinned a = <span class="hljs-built_in">make_pinned</span>(<span class="hljs-number">1</span>);
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; c = <span class="hljs-built_in">make_counter</span>();
+    std::mutex m = <span class="hljs-built_in">make_mutex</span>();
+    <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m)</span></span>;
+    Holder h;
+    Agg ag{<span class="hljs-built_in">make_pinned</span>(<span class="hljs-number">3</span>)};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d %d %d\n&quot;</span>, a.id, h.p.id, ag.p.id, c.<span class="hljs-built_in">load</span>());
+}
+</code></pre>
+<pre class="out" data-out="ch23-factory">1 2 3 5</pre>
+<p>The same program in C++14 fails on every line that initialises an object from the factory, because the abstract machine still contains a move from the return value:</p>
+<pre data-run="ch23-factory14" data-std="c++14" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pinned</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span>}
+    <span class="hljs-built_in">Pinned</span>(<span class="hljs-type">const</span> Pinned&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Pinned</span>(Pinned&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Pinned <span class="hljs-title">make_pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Pinned</span>(id); }   <span class="hljs-comment">// C++14: error, needs Pinned(Pinned&amp;&amp;)</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Pinned a = <span class="hljs-built_in">make_pinned</span>(<span class="hljs-number">1</span>);                             <span class="hljs-comment">// C++14: error again</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, a.id);
+}
+</code></pre>
+<p>GCC 16 reports <code>use of deleted function 'Pinned::Pinned(Pinned&amp;&amp;)'</code> and Clang 22 reports <code>call to deleted constructor of 'Pinned'</code>, both in <code>-std=c++14</code>.</p>
+<h3 id="ch21-cxx14-workarounds">What already worked before C++17</h3>
+<ul>
+<li><code>return {};</code> or <code>return {args};</code> is copy-list-initialisation of the return value directly from the braced list. No temporary of type <code>T</code> exists, so it compiled in C++11 even for <code>std::mutex</code> (as long as the constructor is not <code>explicit</code>). The caller's <code>auto m = make();</code> still failed in C++14.</li>
+<li>Binding the result to a reference, <code>auto&amp;&amp; m = make();</code> or <code>const auto&amp; m = make();</code>, uses lifetime extension instead of a move, so it compiled in C++14.</li>
+</ul>
+<h3 id="ch21-base-exception">The exception: base-class subobjects</h3>
+<p>Guaranteed elision does not reach base-class subobjects. <code>struct D : Pinned { D() : Pinned(make_pinned(3)) {} };</code> is rejected by both GCC 16 and Clang 22 in C++17 and C++20 with a "deleted move constructor" error. The reason (core issue CWG2403) is that a base subobject is <em>potentially overlapping</em>: the derived class may reuse the base's tail padding for its own members, and a function returning a complete <code>Pinned</code> would write <code>sizeof(Pinned)</code> bytes, clobbering them. Ordinary members are fine, as the <code>Holder</code> example shows. (For a <code>[[no_unique_address]]</code> member, which is also potentially overlapping, the two compilers currently disagree: Clang 22 accepts it and GCC 16 rejects it.)</p>
+<h3 id="ch21-emplace-nonmovable">Putting a factory result into a container</h3>
+<p><code>std::optional&lt;Pinned&gt;::emplace(make_pinned(7))</code> does not compile: <code>emplace</code> takes its arguments by forwarding reference, which materialises the prvalue, and then <code>Pinned</code> would have to be constructed from a <code>Pinned&amp;&amp;</code>. The fix is to pass an object that <em>converts</em> to <code>Pinned</code> by calling the factory. The container constructs <code>Pinned(std::forward&lt;Lazy&gt;(l))</code>, and GCC and Clang let the conversion function's prvalue result initialise the element in place. Strictly, the C++17 and C++20 wording only considers <code>Pinned</code>'s constructors here, which would bind the converted prvalue to <code>Pinned(Pinned&amp;&amp;)</code> and fail; core issue CWG2327 asks for the elision that compilers already perform. Coding drill 3 builds this adaptor.</p>
+</section>
+
+<section id="ch21-params-throw" data-roles="th"><div class="sec-head"><h2>By-value parameters, conditional expressions, throw and catch</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch21-byvalue-params">Passing prvalues to by-value parameters</h3>
+<p>A by-value parameter is an object initialised from the argument, so a prvalue argument of the same type initialises the parameter directly. <code>take(T())</code> and <code>take(make())</code> each call exactly one constructor; the parameter is the result object. Passing an lvalue copies, and passing <code>std::move(lvalue)</code> moves. This is why "take by value and move from it" is a good default for sink parameters: callers that pass temporaries pay nothing extra.</p>
+<p>One detail that surprises people: <b>who destroys the parameter</b>. Under the Itanium ABI the caller allocates the parameter's storage and the standard leaves it implementation-defined whether the parameter is destroyed when the function returns or at the end of the caller's full-expression. GCC and Clang destroy it at the end of the full-expression in the caller. Do not write output-comparing code that depends on that order; count calls instead.</p>
+<h3 id="ch21-conditional">The conditional operator</h3>
+<p><code>b ? T(1) : T(2)</code> is a prvalue when both operands are prvalues of the same class type, so <code>T x = b ? T(1) : T(2);</code> and <code>return b ? T(1) : T(2);</code> build directly into the result object. If both operands are lvalues (<code>b ? x : y</code>), the result is an lvalue, and initialising from it is a copy. That is the classic way to lose elision, discussed in <a href="#ch22">Ch 22</a>.</p>
+<h3 id="ch21-throw-catch">throw and catch</h3>
+<ul>
+<li><code>throw T(args);</code> copy-initialises the exception object from a prvalue, so in C++17 the exception object is constructed directly. One constructor.</li>
+<li><code>throw local;</code> may elide (optional) if <code>local</code> is a non-volatile automatic object whose scope does not extend beyond the innermost enclosing try block. GCC and Clang do not elide it; they apply the implicit move instead (the object is moved into the exception object, since C++11 for locals).</li>
+<li><code>catch (T e)</code> may elide the copy from the exception object into <code>e</code> only if doing so changes nothing but the skipped constructor and destructor. In practice GCC and Clang always copy. Catch by <code>const T&amp;</code>: no copy, no slicing.</li>
+</ul>
+</section>
+
+<section id="ch21-no-elide" data-roles="th"><div class="sec-head"><h2>-fno-elide-constructors in C++14 and C++17</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><code>-fno-elide-constructors</code> (GCC and Clang) disables the <em>optional</em> elisions. It is a teaching and debugging tool; nobody ships with it. Its effect depends on the language mode, because the set of optional elisions shrank in C++17.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Code</th><th><code>-std=c++14 -fno-elide-constructors</code></th><th><code>-std=c++17 -fno-elide-constructors</code></th></tr></thead>
+<tbody>
+<tr><td><code>T x = make();</code> where <code>return T();</code></td><td>ctor move dtor move dtor dtor</td><td>ctor dtor</td></tr>
+<tr><td><code>T x = T(T(T()));</code></td><td>ctor move move move, then 4 dtors</td><td>ctor dtor</td></tr>
+<tr><td><code>T x = nrvo();</code> where <code>T t; return t;</code></td><td>ctor move dtor move dtor dtor</td><td>ctor move dtor dtor</td></tr>
+<tr><td><code>T x = param(T());</code> where <code>return p;</code></td><td>ctor move move move, then 4 dtors</td><td>ctor move dtor dtor</td></tr>
+</tbody></table></div>
+<p>Read the C++17 column carefully. The prvalue cases do not change: the flag cannot disable guaranteed elision because there is nothing to disable. The NRVO case gains exactly one move, from the local <code>t</code> into the return slot (implicit move, because <code>t</code> is a local being returned). The parameter case is a move in both modes because parameters are never eligible for elision; C++14 adds two more moves for the prvalue argument and the return temporary. Every row above was produced by both GCC 16 and Clang 22.</p>
+<div class="callout tip"><p class="callout-title">Tip</p><p>To see the C++14 abstract machine of a snippet, compile it with <code>-std=c++14 -fno-elide-constructors</code>. To check whether a type is returnable without a move in your codebase's language mode, delete its move constructor temporarily and compile.</p></div>
+</section>
+
+<section id="ch21-when-not" data-roles="th"><div class="sec-head"><h2>When elision cannot happen</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Elision needs the object being initialised and the source to be the "same object" in a way the compiler can arrange before the source is created. Each case below breaks that, and each was checked on both compilers (calls shown for C++20):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Case</th><th>Example</th><th>Result</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Returning a by-value parameter</td><td><code>T f(T p) { return p; }</code></td><td>move</td><td>The caller built <code>p</code> in its own storage before the call; it cannot also be the return slot. Implicit move applies.</td></tr>
+<tr><td>Returning a data member</td><td><code>return h.m;</code></td><td>copy</td><td>A subobject of another object, not an automatic variable; no implicit move either.</td></tr>
+<tr><td>Returning a global or static</td><td><code>return g;</code></td><td>copy</td><td>Its lifetime is not the function's; it must survive.</td></tr>
+<tr><td>Different object per branch</td><td><code>if (b) return a; return c;</code></td><td>move</td><td>Both locals are alive at once, and only one can occupy the slot (NRVO, <a href="#ch22">Ch 22</a>).</td></tr>
+<tr><td>Conditional of lvalues</td><td><code>return b ? a : c;</code></td><td>copy</td><td>The expression is not a plain name, so neither NRVO nor implicit move applies.</td></tr>
+<tr><td>Conversion to another type</td><td><code>W f() { T t; return t; }</code></td><td>move, then <code>W(T)</code></td><td>The slot holds a <code>W</code>, not a <code>T</code>; <code>t</code> needs its own storage.</td></tr>
+<tr><td><code>std::move</code> of the source</td><td><code>return std::move(t);</code>, <code>T x = std::move(T());</code></td><td>move</td><td>The expression is an xvalue (a reference), not a prvalue or a name, so the rules no longer match.</td></tr>
+<tr><td>Base-class subobject</td><td><code>D() : Base(make_base()) {}</code></td><td>move (error if deleted)</td><td>Potentially overlapping subobject, CWG2403.</td></tr>
+</tbody></table></div>
+<p>Notice the split between "move" and "copy". When elision fails for a local or a parameter, the implicit move on return still saves you from a copy. When the source is a member, a global or a non-name expression, you get a full copy. <a href="#ch22">Ch 22</a> covers the implicit-move rules and their C++20 and C++23 extensions.</p>
+</section>
+
+<section id="ch21-side-effects" data-roles="th"><div class="sec-head"><h2>Side effects: an exception to the as-if rule</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The as-if rule ([intro.abstract]) lets a compiler perform any transformation that does not change observable behaviour (I/O, volatile accesses). Copy elision is one of the very few places where the standard explicitly allows a change in observable behaviour; the other commonly cited one is omitting or merging allocations in <code>new</code> expressions ([expr.new]), so a replaced <code>operator new</code> may not be called. If a copy constructor writes to <code>stdout</code>, increments a global counter or registers <code>this</code> in a list, elision skips those effects, and the program is still correct.</p>
+<p>Two consequences matter for real code:</p>
+<ul>
+<li><b>Copy and move constructors must mean "make an equivalent object" and nothing else.</b> Code that relies on a copy constructor running (reference counting by copy, logging that a value was "passed", assigning IDs on copy) breaks silently when elision kicks in, and behaves differently in C++14 with optional elision disabled.</li>
+<li><b>Tests that count operations are fine</b> if they target guaranteed elision (prvalues) or behaviour that GCC and Clang both implement consistently. Tests that depend on NRVO are testing the compiler, not the language.</li>
+</ul>
+<p>Elision also changes <b>which object's address</b> you see. With elision, <code>this</code> in the constructor equals <code>&amp;x</code> in the caller. Recording <code>this</code> in the constructor and comparing it with the final address is a portable way to prove that elision happened without printing pointers (reading drill 6).</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"The compiler may only skip a copy constructor if it has no side effects" is wrong. Elision is permitted even when the constructor or destructor has side effects. This is the whole point of naming it in the standard instead of leaving it to the as-if rule.</p></div>
+</section>
+
+<section id="ch21-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is copy elision, and what are its guaranteed and optional forms in C++17?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Copy elision is constructing an object directly in its final location so that a copy or move constructor (and the matching destructor) that the source code implies never runs. Guaranteed: initialising an object from a prvalue of the same type (<code>return T();</code>, <code>T x = T();</code>, passing <code>T()</code> by value, <code>throw T();</code>). Optional: NRVO (<code>return local;</code>), <code>throw local;</code> and <code>catch (T e)</code>.</p>
+    <p><b>Why.</b> The guaranteed form is a consequence of C++17's definition of a prvalue as an initialiser without its own storage ([basic.lval], [dcl.init]/17.6.1). The optional forms are in [class.copy.elision]/1 and still require an accessible copy or move constructor. A common wrong answer is "RVO and NRVO are both guaranteed since C++17"; only the unnamed case is.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why do some people say "guaranteed copy elision" is a misleading name?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Because in C++17 there is no copy to elide. A prvalue is not an object; it is a recipe that initialises its result object. <code>return T();</code> does not create a temporary and then skip a move: it says "initialise the caller's object with <code>T()</code>".</p>
+    <p><b>Why.</b> P0135 changed the value-category model rather than adding a new elision rule. That is why the move constructor need not exist, why <code>-fno-elide-constructors</code> cannot bring the moves back, and why the standard wording for it is in [dcl.init] rather than [class.copy.elision]. Saying "the compiler is now required to optimise" is the misconception; the language simply stopped describing the extra objects.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>How many constructors does <code>T x = T(T(T()));</code> call in C++17? In C++14? In C++14 with <code>-fno-elide-constructors</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> C++17: one default constructor, guaranteed. C++14: one default constructor in practice (GCC 16 and Clang 22 both elide), but the move constructor must be accessible. C++14 with <code>-fno-elide-constructors</code>: one default constructor and three moves, then four destructors.</p>
+    <p><b>Why.</b> In C++17 each <code>T(prvalue of T)</code> is a prvalue of the same type initialised from a prvalue of the same type, so [dcl.init]/17.6.1 collapses them all into <code>x</code>. In C++14 each functional cast creates a temporary initialised by moving from the inner temporary, then <code>x</code> is moved from the outer one, giving three elidable moves. People often answer "three moves in C++17" (thinking of the casts as copies) or "the compiler might do three moves" (it is not allowed to in C++17).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is copy elision an application of the as-if rule?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. Elision is explicitly allowed to change observable behaviour, for example skipping a copy constructor that prints. It is the best-known such exception; the other commonly cited one is allocation elision for <code>new</code> expressions.</p>
+    <p><b>Why.</b> The as-if rule only permits transformations that leave I/O and volatile accesses unchanged. A compiler could never prove that skipping a user-defined copy constructor with side effects is unobservable, so the standard grants the permission separately in [class.copy.elision]. The wrong answer "elision only happens when the copy constructor is trivial or side-effect free" confuses it with ordinary optimisation.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is temporary materialisation, and name four contexts that trigger it.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The conversion that turns a prvalue into an xvalue denoting a newly created temporary object ([conv.rval]). Triggers: binding a reference (<code>const T&amp; r = T();</code>, passing to a <code>T&amp;&amp;</code> or <code>const T&amp;</code> parameter), member access on a prvalue (<code>make().v</code>), a discarded-value expression (<code>make();</code> as a statement), and array-to-pointer conversion of a prvalue array. <code>std::move(T())</code> is a reference binding too.</p>
+    <p><b>Why.</b> A recipe has no address, so anything that needs an object forces one into existence. After materialisation the object is a normal temporary and any copy or move into another object is a real call; that is why <code>v.push_back(T())</code> costs a move while <code>v.emplace_back()</code> does not (<a href="#ch20">Ch 20</a>). Unevaluated operands (<code>sizeof</code>, <code>decltype</code>) never materialise.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can <code>-fno-elide-constructors</code> make a C++17 program call a move constructor for <code>T x = make();</code> where <code>make</code> does <code>return T();</code>? What about <code>T t; return t;</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No for <code>return T();</code>: the output stays <code>ctor dtor</code> on GCC 16 and Clang 22. Yes for <code>return t;</code>: it becomes <code>ctor move dtor dtor</code>, one move from the local into the result.</p>
+    <p><b>Why.</b> The flag disables optional elision only. The prvalue case is not elision any more, so there is nothing to turn off. NRVO is still optional, so disabling it exposes the implicit move. Candidates who learned the flag in the C++11 era expect two moves in both cases; in C++14 mode that is what you get.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>At the machine level, how does a function return a <code>std::string</code> by value on x86-64 Linux?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The caller allocates storage for the result and passes its address as a hidden first argument in <code>rdi</code>. The callee constructs the string at that address and returns the same address in <code>rax</code>. On AArch64 the hidden pointer goes in <code>x8</code>.</p>
+    <p><b>Why.</b> <code>std::string</code> has a non-trivial copy constructor and destructor, so under the Itanium C++ ABI it is "non-trivial for the purpose of calls" and must be returned in memory. LLVM marks this parameter <code>sret</code>. That hidden pointer is what makes elision possible: the callee's <code>return std::string(...)</code> constructs straight into the caller's variable. Saying "the string is built on the callee's stack and copied back" describes no real implementation.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>An 8-byte class with a user-defined destructor and a 16-byte plain <code>struct { long a, b; }</code>: which one goes through the hidden return pointer on x86-64?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The 8-byte class with the destructor goes through the hidden pointer. The 16-byte plain struct comes back in <code>rax</code> and <code>rdx</code>.</p>
+    <p><b>Why.</b> Size alone does not decide it. The Itanium C++ ABI forces any type with a non-trivial copy constructor, move constructor or destructor into memory, because the object's address must stay stable between construction and destruction. Trivially copyable aggregates of up to 16 bytes follow the C rules (System V classifies them into registers). Checked with Clang 22 <code>--target=x86_64-linux-gnu -O1</code>. The common wrong answer is "anything up to 16 bytes is returned in registers".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A member <code>Pinned p;</code> can be initialised with <code>p(make_pinned(2))</code> even though <code>Pinned</code> is not movable. Why does <code>struct D : Pinned { D() : Pinned(make_pinned(3)) {} };</code> fail?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Base-class subobjects are potentially overlapping, and guaranteed elision does not apply to them. Both GCC 16 and Clang 22 reject the base initialiser with a deleted-move-constructor error.</p>
+    <p><b>Why.</b> A derived class may place its own members in the base's tail padding. The factory writes a complete <code>Pinned</code> of <code>sizeof(Pinned)</code> bytes (and for a polymorphic base would set the wrong vptr), so building it in place could corrupt the derived object. Core issue CWG2403 records this; compilers materialise a temporary and then need the move constructor. A workaround is a <code>Pinned</code> constructor taking the factory's arguments, or holding <code>Pinned</code> as a member.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How many objects of type <code>T</code> exist for <code>throw T();</code> caught by <code>catch (const T&amp; e)</code>? And by <code>catch (T e)</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> By reference: one, the exception object, constructed directly from the prvalue. By value: two, because <code>e</code> is copied from the exception object (GCC 16 and Clang 22 print <code>ctor copy</code>).</p>
+    <p><b>Why.</b> The exception object is copy-initialised from the operand of <code>throw</code>; a prvalue operand initialises it directly in C++17. The copy into a by-value catch parameter is only optionally elidable, and implementations do not elide it because the exception object lives in a runtime-allocated area. Catching by value also slices derived exceptions, which is the stronger reason to catch by <code>const&amp;</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Which of these compile in C++14 for <code>std::mutex</code>: (a) <code>std::mutex f() { return {}; }</code> (b) <code>auto m = f();</code> (c) <code>auto&amp;&amp; m = f();</code> (d) <code>std::mutex m = std::mutex();</code></p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> (a) and (c) compile in C++14; (b) and (d) do not. All four compile in C++17.</p>
+    <p><b>Why.</b> (a) copy-list-initialises the return value from <code>{}</code> directly, with no intermediate <code>std::mutex</code> object, which was legal since C++11. (c) binds a reference to the returned temporary and extends its lifetime, so no move is needed. (b) and (d) copy-initialise from a temporary of the same type, which in C++14 requires a usable move or copy constructor, and <code>std::mutex</code> has both deleted. Verified on GCC 16 and Clang 22. Many people think <code>return {};</code> needed C++17.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why can the compiler never elide the move in <code>T f(T p) { return p; }</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The parameter <code>p</code> and the return slot are two distinct pieces of storage, both chosen by the caller before <code>f</code> starts. The callee cannot make them the same object, so it moves <code>p</code> into the slot. The standard excludes parameters from NRVO explicitly.</p>
+    <p><b>Why.</b> Under the Itanium ABI the caller constructs the argument in its own frame and passes its address, and separately passes the return-slot address. Since C++11, <code>return p;</code> treats <code>p</code> as an rvalue first (implicit move), so you get a move rather than a copy. Writing <code>return std::move(p);</code> adds nothing; GCC warns with <code>-Wredundant-move</code> under <code>-Wextra</code> and Clang under <code>-Wall</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Someone writes <code>T x = std::move(T());</code> "to make sure it moves instead of copying". What does it cost?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It adds a move and a destructor call. Without <code>std::move</code> the line is one constructor; with it, a temporary is materialised, <code>x</code> is move-constructed from it, and the temporary is destroyed at the end of the statement.</p>
+    <p><b>Why.</b> <code>std::move</code> takes a reference, so its argument is materialised, and its result is an xvalue, not a prvalue. Guaranteed elision only applies to prvalues, so the rule no longer matches. The prvalue was already the best case; there was never a copy to avoid. For a non-movable type this line fails to compile, while <code>T x = T();</code> works.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch21-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Count the constructor, copy and move calls for each line.</p>
+<pre data-run="ch23-chain"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">make</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">T</span>(); }
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">twice</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">make</span>(); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-a&quot;</span>); { T x = <span class="hljs-built_in">make</span>(); }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-b&quot;</span>); { T x = <span class="hljs-built_in">twice</span>(); }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-c&quot;</span>); { T x = <span class="hljs-built_in">T</span>(<span class="hljs-built_in">T</span>(<span class="hljs-built_in">T</span>())); }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-d&quot;</span>); { <span class="hljs-keyword">auto</span> x = T{}; }
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch23-chain">-a
+ctor
+dtor
+-b
+ctor
+dtor
+-c
+ctor
+dtor
+-d
+ctor
+dtor</pre>
+    <p><b>Answer.</b> One constructor and one destructor per block, no copies, no moves.</p>
+    <p><b>Why.</b> Every initialiser is a prvalue of type <code>T</code>. <code>twice()</code> returns <code>make()</code>, which is itself a prvalue, so the caller's return slot (<code>x</code>) is passed through two levels and <code>T()</code> constructs straight into it. In C++14 with <code>-fno-elide-constructors</code>, block <code>-b</code> would show three moves.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>By-value parameters receive prvalues, lvalues and xvalues. Count the operations.</p>
+<pre data-run="ch23-params"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">make</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">T</span>(); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">take</span><span class="hljs-params">(T)</span> </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;in take&quot;</span>); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    T a;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-prvalue&quot;</span>); <span class="hljs-built_in">take</span>(<span class="hljs-built_in">T</span>());
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-call&quot;</span>);    <span class="hljs-built_in">take</span>(<span class="hljs-built_in">make</span>());
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-lvalue&quot;</span>);  <span class="hljs-built_in">take</span>(a);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-xvalue&quot;</span>);  <span class="hljs-built_in">take</span>(std::<span class="hljs-built_in">move</span>(a));
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-end&quot;</span>);
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch23-params">ctor
+-prvalue
+ctor
+in take
+dtor
+-call
+ctor
+in take
+dtor
+-lvalue
+copy
+in take
+dtor
+-xvalue
+move
+in take
+dtor
+-end
+dtor</pre>
+    <p><b>Answer.</b> Prvalue and function-call arguments: one constructor each, built directly in the parameter. Lvalue: one copy. <code>std::move(a)</code>: one move. The final <code>dtor</code> is <code>a</code>.</p>
+    <p><b>Why.</b> A by-value parameter is copy-initialised from its argument, so a same-type prvalue becomes the parameter itself ([dcl.init]/17.6.1). The parameter is destroyed before the next statement, which is why each <code>dtor</code> follows <code>in take</code>. Whether the parameter dies at function exit or at the end of the caller's full-expression is implementation-defined; both are before the next line here.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The conditional operator with prvalue operands and with lvalue operands.</p>
+<pre data-run="ch23-ternary"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-type">int</span> v;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">T</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> : v(x) {</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ctor %d\n&quot;</span>, v); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp; o) : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;copy %d\n&quot;</span>, v); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;move %d\n&quot;</span>, v); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;dtor %d\n&quot;</span>, v); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">pick_prvalue</span><span class="hljs-params">(<span class="hljs-type">bool</span> b)</span> </span>{ <span class="hljs-keyword">return</span> b ? <span class="hljs-built_in">T</span>(<span class="hljs-number">1</span>) : <span class="hljs-built_in">T</span>(<span class="hljs-number">2</span>); }
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">pick_lvalue</span><span class="hljs-params">(<span class="hljs-type">bool</span> b)</span> </span>{
+    <span class="hljs-function">T <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-number">3</span>)</span>, <span class="hljs-title">c</span><span class="hljs-params">(<span class="hljs-number">4</span>)</span></span>;
+    <span class="hljs-keyword">return</span> b ? a : c;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-prvalue&quot;</span>); { T x = <span class="hljs-built_in">pick_prvalue</span>(<span class="hljs-literal">false</span>); }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-lvalue&quot;</span>);  { T x = <span class="hljs-built_in">pick_lvalue</span>(<span class="hljs-literal">true</span>); }
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch23-ternary">-prvalue
+ctor 2
+dtor 2
+-lvalue
+ctor 3
+ctor 4
+copy 3
+dtor 4
+dtor 3
+dtor 3</pre>
+    <p><b>Answer.</b> The prvalue version builds only <code>T(2)</code>, directly in <code>x</code>. The lvalue version constructs both locals and then <em>copies</em> <code>a</code> into the result.</p>
+    <p><b>Why.</b> <code>b ? T(1) : T(2)</code> is a prvalue of type <code>T</code>, and only the chosen operand is evaluated, so it initialises the return slot. <code>b ? a : c</code> is an lvalue that is neither a prvalue nor a plain name, so there is no elision and no implicit move; copy initialisation from an lvalue calls the copy constructor. Rewrite as <code>if (b) return a; return c;</code> to get moves (<a href="#ch22">Ch 22</a>). Many candidates expect a move because "it is a local being returned".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This compiles in C++17 but the team must also support C++14. Which lines break, and how would you make it compile in C++14 without making <code>Lock</code> movable?</p>
+<pre data-run="ch23-bug14" data-std="c++14" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Lock</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Lock</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> : id_(id) {</span> std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;locked&quot;</span>); }
+    <span class="hljs-built_in">Lock</span>(<span class="hljs-type">const</span> Lock&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Lock</span>(Lock&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">Lock</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;unlocked&quot;</span>); }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">id</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> id_; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">int</span> id_;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Lock <span class="hljs-title">acquire</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Lock</span>(id); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Lock l = <span class="hljs-built_in">acquire</span>(<span class="hljs-number">7</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;holding %d\n&quot;</span>, l.<span class="hljs-built_in">id</span>());
+}
+</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> In C++14 both <code>return Lock(id);</code> and <code>Lock l = acquire(7);</code> are errors: each copy-initialises a <code>Lock</code> from a temporary <code>Lock</code>, which requires the deleted move constructor even though the compiler would elide it. A C++14-compatible version returns with a braced list (the constructor must then be non-explicit) and binds the result with <code>auto&amp;&amp;</code>:</p>
+<pre data-run="ch23-fix14" data-std="c++14"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Lock</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Lock</span>(<span class="hljs-type">int</span> id) : <span class="hljs-built_in">id_</span>(id) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;locked&quot;</span>); }   <span class="hljs-comment">// not explicit, so return {id} works</span>
+    <span class="hljs-built_in">Lock</span>(<span class="hljs-type">const</span> Lock&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Lock</span>(Lock&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">Lock</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;unlocked&quot;</span>); }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">id</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> id_; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">int</span> id_;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Lock <span class="hljs-title">acquire</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{ <span class="hljs-keyword">return</span> {id}; }   <span class="hljs-comment">// list-initialises the return value directly</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span>&amp;&amp; l = <span class="hljs-built_in">acquire</span>(<span class="hljs-number">7</span>);                     <span class="hljs-comment">// lifetime extension, no move</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;holding %d\n&quot;</span>, l.<span class="hljs-built_in">id</span>());
+}
+</code></pre>
+<pre class="out" data-out="ch23-fix14">locked
+holding 7
+unlocked</pre>
+    <p><b>Why.</b> Before C++17, elision was an optional optimisation applied to a program that had to be valid with the moves present ([class.copy]/31 in C++14). The braced return has no source object of type <code>Lock</code>, and reference binding uses lifetime extension instead of initialisation from a temporary. In C++17 the original program is valid as written.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Count operations for a thrown prvalue, a thrown local, and catching by value.</p>
+<pre data-run="ch23-throw"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">throw_local</span><span class="hljs-params">()</span> </span>{ T t; <span class="hljs-keyword">throw</span> t; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-1&quot;</span>); <span class="hljs-keyword">try</span> { <span class="hljs-keyword">throw</span> <span class="hljs-built_in">T</span>(); } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;caught&quot;</span>); }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-2&quot;</span>); <span class="hljs-keyword">try</span> { <span class="hljs-built_in">throw_local</span>(); } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;caught&quot;</span>); }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-3&quot;</span>); <span class="hljs-keyword">try</span> { <span class="hljs-keyword">throw</span> <span class="hljs-built_in">T</span>(); } <span class="hljs-built_in">catch</span> (T) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;caught&quot;</span>); }
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch23-throw">-1
+ctor
+caught
+dtor
+-2
+ctor
+move
+dtor
+caught
+dtor
+-3
+ctor
+copy
+caught
+dtor
+dtor</pre>
+    <p><b>Answer.</b> (1) one constructor, the exception object built directly. (2) the local is constructed, moved into the exception object, then destroyed during unwinding before the handler runs. (3) one constructor plus a copy into the by-value catch parameter.</p>
+    <p><b>Why.</b> <code>throw T()</code> copy-initialises the exception object from a prvalue, which is guaranteed elision. <code>throw t</code> could optionally be elided but GCC 16 and Clang 22 apply the implicit move instead. The copy into <code>catch (T)</code> is also optional to elide and neither compiler does it. Both copies vanish if you catch by <code>const T&amp;</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>This program proves elision without printing addresses. What does it print?</p>
+<pre data-run="ch23-where"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-type">static</span> <span class="hljs-type">const</span> T* built_at;
+    <span class="hljs-built_in">T</span>() { built_at = <span class="hljs-keyword">this</span>; }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+};
+<span class="hljs-type">const</span> T* T::built_at = <span class="hljs-literal">nullptr</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">make</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">T</span>(); }
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">wrap</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">make</span>(); }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Box</span> { T member; <span class="hljs-built_in">Box</span>() : <span class="hljs-built_in">member</span>(<span class="hljs-built_in">wrap</span>()) {} };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    T x = <span class="hljs-built_in">wrap</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, T::built_at == &amp;x);
+    Box b;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, T::built_at == &amp;b.member);
+    <span class="hljs-type">const</span> T&amp; r = <span class="hljs-built_in">make</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, T::built_at == &amp;r);
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch23-where">1
+1
+1</pre>
+    <p><b>Answer.</b> Three <code>1</code>s and no copy or move lines.</p>
+    <p><b>Why.</b> The constructor records <code>this</code>, the address it is building. For <code>x</code> the return slot passed down through <code>wrap</code> and <code>make</code> is <code>&amp;x</code>. For the member, the slot is the member's storage inside <code>b</code>. For <code>const T&amp; r</code>, the prvalue is materialised into a lifetime-extended temporary, and the slot is that temporary, which <code>r</code> refers to. Comparing pointers and printing a boolean keeps the output deterministic.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The author added <code>std::move</code> everywhere "to avoid copies" and the profiler shows more move constructor calls than before. Predict the output and fix it.</p>
+<pre data-run="ch23-move-bug"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">make</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(<span class="hljs-built_in">T</span>()); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    T x = std::<span class="hljs-built_in">move</span>(<span class="hljs-built_in">make</span>());
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;done&quot;</span>);
+}
+</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch23-move-bug">ctor
+move
+dtor
+move
+dtor
+done
+dtor</pre>
+    <p><b>Answer.</b> Two extra moves and two extra destructions. Remove both <code>std::move</code> calls: <code>return T();</code> and <code>T x = make();</code> give <code>ctor</code>, <code>done</code>, <code>dtor</code>.</p>
+    <p><b>Why.</b> Each <code>std::move</code> binds a prvalue to a reference parameter, which materialises a temporary, and returns an xvalue. Guaranteed elision only matches prvalues, so each step becomes a real move. GCC 16 and Clang 22 both flag each call under <code>-Wall</code>: "moving a temporary object prevents copy elision" (<code>-Wpessimizing-move</code>). The belief that <code>std::move</code> "makes things move" is the root error: it is a cast, and a prvalue was already better than any move.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Materialisation and unevaluated operands. Which lines construct objects?</p>
+<pre data-run="ch23-material"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-type">int</span> v = <span class="hljs-number">5</span>;
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">make</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">T</span>(); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-sizeof&quot;</span>);  std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-built_in">sizeof</span>(<span class="hljs-built_in">make</span>()) &gt; <span class="hljs-number">0</span>));
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-member&quot;</span>);  std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, <span class="hljs-built_in">make</span>().v);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-discard&quot;</span>); <span class="hljs-built_in">make</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-ref&quot;</span>);     <span class="hljs-type">const</span> T&amp; r = <span class="hljs-built_in">make</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-end&quot;</span>);     (<span class="hljs-type">void</span>)r;
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch23-material">-sizeof
+1
+-member
+ctor
+5
+dtor
+-discard
+ctor
+dtor
+-ref
+ctor
+-end
+dtor</pre>
+    <p><b>Answer.</b> <code>sizeof</code> calls nothing. Member access and the discarded call each materialise a temporary that dies at the end of the statement. The reference binding materialises a temporary whose lifetime is extended to <code>r</code>'s scope, so its <code>dtor</code> prints after <code>-end</code>.</p>
+    <p><b>Why.</b> The operand of <code>sizeof</code> is unevaluated. Member access and discarded-value expressions need an object, so [conv.rval] creates one; temporaries are destroyed at the end of the full-expression ([class.temporary]), which is why <code>5</code> prints before <code>dtor</code>. Binding to <code>const T&amp;</code> extends the lifetime. No copies or moves appear anywhere.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this fail on both compilers in C++20, when initialising a member the same way works?</p>
+<pre data-run="ch23-base-bug" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pinned</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span>}
+    <span class="hljs-built_in">Pinned</span>(<span class="hljs-type">const</span> Pinned&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Pinned</span>(Pinned&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Pinned <span class="hljs-title">make_pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Pinned</span>(id); }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Pinned {
+    <span class="hljs-type">int</span> extra = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">Derived</span>() : <span class="hljs-built_in">Pinned</span>(<span class="hljs-built_in">make_pinned</span>(<span class="hljs-number">3</span>)) {}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Derived d;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, d.id);
+}
+</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A base-class subobject is potentially overlapping, so it cannot be the result object of a prvalue from a factory. The compiler materialises a temporary and needs <code>Pinned(Pinned&amp;&amp;)</code>, which is deleted. Fix: construct the base from the factory's arguments, or hold <code>Pinned</code> as a member.</p>
+<pre data-run="ch23-base-fix"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pinned</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span>}
+    <span class="hljs-built_in">Pinned</span>(<span class="hljs-type">const</span> Pinned&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Pinned</span>(Pinned&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Pinned <span class="hljs-title">make_pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Pinned</span>(id); }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">AsBase</span> : Pinned {
+    <span class="hljs-built_in">AsBase</span>() : <span class="hljs-built_in">Pinned</span>(<span class="hljs-number">3</span>) {}                  <span class="hljs-comment">// construct the base directly</span>
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">AsMember</span> {
+    Pinned p;
+    <span class="hljs-built_in">AsMember</span>() : <span class="hljs-built_in">p</span>(<span class="hljs-built_in">make_pinned</span>(<span class="hljs-number">4</span>)) {}        <span class="hljs-comment">// members are fine</span>
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    AsBase a;
+    AsMember m;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d\n&quot;</span>, a.id, m.p.id);
+}
+</code></pre>
+<pre class="out" data-out="ch23-base-fix">3 4</pre>
+    <p><b>Why.</b> The derived class may store <code>extra</code> in <code>Pinned</code>'s tail padding, and a function that returns a <code>Pinned</code> writes a full <code>sizeof(Pinned)</code>. Core issue CWG2403 excludes potentially-overlapping subobjects from the in-place rule. GCC 16 and Clang 22 both report the deleted move constructor.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A factory returns a <code>Derived</code> prvalue, and the caller stores it in a <code>Base</code>. Is anything elided?</p>
+<pre data-run="ch23-slice"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-built_in">Base</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Base ctor&quot;</span>); }
+    <span class="hljs-built_in">Base</span>(<span class="hljs-type">const</span> Base&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Base copy&quot;</span>); }
+    <span class="hljs-built_in">Base</span>(Base&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Base move&quot;</span>); }
+    ~<span class="hljs-built_in">Base</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Base dtor&quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Base {
+    <span class="hljs-built_in">Derived</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Derived ctor&quot;</span>); }
+    ~<span class="hljs-built_in">Derived</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Derived dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Derived <span class="hljs-title">make_derived</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Derived</span>(); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        Base b = <span class="hljs-built_in">make_derived</span>();
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;using b&quot;</span>);
+    }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;end&quot;</span>);
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch23-slice">Base ctor
+Derived ctor
+Base move
+Derived dtor
+Base dtor
+using b
+Base dtor
+end</pre>
+    <p><b>Answer.</b> The <code>Derived</code> object is built in place inside a temporary, but <code>b</code> is then move-constructed from that temporary's <code>Base</code> part (slicing), and the whole temporary is destroyed at the end of the statement.</p>
+    <p><b>Why.</b> Guaranteed elision needs the prvalue to have the <em>same type</em> as the object it initialises ([dcl.init]/17.6.1). Here <code>Base</code> is initialised from a <code>Derived</code> prvalue, so overload resolution picks <code>Base(Base&amp;&amp;)</code>, binding its reference parameter materialises a <code>Derived</code> temporary, and the move is a real call. The common wrong answer is "one construction, because a prvalue is always built in place": the slot passed to <code>make_derived</code> is the temporary, not <code>b</code>, because <code>b</code> is too small to hold a <code>Derived</code>. Return <code>Base</code> from the factory (or store a <code>Derived</code>) to get zero moves.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The copy constructor has a side effect. What does the counter say?</p>
+<pre data-run="ch23-side"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> copies = <span class="hljs-number">0</span>;
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> moves = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { ++copies; }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { ++moves; }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">make</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">T</span>(); }
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">pass</span><span class="hljs-params">(T t)</span> </span>{ <span class="hljs-keyword">return</span> t; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    T a = <span class="hljs-built_in">T</span>(<span class="hljs-built_in">T</span>(<span class="hljs-built_in">make</span>()));
+    T b = <span class="hljs-built_in">pass</span>(<span class="hljs-built_in">make</span>());
+    T c = <span class="hljs-built_in">pass</span>(a);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;copies=%d moves=%d\n&quot;</span>, copies, moves);
+}
+</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch23-side">copies=1 moves=2</pre>
+    <p><b>Answer.</b> One copy (the lvalue <code>a</code> into <code>pass</code>'s parameter) and two moves (each <code>return t;</code> from a parameter into the return slot).</p>
+    <p><b>Why.</b> <code>T a = T(T(make()))</code> is all prvalues: zero operations. <code>pass(make())</code> builds the parameter in place, then moves it out because parameters cannot be NRVO'd. <code>pass(a)</code> copies into the parameter, then moves it out. The side effects of the skipped constructors simply never happen, which the standard permits. Answering "copies=3" (treating every <code>T(...)</code> as a copy) is the usual mistake.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch21-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a factory <code>make_registry(std::string name)</code> that returns, by value, a <code>Registry</code> holding a <code>std::mutex</code>, a <code>std::atomic&lt;long&gt;</code> counter and the name. <code>Registry</code> must be neither copyable nor movable. Show it initialising a local, a class member and an aggregate element, and add a thread-safe <code>add(long)</code> used from two threads.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Delete both copy and move. Let <code>std::mutex</code> and <code>std::atomic</code> members make that implicit, and delete explicitly for clarity. The factory returns a prvalue (<code>return Registry(std::move(name));</code>), so C++17 builds it in the caller's storage. Members and aggregate elements are result objects too, so they can be initialised from the factory call. The mutex protects a non-atomic total to show the lock in use.</p>
+<pre data-run="ch23-k-registry" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Registry</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Registry</span><span class="hljs-params">(std::string name)</span> : name_(std::move(name)) {</span>}
+    <span class="hljs-built_in">Registry</span>(<span class="hljs-type">const</span> Registry&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Registry</span>(Registry&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+    Registry&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Registry&amp;) = <span class="hljs-keyword">delete</span>;
+    Registry&amp; <span class="hljs-keyword">operator</span>=(Registry&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">add</span><span class="hljs-params">(<span class="hljs-type">long</span> v)</span> </span>{
+        hits_.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>;
+        total_ += v;
+    }
+    <span class="hljs-function"><span class="hljs-type">long</span> <span class="hljs-title">hits</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> hits_.<span class="hljs-built_in">load</span>(); }
+    <span class="hljs-function"><span class="hljs-type">long</span> <span class="hljs-title">total</span><span class="hljs-params">()</span> </span>{ <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m_)</span></span>; <span class="hljs-keyword">return</span> total_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> std::string&amp; <span class="hljs-title">name</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> name_; }
+
+<span class="hljs-keyword">private</span>:
+    std::string name_;
+    std::mutex m_;
+    std::atomic&lt;<span class="hljs-type">long</span>&gt; hits_{<span class="hljs-number">0</span>};
+    <span class="hljs-type">long</span> total_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Registry <span class="hljs-title">make_registry</span><span class="hljs-params">(std::string name)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Registry</span>(std::<span class="hljs-built_in">move</span>(name)); }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Service</span> {
+    Registry reg;
+    <span class="hljs-built_in">Service</span>() : <span class="hljs-built_in">reg</span>(<span class="hljs-built_in">make_registry</span>(<span class="hljs-string">&quot;svc&quot;</span>)) {}
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pair</span> { Registry a; Registry b; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Registry local = <span class="hljs-built_in">make_registry</span>(<span class="hljs-string">&quot;local&quot;</span>);
+    <span class="hljs-function">std::thread <span class="hljs-title">t1</span><span class="hljs-params">([&amp;] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i) local.add(<span class="hljs-number">1</span>); })</span></span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">t2</span><span class="hljs-params">([&amp;] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i) local.add(<span class="hljs-number">2</span>); })</span></span>;
+    t1.<span class="hljs-built_in">join</span>();
+    t2.<span class="hljs-built_in">join</span>();
+    Service s;
+    Pair p{<span class="hljs-built_in">make_registry</span>(<span class="hljs-string">&quot;a&quot;</span>), <span class="hljs-built_in">make_registry</span>(<span class="hljs-string">&quot;b&quot;</span>)};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s hits=%ld total=%ld\n&quot;</span>, local.<span class="hljs-built_in">name</span>().<span class="hljs-built_in">c_str</span>(), local.<span class="hljs-built_in">hits</span>(), local.<span class="hljs-built_in">total</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s %s %s\n&quot;</span>, s.reg.<span class="hljs-built_in">name</span>().<span class="hljs-built_in">c_str</span>(), p.a.<span class="hljs-built_in">name</span>().<span class="hljs-built_in">c_str</span>(), p.b.<span class="hljs-built_in">name</span>().<span class="hljs-built_in">c_str</span>());
+}
+</code></pre>
+<pre class="out" data-out="ch23-k-registry">local hits=2000 total=3000
+svc a b</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per call. Do not return a named local (<code>Registry r(...); return r;</code>): NRVO is optional, so it needs a move constructor and will not compile. Do not try to put it in a <code>std::vector</code>, which needs moves for reallocation. In C++14 none of the initialisations compile.</p>
+    <p class="rating">Estimated rating: ~1400 · straightforward once you know prvalue returns need no move constructor; the trap is returning a named local</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a tracing type <code>Probe</code> that counts default constructions, copies, moves and destructions in a global struct, plus a helper that runs a callable and returns the counts it caused. Use it to assert that a chain of three factories feeding a by-value parameter makes zero copies and zero moves, and that a sink function that does <code>return p;</code> makes exactly one move.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Keep counters in a static struct. <code>measure(f)</code> resets the counters, runs <code>f</code>, and returns a snapshot taken after <code>f</code> returns (so destructors of temporaries inside <code>f</code> are included). Assertions use a small <code>check</code> function that prints PASS or FAIL, so the program's output is deterministic and verifiable.</p>
+<pre data-run="ch23-k-probe" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Counts</span> { <span class="hljs-type">int</span> ctor = <span class="hljs-number">0</span>, copy = <span class="hljs-number">0</span>, move = <span class="hljs-number">0</span>, dtor = <span class="hljs-number">0</span>; };
+<span class="hljs-type">static</span> Counts g_counts;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Probe</span> {
+    <span class="hljs-type">int</span> v = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">Probe</span>() { ++g_counts.ctor; }
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Probe</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> : v(x) {</span> ++g_counts.ctor; }
+    <span class="hljs-built_in">Probe</span>(<span class="hljs-type">const</span> Probe&amp; o) : <span class="hljs-built_in">v</span>(o.v) { ++g_counts.copy; }
+    <span class="hljs-built_in">Probe</span>(Probe&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">v</span>(o.v) { ++g_counts.move; }
+    Probe&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Probe&amp;) = <span class="hljs-keyword">default</span>;
+    Probe&amp; <span class="hljs-keyword">operator</span>=(Probe&amp;&amp;) = <span class="hljs-keyword">default</span>;
+    ~<span class="hljs-built_in">Probe</span>() { ++g_counts.dtor; }
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> Counts <span class="hljs-title">measure</span><span class="hljs-params">(F f)</span> </span>{
+    g_counts = {};
+    <span class="hljs-built_in">f</span>();
+    <span class="hljs-keyword">return</span> g_counts;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">check</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* what, <span class="hljs-type">bool</span> ok)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s %s\n&quot;</span>, ok ? <span class="hljs-string">&quot;PASS&quot;</span> : <span class="hljs-string">&quot;FAIL&quot;</span>, what); }
+
+<span class="hljs-function"><span class="hljs-type">static</span> Probe <span class="hljs-title">make</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Probe</span>(v); }
+<span class="hljs-function"><span class="hljs-type">static</span> Probe <span class="hljs-title">add_one</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">make</span>(v + <span class="hljs-number">1</span>); }
+<span class="hljs-function"><span class="hljs-type">static</span> Probe <span class="hljs-title">twice</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">add_one</span>(v * <span class="hljs-number">2</span>); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">consume</span><span class="hljs-params">(Probe p)</span> </span>{ <span class="hljs-keyword">return</span> p.v; }
+<span class="hljs-function"><span class="hljs-type">static</span> Probe <span class="hljs-title">sink</span><span class="hljs-params">(Probe p)</span> </span>{ p.v += <span class="hljs-number">100</span>; <span class="hljs-keyword">return</span> p; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Counts c = <span class="hljs-built_in">measure</span>([] { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;value %d\n&quot;</span>, <span class="hljs-built_in">consume</span>(<span class="hljs-built_in">twice</span>(<span class="hljs-number">3</span>))); });
+    <span class="hljs-built_in">check</span>(<span class="hljs-string">&quot;factory chain: 1 ctor, 0 copies, 0 moves&quot;</span>, c.ctor == <span class="hljs-number">1</span> &amp;&amp; c.copy == <span class="hljs-number">0</span> &amp;&amp; c.move == <span class="hljs-number">0</span> &amp;&amp; c.dtor == <span class="hljs-number">1</span>);
+
+    c = <span class="hljs-built_in">measure</span>([] { Probe r = <span class="hljs-built_in">sink</span>(<span class="hljs-built_in">make</span>(<span class="hljs-number">1</span>)); std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;value %d\n&quot;</span>, r.v); });
+    <span class="hljs-built_in">check</span>(<span class="hljs-string">&quot;sink: exactly one move&quot;</span>, c.ctor == <span class="hljs-number">1</span> &amp;&amp; c.copy == <span class="hljs-number">0</span> &amp;&amp; c.move == <span class="hljs-number">1</span> &amp;&amp; c.dtor == <span class="hljs-number">2</span>);
+
+    c = <span class="hljs-built_in">measure</span>([] { Probe <span class="hljs-built_in">a</span>(<span class="hljs-number">5</span>); Probe r = <span class="hljs-built_in">sink</span>(a); (<span class="hljs-type">void</span>)r; });
+    <span class="hljs-built_in">check</span>(<span class="hljs-string">&quot;sink from lvalue: one copy, one move&quot;</span>, c.copy == <span class="hljs-number">1</span> &amp;&amp; c.move == <span class="hljs-number">1</span>);
+}
+</code></pre>
+<pre class="out" data-out="ch23-k-probe">value 7
+PASS factory chain: 1 ctor, 0 copies, 0 moves
+value 101
+PASS sink: exactly one move
+PASS sink from lvalue: one copy, one move</pre>
+    <p><b>Complexity and pitfalls.</b> Constant overhead per operation. Keep the counters non-atomic only for single-threaded tests. Reset before each measurement, and check destructions too: a missing <code>dtor</code> count reveals a leaked or lifetime-extended temporary. Do not assert NRVO-dependent counts in portable tests; this test only relies on guaranteed elision and the parameter rule, which are the same on every conforming compiler.</p>
+    <p class="rating">Estimated rating: ~1300 · simple bookkeeping; the insight is predicting the counts correctly before asserting them</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a generic adaptor <code>Lazy</code> (C++17) that wraps a callable returning a non-movable type <code>N</code>, so that <code>std::optional&lt;N&gt;::emplace</code> and <code>std::map&lt;K, N&gt;::try_emplace</code> can store the factory's result in place. Show that <code>emplace(make())</code> does not compile and that your version does, with no move constructor on <code>N</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>emplace(args...)</code> constructs <code>N(std::forward&lt;Args&gt;(args)...)</code> in the container's storage. If the single argument is an object with a conversion function <code>operator N()</code>, GCC and Clang use that conversion function and let its prvalue result initialise the element directly. This is compiler behaviour that goes slightly beyond the letter of the standard: the C++17 wording only considers <code>N</code>'s constructors, so it would bind the converted prvalue to the deleted <code>N(N&amp;&amp;)</code>. Core issue CWG2327 covers this gap, and both compilers already implement the elision. The adaptor holds the callable and calls it inside the conversion. A deduction guide lets callers write <code>Lazy{lambda}</code>.</p>
+<pre data-run="ch23-k-lazy" data-std="c++17" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Conn</span> {
+    <span class="hljs-type">int</span> fd;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Conn</span><span class="hljs-params">(<span class="hljs-type">int</span> f)</span> : fd(f) {</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;open %d\n&quot;</span>, fd); }
+    <span class="hljs-built_in">Conn</span>(<span class="hljs-type">const</span> Conn&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Conn</span>(Conn&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">Conn</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;close %d\n&quot;</span>, fd); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Conn <span class="hljs-title">connect</span><span class="hljs-params">(<span class="hljs-type">int</span> fd)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Conn</span>(fd); }
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Lazy</span> {
+    F f;
+    <span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">decltype</span><span class="hljs-params">(std::declval&lt;F&amp;&gt;()())</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">f</span>(); }
+};
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt; <span class="hljs-built_in">Lazy</span>(F) -&gt; Lazy&lt;F&gt;;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::optional&lt;Conn&gt; slot;
+    <span class="hljs-comment">// slot.emplace(connect(3));   // error: Conn(Conn&amp;&amp;) is deleted</span>
+    slot.<span class="hljs-built_in">emplace</span>(Lazy{[] { <span class="hljs-keyword">return</span> <span class="hljs-built_in">connect</span>(<span class="hljs-number">3</span>); }});
+
+    std::map&lt;std::string, Conn&gt; pool;
+    pool.<span class="hljs-built_in">try_emplace</span>(<span class="hljs-string">&quot;db&quot;</span>, Lazy{[] { <span class="hljs-keyword">return</span> <span class="hljs-built_in">connect</span>(<span class="hljs-number">4</span>); }});
+    pool.<span class="hljs-built_in">try_emplace</span>(<span class="hljs-string">&quot;cache&quot;</span>, Lazy{[] { <span class="hljs-keyword">return</span> <span class="hljs-built_in">connect</span>(<span class="hljs-number">5</span>); }});
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d %d\n&quot;</span>, slot-&gt;fd, pool.<span class="hljs-built_in">at</span>(<span class="hljs-string">&quot;db&quot;</span>).fd, pool.<span class="hljs-built_in">at</span>(<span class="hljs-string">&quot;cache&quot;</span>).fd);
+    pool.<span class="hljs-built_in">erase</span>(<span class="hljs-string">&quot;db&quot;</span>);
+}
+</code></pre>
+<pre class="out" data-out="ch23-k-lazy">open 3
+open 4
+open 5
+3 4 5
+close 4
+close 5
+close 3</pre>
+    <p>The commented-out line fails because <code>emplace</code> takes <code>Args&amp;&amp;...</code>: binding <code>connect(3)</code> to that reference materialises a temporary <code>Conn</code>, and constructing the element from it needs the move constructor.</p>
+    <p><b>Complexity and pitfalls.</b> No overhead beyond the factory call. The conversion operator must return exactly <code>N</code> by value; returning a reference would reintroduce a copy. Do not make <code>Conn</code> constructible from arbitrary types through a template constructor, or that constructor may win over the conversion. The program erases "db" explicitly before printing ends, because the order in which a <code>std::map</code> destroys its remaining elements is an implementation detail (libstdc++ and libc++ differ), and output tests must not depend on it.</p>
+    <p class="rating">Estimated rating: ~1900 · needs the materialisation rule for forwarding references plus the conversion-function trick</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>ScopedTimer start_timer(bool verbose, const char* label)</code> returning a non-copyable, non-movable RAII timer configured in one of two ways depending on <code>verbose</code>, with zero moves. The timer prints its label and mode on construction and on destruction. Do not use heap allocation or <code>std::optional</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Returning one of two named locals needs a move. Instead, return a conditional expression whose operands are both prvalues of the same type: <code>return verbose ? ScopedTimer(label, Mode::Verbose) : ScopedTimer(label, Mode::Quiet);</code>. That expression is itself a prvalue, only the chosen operand is evaluated, and it initialises the caller's object directly. Two separate <code>return</code> statements of prvalues work just as well.</p>
+<pre data-run="ch23-k-timer"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">enum class</span> <span class="hljs-title class_">Mode</span> { Quiet, Verbose };
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ScopedTimer</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">ScopedTimer</span>(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* label, Mode m) : <span class="hljs-built_in">label_</span>(label), <span class="hljs-built_in">mode_</span>(m) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;start %s %s\n&quot;</span>, label_, mode_ == Mode::Verbose ? <span class="hljs-string">&quot;verbose&quot;</span> : <span class="hljs-string">&quot;quiet&quot;</span>);
+    }
+    <span class="hljs-built_in">ScopedTimer</span>(<span class="hljs-type">const</span> ScopedTimer&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">ScopedTimer</span>(ScopedTimer&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">ScopedTimer</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;stop %s\n&quot;</span>, label_); }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* label_;
+    Mode mode_;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> ScopedTimer <span class="hljs-title">start_timer</span><span class="hljs-params">(<span class="hljs-type">bool</span> verbose, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* label)</span> </span>{
+    <span class="hljs-keyword">return</span> verbose ? <span class="hljs-built_in">ScopedTimer</span>(label, Mode::Verbose) : <span class="hljs-built_in">ScopedTimer</span>(label, Mode::Quiet);
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> ScopedTimer <span class="hljs-title">start_timer2</span><span class="hljs-params">(<span class="hljs-type">bool</span> verbose, <span class="hljs-type">const</span> <span class="hljs-type">char</span>* label)</span> </span>{
+    <span class="hljs-keyword">if</span> (verbose) <span class="hljs-keyword">return</span> <span class="hljs-built_in">ScopedTimer</span>(label, Mode::Verbose);
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">ScopedTimer</span>(label, Mode::Quiet);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        ScopedTimer a = <span class="hljs-built_in">start_timer</span>(<span class="hljs-literal">true</span>, <span class="hljs-string">&quot;parse&quot;</span>);
+        ScopedTimer b = <span class="hljs-built_in">start_timer2</span>(<span class="hljs-literal">false</span>, <span class="hljs-string">&quot;emit&quot;</span>);
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;working&quot;</span>);
+    }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;done&quot;</span>);
+}
+</code></pre>
+<pre class="out" data-out="ch23-k-timer">start parse verbose
+start emit quiet
+working
+stop emit
+stop parse
+done</pre>
+    <p><b>Complexity and pitfalls.</b> O(1). <code>ScopedTimer t1(...), t2(...); return verbose ? t1 : t2;</code> would need a copy constructor, and two named locals with two returns would need a move constructor, so both fail to compile. The deleted move constructor is a good guard: it turns any accidental non-elided path into a compile error.</p>
+    <p class="rating">Estimated rating: ~1400 · knowing that a conditional of two prvalues is still a prvalue</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a non-copyable, non-movable <code>Node</code> that registers its own address in a global intrusive list on construction and unregisters on destruction, plus a factory <code>make_node(int)</code> returning it by value. Prove (without printing pointers) that the address registered at construction is the final address of the object in the caller, including when the factory result initialises a struct member.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Self-registering objects are a classic reason types cannot be moved: the registry stores <code>this</code>. With guaranteed elision the constructor runs on the final storage, so registering <code>this</code> in the constructor is safe even for a factory. The list is a doubly linked intrusive list (head pointer plus prev/next in each node). A <code>contains(const Node*)</code> check proves the final address is registered.</p>
+<pre data-run="ch23-k-node" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Node</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Node</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> : id_(id), next_(head_) {</span>
+        <span class="hljs-keyword">if</span> (head_) head_-&gt;prev_ = <span class="hljs-keyword">this</span>;
+        head_ = <span class="hljs-keyword">this</span>;
+    }
+    <span class="hljs-built_in">Node</span>(<span class="hljs-type">const</span> Node&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Node</span>(Node&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">Node</span>() {
+        <span class="hljs-keyword">if</span> (prev_) prev_-&gt;next_ = next_; <span class="hljs-keyword">else</span> head_ = next_;
+        <span class="hljs-keyword">if</span> (next_) next_-&gt;prev_ = prev_;
+    }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">contains</span><span class="hljs-params">(<span class="hljs-type">const</span> Node* n)</span> </span>{
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Node* p = head_; p; p = p-&gt;next_) <span class="hljs-keyword">if</span> (p == n) <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> </span>{ <span class="hljs-type">int</span> k = <span class="hljs-number">0</span>; <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Node* p = head_; p; p = p-&gt;next_) ++k; <span class="hljs-keyword">return</span> k; }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">id</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> id_; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">int</span> id_;
+    Node* prev_ = <span class="hljs-literal">nullptr</span>;
+    Node* next_;
+    <span class="hljs-type">static</span> Node* head_;
+};
+Node* Node::head_ = <span class="hljs-literal">nullptr</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> Node <span class="hljs-title">make_node</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">Node</span>(id); }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Owner</span> {
+    <span class="hljs-type">int</span> tag;
+    Node node;
+    <span class="hljs-built_in">Owner</span>() : <span class="hljs-built_in">tag</span>(<span class="hljs-number">1</span>), <span class="hljs-built_in">node</span>(<span class="hljs-built_in">make_node</span>(<span class="hljs-number">20</span>)) {}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Node a = <span class="hljs-built_in">make_node</span>(<span class="hljs-number">10</span>);
+    Owner o;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d size=%d\n&quot;</span>, Node::<span class="hljs-built_in">contains</span>(&amp;a), Node::<span class="hljs-built_in">contains</span>(&amp;o.node), Node::<span class="hljs-built_in">size</span>());
+    {
+        Node tmp = <span class="hljs-built_in">make_node</span>(<span class="hljs-number">30</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;inner size=%d id=%d\n&quot;</span>, Node::<span class="hljs-built_in">size</span>(), tmp.<span class="hljs-built_in">id</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after size=%d ids=%d,%d\n&quot;</span>, Node::<span class="hljs-built_in">size</span>(), a.<span class="hljs-built_in">id</span>(), o.node.<span class="hljs-built_in">id</span>());
+}
+</code></pre>
+<pre class="out" data-out="ch23-k-node">1 1 size=2
+inner size=3 id=30
+after size=2 ids=10,20</pre>
+    <p><b>Complexity and pitfalls.</b> Registration and removal are O(1); <code>contains</code> is O(n). ASan confirms no dangling pointers in the list. In C++14 this design was impossible to return by value; people used <code>std::unique_ptr&lt;Node&gt;</code> or out-parameters. Do not use it as a base subobject initialised from <code>make_node</code> (CWG2403), and add a mutex if nodes are created on several threads.</p>
+    <p class="rating">Estimated rating: ~1600 · intrusive list bookkeeping plus the guarantee that <code>this</code> in the constructor is the final address</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch21-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li>C++17: a prvalue is an initialiser, not an object. <code>return T();</code>, <code>T x = T(T(T()));</code>, <code>f(T())</code> and <code>throw T();</code> construct once, directly in the result object, and need no copy or move constructor.</li>
+<li>Temporaries appear only through materialisation: reference binding (including <code>std::move</code> and <code>push_back</code>), member access, discarded expressions. After that, copies and moves are real.</li>
+<li>Non-movable types (<code>std::mutex</code>, <code>std::atomic</code>, your own) can be returned from factories and used to initialise locals, members and aggregate elements in C++17, but not base-class subobjects (CWG2403). In C++14 use <code>return {...};</code> plus <code>auto&amp;&amp;</code>.</li>
+<li>ABI: the caller passes the return slot's address (<code>rdi</code> on x86-64, <code>x8</code> on AArch64, <code>sret</code> in LLVM) for any type that is non-trivial for calls; small trivially copyable types come back in registers.</li>
+<li>No elision for: by-value parameters (move), members and globals (copy), <code>b ? lvalue : lvalue</code> (copy), conversions to another type, anything wrapped in <code>std::move</code>.</li>
+<li><code>-fno-elide-constructors</code> shows the C++14 abstract machine; in C++17 it only affects the optional elisions (in practice NRVO), never prvalue initialisation.</li>
+<li>Elision may skip constructors with side effects: an explicit exception to the as-if rule. Never put logic in a copy constructor that must run.</li>
+<li>Named returns (NRVO) are still optional and are covered in <a href="#ch22">Ch 22</a>.</li>
+</ul>
+</section>

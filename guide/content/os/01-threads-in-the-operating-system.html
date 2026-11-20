@@ -1,0 +1,1254 @@
+---
+title: Threads in the operating system
+part: Part A · Threads and synchronisation
+lede: A thread is a scheduled stream of execution that shares its process's memory with every other thread in that process. This chapter builds the operating-system picture (what the kernel tracks, how threads are created, scheduled and switched) and then maps it onto `pthread_create`, `std::thread` and `std::jthread`. Interviewers use it to check that you know what is shared, what it costs, and how C++ thread objects end their lives.
+desc: Process vs thread, TCB, threading models, context switch, TLS, std::thread
+hours: 5
+prereqs: basic C++, RAII, lambdas
+---
+<section id="ch01-proc-vs-thread" data-roles="th"><div class="sec-head"><h2>Process vs thread</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A process is a container of resources: one virtual address space, a table of open file descriptors, signal handlers, credentials and resource limits. A thread is a unit of execution inside that container: a program counter, a stack pointer, a register set and a stack. Every process starts with one thread. Creating more threads adds more streams of execution that all see the same memory.</p>
+<p>The consequence that drives this whole part of the guide: two threads can read and write the same global, the same heap block and even each other's stack variables (if they are handed a pointer), with no copy and no permission check. That makes communication cheap and makes data races possible (<a href="#ch02">Ch 2</a>).</p>
+
+<h3 id="ch01-shared-private">What is shared and what is private</h3>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 330" role="img" aria-label="Two threads share one address space but each owns its registers, stack and TLS block">
+<defs><marker id="ch01-c04a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="170" y="20" text-anchor="middle" class="t-bold">One virtual address space (shared)</text>
+<rect x="40" y="30" width="260" height="36" rx="4" class="d-key"/>
+<text x="170" y="53" text-anchor="middle" class="t-small">main thread stack ↓</text>
+<text x="170" y="82" text-anchor="middle" class="t-muted t-small">⋮</text>
+<rect x="40" y="92" width="260" height="36" rx="4" class="d-acc"/>
+<text x="170" y="115" text-anchor="middle" class="t-small">thread 2 stack ↓ (mmap, 8 MiB default)</text>
+<rect x="40" y="128" width="260" height="16" class="d-trap"/>
+<text x="170" y="140" text-anchor="middle" class="t-small">guard page (no access)</text>
+<rect x="40" y="150" width="260" height="28" rx="4" class="d-rs"/>
+<text x="170" y="168" text-anchor="middle" class="t-small">TLS blocks, one per thread</text>
+<rect x="40" y="184" width="260" height="26" rx="4" class="d-soft"/>
+<text x="170" y="201" text-anchor="middle" class="t-small">shared libraries, other mappings</text>
+<rect x="40" y="214" width="260" height="26" rx="4" class="d-soft"/>
+<text x="170" y="231" text-anchor="middle" class="t-small">heap ↑ (malloc, new)</text>
+<rect x="40" y="244" width="260" height="26" rx="4" class="d-soft"/>
+<text x="170" y="261" text-anchor="middle" class="t-small">data + bss (globals, statics)</text>
+<rect x="40" y="274" width="260" height="26" rx="4" class="d-soft"/>
+<text x="170" y="291" text-anchor="middle" class="t-small">text (machine code, read-only)</text>
+<rect x="420" y="30" width="280" height="76" rx="6" class="d-box"/>
+<text x="560" y="48" text-anchor="middle" class="t-bold">Thread 1 (main): private</text>
+<text x="432" y="66" class="t-small t-mono">PC, SP, flags, general registers</text>
+<text x="432" y="82" class="t-small t-mono">TLS pointer (FS / TPIDR_EL0)</text>
+<text x="432" y="98" class="t-small t-mono">tid, signal mask, errno, priority</text>
+<rect x="420" y="126" width="280" height="76" rx="6" class="d-box"/>
+<text x="560" y="144" text-anchor="middle" class="t-bold">Thread 2: private</text>
+<text x="432" y="162" class="t-small t-mono">PC, SP, flags, general registers</text>
+<text x="432" y="178" class="t-small t-mono">TLS pointer (FS / TPIDR_EL0)</text>
+<text x="432" y="194" class="t-small t-mono">tid, signal mask, errno, priority</text>
+<rect x="420" y="232" width="280" height="68" rx="6" class="d-soft"/>
+<text x="560" y="250" text-anchor="middle" class="t-bold">Per process: shared by all threads</text>
+<text x="432" y="268" class="t-small">page tables, file descriptors, cwd, pid,</text>
+<text x="432" y="284" class="t-small">signal handlers, limits, credentials</text>
+<path d="M420,62 L304,48" class="d-line" marker-end="url(#ch04-c04a)"/>
+<text x="362" y="46" text-anchor="middle" class="t-small t-muted">SP</text>
+<path d="M420,158 L304,112" class="d-line" marker-end="url(#ch04-c04a)"/>
+<text x="362" y="124" text-anchor="middle" class="t-small t-muted">SP</text>
+<path d="M420,178 L304,164" class="d-line d-dash" marker-end="url(#ch04-c04a)"/>
+<text x="362" y="186" text-anchor="middle" class="t-small t-muted">TLS</text>
+</svg></div><figcaption><b>Threads share the address space and own their execution state.</b> Each thread's stack and TLS block live in the shared address space, so any thread with a pointer can reach them. What is truly private is the register set (including the stack pointer and the TLS base register) and a few kernel fields.</figcaption></figure>
+
+<div class="table-wrap"><table>
+<thead><tr><th>Resource</th><th>Shared by all threads</th><th>Private to each thread</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td>Address space (code, globals, heap, mappings)</td><td>yes</td><td></td><td>One set of page tables; a write by one thread is visible to all (subject to the memory model)</td></tr>
+<tr><td>Stack</td><td></td><td>yes</td><td>Private by convention only: it is ordinary memory any thread can address</td></tr>
+<tr><td>Registers, PC, SP</td><td></td><td>yes</td><td>Saved into the thread's kernel structure on a context switch</td></tr>
+<tr><td><code>thread_local</code> variables, <code>errno</code></td><td></td><td>yes</td><td>Found through a per-thread base register</td></tr>
+<tr><td>File descriptors and file offsets</td><td>yes</td><td></td><td><code>close(fd)</code> in one thread closes it for all</td></tr>
+<tr><td>Signal handlers (dispositions)</td><td>yes</td><td></td><td>The signal <i>mask</i> is per thread</td></tr>
+<tr><td>Process id, cwd, umask, uid/gid, rlimits</td><td>yes</td><td></td><td><code>chdir</code> affects every thread</td></tr>
+<tr><td>Thread id, scheduling priority, CPU affinity</td><td></td><td>yes</td><td>Linux schedules threads, not processes</td></tr>
+</tbody></table></div>
+
+<p>Both facts are visible from user code. A thread sees the same process id as <code>main</code> but a different thread id, and globals and heap memory written by one thread are read back by another:</p>
+<pre data-run="ch04-ids" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">pid_t</span> main_pid = <span class="hljs-built_in">getpid</span>();
+    <span class="hljs-type">const</span> std::thread::id main_id = std::this_thread::<span class="hljs-built_in">get_id</span>();
+    <span class="hljs-type">bool</span> same_pid = <span class="hljs-literal">false</span>, same_tid = <span class="hljs-literal">true</span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">t</span><span class="hljs-params">([&amp;] {
+        same_pid = (getpid() == main_pid);
+        same_tid = (std::this_thread::get_id() == main_id);
+    })</span></span>;
+    t.<span class="hljs-built_in">join</span>();  <span class="hljs-comment">// join makes the writes above visible to main</span>
+    std::cout &lt;&lt; <span class="hljs-string">&quot;same process id: &quot;</span> &lt;&lt; same_pid &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;same thread id:  &quot;</span> &lt;&lt; same_tid &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch04-ids">same process id: 1
+same thread id:  0</pre>
+<pre data-run="ch04-share" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;latch&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> global_value = <span class="hljs-number">0</span>;   <span class="hljs-comment">// data segment: one copy per process</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> heap_value = std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">0</span>);   <span class="hljs-comment">// heap: one copy per process</span>
+    std::<span class="hljs-type">uintptr_t</span> local_addr[<span class="hljs-number">2</span>] = {<span class="hljs-number">0</span>, <span class="hljs-number">0</span>};
+    <span class="hljs-function">std::latch <span class="hljs-title">both_alive</span><span class="hljs-params">(<span class="hljs-number">2</span>)</span></span>;
+
+    <span class="hljs-keyword">auto</span> body = [&amp;](<span class="hljs-type">int</span> idx) {
+        <span class="hljs-type">int</span> local = idx;               <span class="hljs-comment">// lives on this thread&#x27;s own stack</span>
+        local_addr[idx] = <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(&amp;local);
+        both_alive.<span class="hljs-built_in">arrive_and_wait</span>();  <span class="hljs-comment">// keep both stacks alive at the same time</span>
+        <span class="hljs-keyword">if</span> (idx == <span class="hljs-number">0</span>) global_value = <span class="hljs-number">10</span>;
+        <span class="hljs-keyword">else</span> *heap_value = <span class="hljs-number">20</span>;
+    };
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(body, <span class="hljs-number">0</span>)</span>, <span class="hljs-title">b</span><span class="hljs-params">(body, <span class="hljs-number">1</span>)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+
+    std::cout &lt;&lt; <span class="hljs-string">&quot;global written by a: &quot;</span> &lt;&lt; global_value &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;heap written by b:   &quot;</span> &lt;&lt; *heap_value &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;locals at different addresses: &quot;</span> &lt;&lt; (local_addr[<span class="hljs-number">0</span>] != local_addr[<span class="hljs-number">1</span>]) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch04-share">global written by a: 10
+heap written by b:   20
+locals at different addresses: 1</pre>
+
+<div class="callout key"><p class="callout-title">Know this cold</p>
+<p>Threads in a process share everything except the execution context: registers (PC, SP), the stack, thread-local storage, the signal mask, the thread id and scheduling attributes. Processes share nothing by default; they communicate through pipes, sockets, files or explicitly shared memory.</p></div>
+
+<h3 id="ch01-why-threads">Why use threads at all</h3>
+<ul>
+<li><b>Parallelism:</b> use several cores for one job (number crunching, compression, a parallel build).</li>
+<li><b>Overlapping waits:</b> one thread blocks on disk or network while another keeps computing or serving the UI.</li>
+<li><b>Cheaper than processes:</b> creation needs no new page tables, a switch inside one process keeps the TLB valid, and communication is a memory write.</li>
+</ul>
+<p>The price is isolation. A wild pointer in one thread corrupts the whole process, and a crash in any thread kills all of them. Browsers and databases use separate processes exactly where they want that isolation back.</p>
+</section>
+
+<section id="ch01-pcb-tcb" data-roles="th"><div class="sec-head"><h2>PCB, TCB and Linux tasks</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> The kernel needs a record for everything it manages. The classic textbook split is a <b>process control block</b> (PCB) for the resource container and a <b>thread control block</b> (TCB) for each execution stream inside it.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>PCB (per process)</th><th>TCB (per thread)</th></tr></thead>
+<tbody>
+<tr><td>pid, parent, credentials</td><td>thread id, state (ready, running, blocked)</td></tr>
+<tr><td>memory map: pointer to page tables, list of regions</td><td>saved registers: PC, SP, flags, general and FP/SIMD registers</td></tr>
+<tr><td>open file table, cwd, umask</td><td>kernel stack pointer, user stack location</td></tr>
+<tr><td>signal handlers, pending process-wide signals</td><td>signal mask, pending thread-directed signals</td></tr>
+<tr><td>resource limits, accounting totals</td><td>priority, scheduling policy, CPU affinity, time used</td></tr>
+<tr><td>list of its threads</td><td>TLS base, pointer back to its process</td></tr>
+</tbody></table></div>
+
+<h3 id="ch01-linux-tasks">On Linux, threads are tasks</h3>
+<p>Linux has no separate PCB and TCB types. Every schedulable entity is a <code>task_struct</code>, a <b>task</b>. Resources live in separately allocated, reference-counted objects (<code>mm_struct</code> for memory, <code>files_struct</code> for descriptors, <code>sighand_struct</code> for handlers, <code>fs_struct</code> for cwd). A "process" is a group of tasks that point at the same objects.</p>
+<p>The system call that creates tasks is <code>clone()</code> (and the newer <code>clone3()</code>). Its flags choose what the child shares with the caller:</p>
+<pre><code class="language-text hljs">fork()            ≈ clone(SIGCHLD)                          share nothing: copy-on-write copy of memory
+pthread_create()  ≈ clone(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
+                          CLONE_THREAD | CLONE_SYSVSEM | CLONE_SETTLS |
+                          CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID)
+                                                            share memory, fds, cwd, handlers; join the thread group</code></pre>
+<ul>
+<li><code>CLONE_VM</code> shares the address space, which is what makes it a thread.</li>
+<li><code>CLONE_THREAD</code> puts the new task in the caller's <b>thread group</b>. The group id (tgid) is what <code>getpid()</code> returns; each task's own id is what <code>gettid()</code> returns. For the first thread, pid equals tid.</li>
+<li><code>CLONE_SETTLS</code> sets the new thread's TLS base register; <code>CLONE_CHILD_CLEARTID</code> makes the kernel zero a word and wake a futex when the thread exits, which is how <code>pthread_join</code> waits.</li>
+</ul>
+<p>This is why <code>ps -eLf</code> or <code>top -H</code> show threads as separate lines, why <code>/proc/&lt;pid&gt;/task/</code> lists one directory per thread, and why a thread is sometimes called a "light-weight process" (LWP). The scheduler sees only tasks; it never needs to know which tasks form a process.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p>
+<p>"Linux threads are processes" is half right. They are tasks, scheduled exactly like processes, but tasks in one thread group share one pid, one address space and one set of handlers, and a fatal signal kills the whole group. The old LinuxThreads library (before glibc 2.3 and NPTL) really did give each thread its own pid, which broke POSIX signal semantics; that is where the folklore comes from.</p></div>
+</section>
+
+<section id="ch01-models" data-roles="th"><div class="sec-head"><h2>User-level vs kernel-level threads</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Kernel-level threads</b> are known to the kernel: each has a kernel record, the kernel scheduler places them on cores, and a blocking system call blocks only the calling thread. <b>User-level threads</b> are implemented by a library inside one process: the library keeps its own run queue, saves and restores registers itself, and the kernel sees only the threads that carry them.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 250" role="img" aria-label="Three threading models: many user threads on one kernel thread, one to one, and many on fewer kernel threads">
+<text x="120" y="22" text-anchor="middle" class="t-bold">N:1 (green threads)</text>
+<text x="360" y="22" text-anchor="middle" class="t-bold">1:1 (Linux NPTL, Windows)</text>
+<text x="600" y="22" text-anchor="middle" class="t-bold">M:N (Go, Java virtual threads)</text>
+<text x="10" y="58" class="t-small t-muted">user</text>
+<text x="10" y="178" class="t-small t-muted">kernel</text>
+<line x1="10" y1="118" x2="710" y2="118" class="d-grid d-dash"/>
+<circle cx="45" cy="54" r="14" class="d-acc"/><circle cx="95" cy="54" r="14" class="d-acc"/><circle cx="145" cy="54" r="14" class="d-acc"/><circle cx="195" cy="54" r="14" class="d-acc"/>
+<rect x="60" y="88" width="120" height="20" rx="4" class="d-soft"/><text x="120" y="102" text-anchor="middle" class="t-small">library scheduler</text>
+<line x1="45" y1="68" x2="100" y2="88" class="d-line"/><line x1="95" y1="68" x2="110" y2="88" class="d-line"/><line x1="145" y1="68" x2="130" y2="88" class="d-line"/><line x1="195" y1="68" x2="140" y2="88" class="d-line"/>
+<line x1="120" y1="108" x2="120" y2="160" class="d-line"/>
+<rect x="95" y="160" width="50" height="30" rx="4" class="d-key"/><text x="120" y="179" text-anchor="middle" class="t-small">K</text>
+<text x="120" y="212" text-anchor="middle" class="t-small">one blocking call stalls all</text>
+<text x="120" y="228" text-anchor="middle" class="t-small">no parallelism</text>
+<circle cx="300" cy="54" r="14" class="d-acc"/><circle cx="360" cy="54" r="14" class="d-acc"/><circle cx="420" cy="54" r="14" class="d-acc"/>
+<line x1="300" y1="68" x2="300" y2="160" class="d-line"/><line x1="360" y1="68" x2="360" y2="160" class="d-line"/><line x1="420" y1="68" x2="420" y2="160" class="d-line"/>
+<rect x="280" y="160" width="40" height="30" rx="4" class="d-key"/><text x="300" y="179" text-anchor="middle" class="t-small">K</text>
+<rect x="340" y="160" width="40" height="30" rx="4" class="d-key"/><text x="360" y="179" text-anchor="middle" class="t-small">K</text>
+<rect x="400" y="160" width="40" height="30" rx="4" class="d-key"/><text x="420" y="179" text-anchor="middle" class="t-small">K</text>
+<text x="360" y="212" text-anchor="middle" class="t-small">true parallelism, simple</text>
+<text x="360" y="228" text-anchor="middle" class="t-small">each thread costs a kernel task</text>
+<circle cx="520" cy="54" r="12" class="d-acc"/><circle cx="560" cy="54" r="12" class="d-acc"/><circle cx="600" cy="54" r="12" class="d-acc"/><circle cx="640" cy="54" r="12" class="d-acc"/><circle cx="680" cy="54" r="12" class="d-acc"/>
+<rect x="530" y="88" width="140" height="20" rx="4" class="d-soft"/><text x="600" y="102" text-anchor="middle" class="t-small">runtime scheduler</text>
+<line x1="520" y1="66" x2="570" y2="88" class="d-line"/><line x1="560" y1="66" x2="585" y2="88" class="d-line"/><line x1="600" y1="66" x2="600" y2="88" class="d-line"/><line x1="640" y1="66" x2="615" y2="88" class="d-line"/><line x1="680" y1="66" x2="630" y2="88" class="d-line"/>
+<line x1="575" y1="108" x2="570" y2="160" class="d-line"/><line x1="625" y1="108" x2="630" y2="160" class="d-line"/>
+<rect x="550" y="160" width="40" height="30" rx="4" class="d-key"/><text x="570" y="179" text-anchor="middle" class="t-small">K</text>
+<rect x="610" y="160" width="40" height="30" rx="4" class="d-key"/><text x="630" y="179" text-anchor="middle" class="t-small">K</text>
+<text x="600" y="212" text-anchor="middle" class="t-small">cheap threads + parallelism</text>
+<text x="600" y="228" text-anchor="middle" class="t-small">complex runtime</text>
+</svg></div><figcaption><b>The model is the mapping from user threads to kernel threads.</b> N:1 multiplexes everything onto one kernel thread, 1:1 gives every user thread its own kernel task, and M:N runs many user threads on a small pool of kernel threads.</figcaption></figure>
+
+<div class="table-wrap"><table>
+<thead><tr><th>Model</th><th>Examples</th><th>Strengths</th><th>Weaknesses</th></tr></thead>
+<tbody>
+<tr><td>N:1 (many user threads on one kernel thread)</td><td>early Java green threads, GNU Pth</td><td>switches are function-call cheap, no kernel involvement</td><td>a blocking syscall or page fault stops every thread; one core only</td></tr>
+<tr><td>1:1</td><td>Linux NPTL, Windows, macOS, <code>std::thread</code> everywhere</td><td>real parallelism, blocking is per thread, kernel handles signals and priorities</td><td>creation and switch go through the kernel; each thread reserves a full stack</td></tr>
+<tr><td>M:N</td><td>Go goroutines, Java 21 virtual threads, Erlang processes, old Solaris</td><td>millions of cheap threads, still parallel</td><td>the runtime must avoid blocking carriers (it wraps I/O), harder debugging, priority inversion between levels</td></tr>
+</tbody></table></div>
+<p>IBM built an M:N library for Linux (NGPT) at the same time as NPTL; NPTL won because a 1:1 design with a fast kernel was simpler and fast enough. C++ <code>std::thread</code> is specified as an OS thread, so on every mainstream platform it is 1:1. Cheap user-level concurrency in C++ comes from coroutines and executors, covered at the end of this chapter.</p>
+</section>
+
+<section id="ch01-lifecycle" data-roles="th"><div class="sec-head"><h2>Thread states and lifecycle</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A thread moves between a small number of states. The names vary between textbooks, but the machine is the same:</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="Thread state machine: new, ready, running, blocked, terminated">
+<defs><marker id="ch01-c04b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="20" y="70" width="100" height="44" rx="8" class="d-soft"/><text x="70" y="97" text-anchor="middle" class="t-bold">New</text>
+<rect x="190" y="70" width="120" height="44" rx="8" class="d-acc"/><text x="250" y="97" text-anchor="middle" class="t-bold">Ready</text>
+<rect x="430" y="70" width="120" height="44" rx="8" class="d-key"/><text x="490" y="97" text-anchor="middle" class="t-bold">Running</text>
+<rect x="600" y="70" width="104" height="44" rx="8" class="d-box"/><text x="652" y="97" text-anchor="middle" class="t-bold">Terminated</text>
+<rect x="300" y="210" width="140" height="44" rx="8" class="d-trap"/><text x="370" y="237" text-anchor="middle" class="t-bold">Blocked</text>
+<path d="M120,92 L186,92" class="d-line" marker-end="url(#ch04-c04b)"/>
+<text x="153" y="62" text-anchor="middle" class="t-small">created,</text>
+<text x="153" y="76" text-anchor="middle" class="t-small">admitted</text>
+<path d="M310,80 L426,80" class="d-line-acc" marker-end="url(#ch04-c04b)"/>
+<text x="368" y="72" text-anchor="middle" class="t-small">dispatched by scheduler</text>
+<path d="M430,104 L314,104" class="d-line-acc" marker-end="url(#ch04-c04b)"/>
+<text x="370" y="126" text-anchor="middle" class="t-small">preempted, slice used up, yield()</text>
+<path d="M500,114 L420,206" class="d-line-trap" marker-end="url(#ch04-c04b)"/>
+<text x="478" y="170" class="t-small">waits: lock, I/O,</text>
+<text x="478" y="184" class="t-small">sleep, join, CV</text>
+<path d="M320,210 L262,118" class="d-line-key" marker-end="url(#ch04-c04b)"/>
+<text x="150" y="170" class="t-small">woken: unlock, I/O done,</text>
+<text x="150" y="184" class="t-small">timer, notify</text>
+<path d="M550,92 L596,92" class="d-line" marker-end="url(#ch04-c04b)"/>
+<text x="574" y="62" text-anchor="middle" class="t-small">returns,</text>
+<text x="574" y="76" text-anchor="middle" class="t-small">exits</text>
+<text x="652" y="134" text-anchor="middle" class="t-small t-muted">resources held</text>
+<text x="652" y="148" text-anchor="middle" class="t-small t-muted">until join</text>
+<text x="652" y="162" text-anchor="middle" class="t-small t-muted">(or detach)</text>
+<text x="20" y="284" class="t-small t-muted">Linux ps codes: R = ready or running, S = interruptible sleep, D = uninterruptible sleep (usually disk I/O), T = stopped.</text>
+</svg></div><figcaption><b>Only the scheduler moves a thread between Ready and Running; only an event moves it out of Blocked.</b> A blocked thread never goes straight back to Running: it becomes Ready and waits its turn, which is why a wake-up does not mean "runs now".</figcaption></figure>
+<ul>
+<li><b>New:</b> the thread object and its stack are being set up. For <code>std::thread</code> this is inside the constructor; when the constructor returns, the thread is already Ready or Running.</li>
+<li><b>Ready:</b> runnable and waiting for a core. Linux keeps one run queue per CPU.</li>
+<li><b>Running:</b> executing on a core. At most one thread per hardware thread.</li>
+<li><b>Blocked (waiting, sleeping):</b> waiting for an event, such as a mutex, a condition variable, I/O, a timer or another thread's exit. It uses no CPU.</li>
+<li><b>Terminated:</b> the function returned or the thread called <code>pthread_exit</code>. Its stack and result stay allocated until someone calls join, unless the thread was detached.</li>
+</ul>
+<div class="callout tip"><p class="callout-title">Tip</p>
+<p>Linux does not distinguish Ready from Running in <code>ps</code>: both show as <code>R</code>. A thread spinning on a lock is Running and burns CPU; a thread sleeping in <code>futex()</code> is <code>S</code> and costs nothing. That difference is the core of the spinlock vs mutex trade-off in <a href="#ch02">Ch 2</a>.</p></div>
+</section>
+
+<section id="ch01-switch" data-roles="th"><div class="sec-head"><h2>Context switches and scheduling</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A core can run one thread at a time. A context switch saves the running thread's state into its kernel record and loads another thread's state, so the core continues where the other thread left off.</p>
+
+<h3 id="ch01-switch-steps">What happens during a switch</h3>
+<ol>
+<li><b>Entry to the kernel.</b> Something transfers control: a timer interrupt (preemption), a blocking system call (<code>read</code>, <code>futex</code> wait), or a voluntary <code>sched_yield</code>.</li>
+<li><b>Save state.</b> The user registers are already on the thread's kernel stack from the entry path. The scheduler saves the callee-saved registers and stack pointer into the task, and the FP/SIMD state is saved as well (on x86-64 Linux it is restored lazily, on the way back to user space).</li>
+<li><b>Pick the next task.</b> The scheduler chooses from this CPU's run queue.</li>
+<li><b>Switch memory if needed.</b> If the next task belongs to a different process, the kernel loads its page-table root (CR3 on x86-64, TTBR0 on arm64). Inside the same process this step is skipped.</li>
+<li><b>Restore state</b> of the next task, including its TLS base register, and return to user space.</li>
+</ol>
+
+<h3 id="ch01-switch-cost">What it costs</h3>
+<p>The direct cost, the instructions above, is on the order of a microsecond on current hardware (much more with KPTI page-table isolation or with large SIMD state). The indirect cost is usually larger: the next thread finds caches, branch predictors and the TLB full of the previous thread's data.</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Thread switch (same process)</th><th>Process switch</th></tr></thead>
+<tbody>
+<tr><td>Registers saved and restored</td><td>yes</td><td>yes</td></tr>
+<tr><td>Page-table root reloaded</td><td>no</td><td>yes</td></tr>
+<tr><td>TLB</td><td>stays valid</td><td>flushed, or kept but tagged with PCID/ASID so old entries are ignored</td></tr>
+<tr><td>Cache contents</td><td>often useful: same code, shared data</td><td>mostly cold for the new process</td></tr>
+</tbody></table></div>
+<p>The TLB caches virtual-to-physical translations. Without address-space tags, loading a new page-table root must discard them, and the new process then takes page-walk misses until the TLB warms up. PCID (x86-64) and ASID (arm64) tags reduce this, but a thread switch inside one process still avoids the question entirely.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p>
+<p>"Threads switch faster because they do not save registers" is wrong: both save the same register state. The saving is in the memory context (no page-table switch, no TLB invalidation) and in warmer caches. And user-level switches (coroutines, green threads) are faster still because they never enter the kernel.</p></div>
+
+<h3 id="ch01-scheduling">Scheduling basics that matter for threads</h3>
+<ul>
+<li><b>The unit is the thread.</b> A process with 8 threads competes with 8 entries; Linux has no per-process fairness unless you use cgroups.</li>
+<li><b>Policies.</b> <code>SCHED_OTHER</code> (the default, time-shared fair scheduling with nice values -20 to 19; CFS until Linux 6.6, EEVDF since), <code>SCHED_FIFO</code> and <code>SCHED_RR</code> (fixed real-time priorities 1 to 99, which always beat <code>SCHED_OTHER</code>), <code>SCHED_DEADLINE</code>, <code>SCHED_BATCH</code> and <code>SCHED_IDLE</code>.</li>
+<li><b>Preemption.</b> A normal thread runs until it blocks, yields or uses up its slice (a few milliseconds). A <code>SCHED_FIFO</code> thread runs until it blocks or a higher-priority thread wakes, so a busy loop at real-time priority can starve its whole core.</li>
+<li><b>Affinity.</b> <code>pthread_setaffinity_np</code> or <code>sched_setaffinity</code> pins a thread to chosen cores. Low-latency systems pin one busy-polling thread per isolated core so it never migrates or gets preempted.</li>
+<li><b>Oversubscription.</b> More runnable threads than cores means time slicing: total throughput does not rise, and switching, cache thrashing and lock holder preemption make it fall. This is the main argument for thread pools.</li>
+</ul>
+</section>
+
+<section id="ch01-tls" data-roles="th"><div class="sec-head"><h2>Thread-local storage</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A <code>thread_local</code> variable has one instance per thread. Each thread reads and writes its own copy with no synchronisation, because no other thread can name that copy.</p>
+<pre data-run="ch04-tls" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">thread_local</span> <span class="hljs-type">int</span> calls = <span class="hljs-number">0</span>;   <span class="hljs-comment">// one instance per thread, zero-initialised in each</span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">work</span><span class="hljs-params">(<span class="hljs-type">int</span> n)</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) ++calls;   <span class="hljs-comment">// no lock needed: nobody else sees this copy</span>
+    <span class="hljs-keyword">return</span> calls;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> r1 = <span class="hljs-number">0</span>, r2 = <span class="hljs-number">0</span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">([&amp;] { r1 = work(<span class="hljs-number">3</span>); })</span></span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">b</span><span class="hljs-params">([&amp;] { r2 = work(<span class="hljs-number">5</span>); })</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;a: &quot;</span> &lt;&lt; r1 &lt;&lt; <span class="hljs-string">&quot;, b: &quot;</span> &lt;&lt; r2 &lt;&lt; <span class="hljs-string">&quot;, main: &quot;</span> &lt;&lt; calls &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch04-tls">a: 3, b: 5, main: 0</pre>
+<h3 id="ch01-tls-rules">Rules</h3>
+<ul>
+<li><code>thread_local</code> can apply to namespace-scope variables, static data members and block-scope variables (where it implies <code>static</code>). Storage duration is "thread": the object lives as long as its thread.</li>
+<li><b>Initialisation.</b> Constant-initialised values are set up when the thread starts. Dynamically initialised namespace-scope ones are initialised before their first odr-use in that thread (implementations do it lazily), and block-scope ones the first time control passes the declaration in that thread.</li>
+<li><b>Destruction.</b> At thread exit, in reverse order of construction, before the thread's completion is signalled to <code>join()</code>. Thread-locals of the main thread are destroyed when <code>main</code> returns or <code>exit</code> is called, before static objects.</li>
+<li><b>Implementation.</b> The TLS base lives in a register (FS on x86-64, TPIDR_EL0 on arm64). Access in the main executable is one load at a fixed offset; access across shared libraries may call <code>__tls_get_addr</code>, and dynamically initialised variables add a wrapper that checks an initialisation flag.</li>
+<li><b>Uses:</b> per-thread caches and allocators (glibc's tcache, jemalloc arenas), random number engines, <code>errno</code>, per-thread counters merged later (the coding drill below), and avoiding locks on hot paths.</li>
+</ul>
+<div class="callout trap"><p class="callout-title">Interview trap</p>
+<p>Thread pools reuse threads, so a <code>thread_local</code> survives between unrelated tasks. A cache keyed on "the current request" leaks data from one task to the next unless the task resets it. And the address of a <code>thread_local</code> handed to another thread is a plain pointer: the other thread can use it (it is shared memory), and it dangles once the owner exits.</p></div>
+</section>
+
+<section id="ch01-api" data-roles="th"><div class="sec-head"><h2>pthreads, std::thread and std::jthread</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch01-pthreads">The POSIX API</h3>
+<p>POSIX threads are a C API. The thread function has the fixed type <code>void* (*)(void*)</code>, so arguments travel through a <code>void*</code> and the result comes back through <code>pthread_join</code>. Functions return an error number; they do not set <code>errno</code>.</p>
+<pre data-run="ch04-pthread" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;pthread.h&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Job</span> {
+    <span class="hljs-type">int</span> a, b;
+    <span class="hljs-type">int</span> sum;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-title">add</span><span class="hljs-params">(<span class="hljs-type">void</span>* arg)</span> </span>{          <span class="hljs-comment">// the only signature pthreads accepts</span>
+    <span class="hljs-keyword">auto</span>* job = <span class="hljs-built_in">static_cast</span>&lt;Job*&gt;(arg);
+    job-&gt;sum = job-&gt;a + job-&gt;b;
+    <span class="hljs-keyword">return</span> job;                        <span class="hljs-comment">// returned pointer is collected by pthread_join</span>
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Job job{<span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">0</span>};
+    <span class="hljs-type">pthread_t</span> tid;
+    <span class="hljs-keyword">if</span> (<span class="hljs-type">int</span> rc = <span class="hljs-built_in">pthread_create</span>(&amp;tid, <span class="hljs-literal">nullptr</span>, add, &amp;job); rc != <span class="hljs-number">0</span>) {
+        std::<span class="hljs-built_in">fprintf</span>(stderr, <span class="hljs-string">&quot;pthread_create: %s\n&quot;</span>, std::<span class="hljs-built_in">strerror</span>(rc));   <span class="hljs-comment">// errors are returned, not errno</span>
+        <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    }
+    <span class="hljs-type">void</span>* result = <span class="hljs-literal">nullptr</span>;
+    <span class="hljs-built_in">pthread_join</span>(tid, &amp;result);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sum = %d, same object: %d\n&quot;</span>, <span class="hljs-built_in">static_cast</span>&lt;Job*&gt;(result)-&gt;sum, result == &amp;job);
+}</code></pre>
+<pre class="out" data-out="ch04-pthread">sum = 5, same object: 1</pre>
+<ul>
+<li><code>pthread_create(&amp;tid, attr, fn, arg)</code>: starts the thread. <code>attr</code> sets stack size, detach state and scheduling policy.</li>
+<li><code>pthread_join(tid, &amp;ret)</code>: blocks until the thread ends and frees its resources. Joining twice, or joining a detached thread, is undefined.</li>
+<li><code>pthread_detach(tid)</code>: resources are freed automatically when the thread ends; nobody can join it any more.</li>
+<li><code>pthread_exit(ret)</code>: ends the calling thread. Called from <code>main</code>, it ends the main thread but keeps the process alive until the other threads finish.</li>
+<li><code>pthread_self()</code>, <code>pthread_equal()</code>, <code>pthread_key_create()</code> (the older dynamic TLS API).</li>
+</ul>
+
+<h3 id="ch01-std-thread">std::thread</h3>
+<p><code>std::thread</code> wraps one OS thread. The constructor takes any callable plus arguments and starts the thread before it returns. The object is a move-only handle; the thread itself is not the object.</p>
+<pre data-run="ch04-stdthread" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">greet</span><span class="hljs-params">(std::string name, <span class="hljs-type">int</span> times, std::string&amp; out)</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; times; ++i) out += <span class="hljs-string">&quot;hi &quot;</span> + name + <span class="hljs-string">&quot;; &quot;</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::string out;
+    <span class="hljs-function">std::thread <span class="hljs-title">t</span><span class="hljs-params">(greet, <span class="hljs-string">&quot;ada&quot;</span>, <span class="hljs-number">2</span>, std::ref(out))</span></span>;   <span class="hljs-comment">// args are copied, std::ref opts out</span>
+    t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; out &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+
+    <span class="hljs-type">int</span> answer = <span class="hljs-number">0</span>;
+    <span class="hljs-function">std::jthread <span class="hljs-title">j</span><span class="hljs-params">([&amp;answer] { answer = <span class="hljs-number">42</span>; })</span></span>;      <span class="hljs-comment">// C++20: joins in its destructor</span>
+    j.<span class="hljs-built_in">join</span>();                                        <span class="hljs-comment">// or let the destructor do it</span>
+    std::cout &lt;&lt; <span class="hljs-string">&quot;answer = &quot;</span> &lt;&lt; answer &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch04-stdthread">hi ada; hi ada; 
+answer = 42</pre>
+<ul>
+<li><b>joinable()</b> is true from construction until <code>join()</code> or <code>detach()</code>, or until the handle is moved from. A default-constructed thread is not joinable.</li>
+<li><b>join()</b> waits for the thread to finish. Everything the thread did happens-before <code>join()</code> returns, so results written by the thread can be read afterwards without a lock.</li>
+<li><b>detach()</b> lets the thread run on alone; the handle becomes empty. You lose every way of knowing when it finishes.</li>
+<li><b>Destructor:</b> if the thread is still joinable, <code>~thread()</code> calls <code>std::terminate()</code>. Move assignment onto a joinable thread does the same.</li>
+</ul>
+<div class="callout key"><p class="callout-title">Know this cold</p>
+<p>Destroying a joinable <code>std::thread</code> calls <code>std::terminate</code>. The committee rejected both implicit choices: an implicit join can hang during exception unwinding, and an implicit detach leaves a thread running with references to destroyed locals. C++20's <code>std::jthread</code> picks join, made safe by asking the thread to stop first.</p></div>
+
+<h3 id="ch01-passing-args">Passing arguments</h3>
+<p>The constructor <b>decay-copies</b> the callable and every argument into storage owned by the new thread (this copy happens in the calling thread), then invokes the callable with those copies as rvalues. Three consequences:</p>
+<ol>
+<li>A parameter of type <code>const T&amp;</code> binds to the internal copy, never to your original. Use <code>std::ref</code> or <code>std::cref</code> to pass a reference, and then you own the lifetime problem.</li>
+<li>A parameter of type <code>T&amp;</code> does not compile without <code>std::ref</code>, because an rvalue cannot bind to a non-const lvalue reference.</li>
+<li>Implicit conversions (for example <code>char*</code> to <code>std::string</code>) happen in the new thread, possibly after the source buffer is gone. Convert explicitly before the call.</li>
+</ol>
+<p>Lambdas follow their capture list instead: <code>[=]</code> copies when the lambda is created, <code>[&amp;]</code> captures references. Capturing a loop variable or a local by reference in a thread that may outlive it is the most common thread bug in interviews.</p>
+
+<h3 id="ch01-jthread">std::jthread (C++20)</h3>
+<p><code>std::jthread</code> behaves like <code>std::thread</code> with two additions. Its destructor calls <code>request_stop()</code> and then <code>join()</code>, so it can never terminate the program. And if the callable accepts a <code>std::stop_token</code> as its first parameter, the jthread passes one in, giving a standard cooperative cancellation channel (<code>stop_requested()</code>, <code>std::stop_callback</code>, and <code>condition_variable_any::wait</code> overloads that wake on a stop request).</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p>
+<p>A stop request is only a flag. A jthread whose function never checks its token, or is blocked in a plain <code>read()</code>, still makes the destructor wait forever. Cancellation is cooperative in C++; there is no portable way to kill a thread.</p></div>
+
+<h3 id="ch01-hw-conc">hardware_concurrency and stack size</h3>
+<p><code>std::thread::hardware_concurrency()</code> returns a hint: the number of hardware threads the implementation knows about, or 0 if it cannot tell. On Linux, libstdc++ uses <code>get_nprocs()</code>, the online CPU count, which ignores CPU affinity masks and container CPU quotas. Treat it as an upper bound, clamp 0 to 1, and prefer <code>sched_getaffinity</code> when it matters.</p>
+<p><code>std::thread</code> has no way to set the stack size. glibc uses the <code>RLIMIT_STACK</code> soft limit (usually 8 MiB) for new threads, while macOS gives secondary threads 512 KiB. Use <code>pthread_attr_setstacksize</code> through the native API when you need control. The memory is virtual and committed page by page, so many threads cost address space more than RAM.</p>
+</section>
+
+<section id="ch01-pools-fork" data-roles="th"><div class="sec-head"><h2>Thread pools, fork, signals and green threads</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch01-pools">Why thread pools</h3>
+<p>Creating a thread costs a system call, a stack mapping and scheduler bookkeeping (tens of microseconds). A thread per request also lets the thread count grow with load, which leads to oversubscription and memory pressure. A <b>thread pool</b> creates a fixed set of workers once; producers push tasks into a shared queue and workers pop and run them. Benefits: creation cost paid once, concurrency bounded at about the core count, and a natural place for back-pressure and shutdown. The pool's queue is a producer-consumer problem solved with a mutex and condition variable (<a href="#ch03">Ch 3</a>); the coding section builds one.</p>
+<p>Sizing rule of thumb: about the number of cores for CPU-bound tasks; more for tasks that block on I/O, roughly cores × (1 + wait time / compute time).</p>
+
+<h3 id="ch01-fork-mt">fork() in a multithreaded process</h3>
+<p><code>fork()</code> copies the whole address space but creates only <b>one</b> thread in the child: a copy of the caller. Every other thread vanishes in the child, mid-instruction, without running destructors or unlocking anything. Any mutex another thread held at the moment of the fork (including the ones inside <code>malloc</code>, <code>printf</code> or the dynamic loader) stays locked forever in the child.</p>
+<ul>
+<li>POSIX says that after <code>fork()</code> in a multithreaded process, the child may only call async-signal-safe functions until it calls <code>exec</code>. <code>fork</code> then <code>exec</code> immediately (or <code>posix_spawn</code>) is safe; doing real work in the child is not.</li>
+<li><code>pthread_atfork(prepare, parent, child)</code> lets a library take its locks before the fork and release them in both processes afterwards. glibc does this for <code>malloc</code>, which is why <code>malloc</code> usually works in such a child, but you cannot rely on it for other libraries.</li>
+<li>Unflushed stdio buffers are copied too, so buffered output can be printed twice (see the drills).</li>
+</ul>
+
+<h3 id="ch01-signals">Signals and threads, briefly</h3>
+<ul>
+<li>Signal <b>handlers</b> are per process; the signal <b>mask</b> is per thread (<code>pthread_sigmask</code>, never <code>sigprocmask</code> in threaded code).</li>
+<li>A process-directed signal (<code>kill</code>, Ctrl-C) is delivered to one arbitrary thread that does not block it. A synchronous fault (<code>SIGSEGV</code>, <code>SIGFPE</code>) goes to the thread that caused it. <code>pthread_kill</code> targets one thread.</li>
+<li>The robust pattern: block the signals in <code>main</code> before creating threads (new threads inherit the mask), then dedicate one thread to <code>sigwait</code> and handle signals as ordinary events there.</li>
+<li>Handlers may only call async-signal-safe functions: no <code>malloc</code>, no locks, no <code>std::cout</code>. Setting a <code>volatile std::sig_atomic_t</code> or a lock-free atomic flag is the safe minimum.</li>
+</ul>
+
+<h3 id="ch01-green-threads">Green threads and coroutines</h3>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>OS thread</th><th>Green thread / fiber (stackful)</th><th>C++20 coroutine (stackless)</th></tr></thead>
+<tbody>
+<tr><td>Scheduled by</td><td>kernel, preemptive</td><td>user-space runtime, usually cooperative</td><td>your code or an executor, cooperative at <code>co_await</code></td></tr>
+<tr><td>State kept in</td><td>full stack (MiB reserved) + kernel task</td><td>its own small stack (KiB, sometimes growable)</td><td>a heap frame holding only locals that live across suspension points</td></tr>
+<tr><td>Switch cost</td><td>about 1 µs plus cache effects</td><td>tens of ns</td><td>a function call</td></tr>
+<tr><td>Parallel on many cores</td><td>yes</td><td>only with M:N carriers</td><td>only if resumed on several threads</td></tr>
+<tr><td>Blocking syscall</td><td>blocks that thread only</td><td>blocks the carrier unless the runtime wraps I/O</td><td>blocks the thread running it</td></tr>
+<tr><td>Can suspend in a nested call</td><td>yes</td><td>yes</td><td>no: only the coroutine body itself can <code>co_await</code></td></tr>
+</tbody></table></div>
+<p>Coroutines are a concurrency tool, not a parallelism tool. They let one thread interleave thousands of I/O-bound tasks; you still need threads to use more than one core, and once a coroutine is resumed on another thread all the data-race rules apply again.</p>
+</section>
+
+<section id="ch01-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>List what threads of one process share and what each thread has privately.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Shared: the address space (code, globals, heap, memory mappings), file descriptors, cwd, signal handlers, pid, credentials and limits. Private: registers including PC and SP, the stack, thread-local storage (including <code>errno</code>), the signal mask, the thread id and scheduling attributes.</p>
+    <p><b>Why.</b> Linux creates threads with <code>clone(CLONE_VM | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD | ...)</code>, so the resource objects are shared by reference and only the task's execution context is new. The common mistake is to say "each thread has its own heap". There is one heap; allocators keep per-thread caches (glibc tcache and arenas) for speed, but memory allocated by one thread can be freed by another. Another subtle point: a stack is "private" only by convention. Another thread can read and write it through a pointer.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why is a context switch between two threads of the same process usually cheaper than a switch between two processes?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The register save and restore is the same. The thread switch skips loading a new page-table root, so the TLB stays valid, and the new thread often finds useful code and data already in the caches.</p>
+    <p><b>Why.</b> A process switch writes CR3 (x86-64) or TTBR0 (arm64). Without PCID or ASID tags that flushes the TLB, and even with tags the new process has few entries cached and takes page walks. Most of the measured cost of a switch is this indirect cache and TLB warm-up, not the switch code. The wrong answer is "threads have fewer registers to save".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>On Linux, what do <code>getpid()</code> and <code>gettid()</code> return in a second thread, and does the scheduler know which tasks form a process?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>getpid()</code> returns the thread group id, the same as in <code>main</code>. <code>gettid()</code> returns the task's own id, which differs. The scheduler schedules tasks individually and does not care about the grouping (apart from cgroups and group scheduling).</p>
+    <p><b>Why.</b> Every Linux thread is a <code>task_struct</code>. <code>CLONE_THREAD</code> places the new task in the caller's thread group, and the group's id (the tgid, equal to the first thread's tid) is what POSIX calls the pid. People who learned from LinuxThreads-era material say each thread has its own pid; that was true before NPTL (glibc 2.3, 2003) and broke POSIX semantics such as signals sent to the process.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Compare the N:1, 1:1 and M:N threading models. Which does <code>std::thread</code> use on Linux?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> N:1 puts all user threads on one kernel thread: cheap switches, but no parallelism and one blocking call stalls everything. 1:1 gives every user thread a kernel thread: true parallelism and per-thread blocking, at kernel cost. M:N multiplexes many user threads on a pool of kernel threads: cheap and parallel, but the runtime is complex. <code>std::thread</code> on Linux is 1:1 (glibc NPTL).</p>
+    <p><b>Why.</b> In N:1 the kernel sees one thread, so it cannot run two of them at once and cannot know that a user thread blocked. M:N (Go, Java virtual threads) solves this by converting blocking I/O into non-blocking calls plus a scheduler park, and by moving goroutines off a carrier stuck in a syscall. A trap: M:N does not remove the need for locks. Two goroutines on two carriers race exactly like two OS threads.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why does destroying a joinable <code>std::thread</code> call <code>std::terminate</code> instead of joining or detaching? How does C++20 change this?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Both automatic choices are dangerous, so the standard makes forgetting a hard error. <code>std::jthread</code> (C++20) chooses to request a stop and join in its destructor.</p>
+    <p><b>Why.</b> Implicit detach would leave a running thread that may still reference locals of the scope being destroyed: silent use-after-free. Implicit join can deadlock or hang during stack unwinding, for example when the thread waits for something the unwinding code would have done. <code>std::terminate</code> forces the programmer to decide. <code>jthread</code> makes join safe enough by first calling <code>request_stop()</code>, which a cooperative worker checks through its <code>stop_token</code>. The same terminate rule applies to move assignment onto a joinable thread (<code>[thread.thread.assign]</code>). Candidates often say "the destructor joins": that is <code>jthread</code>, not <code>std::thread</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A program detaches a worker thread and then <code>main</code> returns while the worker is still running. What happens to the worker, and what can go wrong just before it dies?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Returning from <code>main</code> calls <code>exit()</code>, which runs static destructors and then ends the process with <code>exit_group</code>, killing every thread. The worker dies mid-instruction. Before that, while static destructors run, the worker may still be using those objects: undefined behaviour.</p>
+    <p><b>Why.</b> Detach does not make a thread independent of its process. The classic crash is a detached logger thread writing to <code>std::cout</code> or a global logger while <code>exit</code> destroys them. Only <code>pthread_exit</code> from <code>main</code> (or <code>quick_exit</code> after the main thread reaches a safe point) keeps the process alive or skips destructors. The wrong answer is "the detached thread keeps running in the background". That is only true while the process lives.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can a thread join itself? What happens if you call <code>join()</code> twice on the same <code>std::thread</code>?</p>
+<pre data-run="ch04-self-join"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;latch&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;system_error&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::thread t;
+<span class="hljs-function"><span class="hljs-type">static</span> std::latch <span class="hljs-title">assigned</span><span class="hljs-params">(<span class="hljs-number">1</span>)</span>, <span class="hljs-title">tried</span><span class="hljs-params">(<span class="hljs-number">1</span>)</span></span>;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    t = std::<span class="hljs-built_in">thread</span>([] {
+        assigned.<span class="hljs-built_in">wait</span>();   <span class="hljs-comment">// make sure t is fully assigned before the worker reads it</span>
+        <span class="hljs-keyword">try</span> {
+            t.<span class="hljs-built_in">join</span>();      <span class="hljs-comment">// the worker tries to wait for itself</span>
+        } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::system_error&amp; e) {
+            std::cout &lt;&lt; <span class="hljs-string">&quot;self join: &quot;</span> &lt;&lt; (e.<span class="hljs-built_in">code</span>() == std::errc::resource_deadlock_would_occur) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+        }
+        tried.<span class="hljs-built_in">count_down</span>();
+    });
+    assigned.<span class="hljs-built_in">count_down</span>();
+    tried.<span class="hljs-built_in">wait</span>();          <span class="hljs-comment">// never join one thread from two threads at once</span>
+    t.<span class="hljs-built_in">join</span>();
+    <span class="hljs-keyword">try</span> {
+        t.<span class="hljs-built_in">join</span>();          <span class="hljs-comment">// already joined: no longer joinable</span>
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::system_error&amp; e) {
+        std::cout &lt;&lt; <span class="hljs-string">&quot;join twice: &quot;</span> &lt;&lt; (e.<span class="hljs-built_in">code</span>() == std::errc::invalid_argument) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+}</code></pre>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch04-self-join">self join: 1
+join twice: 1</pre>
+    <p><b>Answer.</b> No. A thread waiting for its own termination could never finish, so <code>std::thread::join()</code> throws <code>std::system_error</code> with <code>resource_deadlock_would_occur</code> when <code>get_id() == std::this_thread::get_id()</code>. A second <code>join()</code> throws with <code>invalid_argument</code>, because after the first join the handle is no longer joinable.</p>
+    <p><b>Why.</b> Both are specified error conditions in <code>[thread.thread.member]</code>, so they are defined behaviour for <code>std::thread</code> (pthreads returns <code>EDEADLK</code> for a self-join, while joining an already joined <code>pthread_t</code> is undefined, because the id may already belong to a new thread). The common wrong answers are "it deadlocks forever" for the self-join and "the second join returns immediately". The two latches matter. Without <code>assigned</code>, the worker could read <code>t</code> while <code>main</code> is still move-assigning it, which is a data race. Without <code>tried</code>, <code>main</code> could already be inside <code>join()</code> when the worker calls it, and two simultaneous joins of one thread are undefined (macOS then reports <code>EINVAL</code> instead of <code>EDEADLK</code>). (ThreadSanitizer's <code>pthread_join</code> interceptor aborts on a deliberate self-join, so this program is run without it.)</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When is a <code>thread_local</code> variable constructed and destroyed, and how does a thread find its copy?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Each thread gets its own instance. Constant-initialised ones are ready when the thread starts; dynamically initialised ones are constructed before first use in that thread (block-scope ones when control first passes the declaration). They are destroyed at thread exit in reverse order, before <code>join()</code> returns. The thread finds its copy through a per-thread base register (FS on x86-64, TPIDR_EL0 on arm64) plus an offset.</p>
+    <p><b>Why.</b> The ELF TLS model lays out a template that the loader copies for each new thread. Variables defined in the main executable use a fixed offset from the register (one instruction); shared libraries loaded later may need <code>__tls_get_addr</code>. A common mistake is to think <code>thread_local</code> implies a lock or atomic: it needs neither, because only one thread can name each instance.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can a thread pass a pointer to one of its stack variables to another thread? Is that safe?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes, it compiles and works: all stacks are in the shared address space. It is safe only while the variable is alive and the accesses are synchronised. Once the owning function returns or the thread exits, the pointer dangles.</p>
+    <p><b>Why.</b> The OS does not protect one thread's stack from another; there is only a guard page below each stack to catch overflow. The standard library itself relies on this: <code>std::ref(local)</code> passed to a thread that is joined before the scope ends is fine. The bug is the lifetime, not the address: detaching such a thread, or returning before join, is the classic dangling reference.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What does <code>std::thread::hardware_concurrency()</code> return, and why can it be the wrong number for sizing a pool?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A hint: the number of hardware threads (logical CPUs) the implementation can see, or 0 if unknown. In a container with a CPU quota, or a process pinned to a subset of cores, it still reports the machine's online CPUs.</p>
+    <p><b>Why.</b> The standard only says "number of concurrent threads supported... should be considered only a hint". libstdc++ uses <code>get_nprocs()</code>; it does not look at <code>sched_getaffinity</code> or cgroup <code>cpu.max</code>. It also counts SMT siblings, which share execution units. Always handle 0, and for CPU-bound work consider the affinity mask; for I/O-bound work more threads than cores is normal.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A multithreaded server calls <code>fork()</code> to run some work in a child, and the child sometimes hangs forever in <code>malloc</code> or a logging call. Why, and what are the safe options?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The child contains only a copy of the forking thread. If another thread held a lock (in the allocator, the logger, stdio, the loader) at the moment of the fork, the lock's memory is copied in the locked state and no thread exists in the child to release it. Safe options: call <code>exec</code> straight after <code>fork</code> (or use <code>posix_spawn</code>), fork before creating threads, or use <code>pthread_atfork</code> handlers to quiesce your own locks.</p>
+    <p><b>Why.</b> POSIX restricts the child of a multithreaded process to async-signal-safe functions until <code>exec</code>. glibc registers atfork handlers for <code>malloc</code>, which is why it often works, but third-party libraries usually do not. The wrong answer is "fork copies all threads": only Solaris had a <code>forkall</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>A process receives <code>SIGTERM</code>. Which thread runs the handler, and what is the recommended way to handle signals in a multithreaded program?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Any one thread that does not block <code>SIGTERM</code>; the choice is up to the kernel. The recommended pattern is to block the signals with <code>pthread_sigmask</code> in <code>main</code> before creating threads (the mask is inherited), then have one dedicated thread call <code>sigwait</code> and turn each signal into a normal event, such as setting a stop flag or notifying a condition variable.</p>
+    <p><b>Why.</b> Handlers are shared by the process, masks are per thread, and a handler interrupts whatever the chosen thread was doing, possibly while it holds a lock. Inside a handler only async-signal-safe functions are allowed, so locking a mutex or calling <code>notify_one</code> there can deadlock or corrupt state. Synchronous signals like <code>SIGSEGV</code> are the exception: they go to the faulting thread.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>"C++20 coroutines are lightweight threads, so I can use them instead of a thread pool to speed up a CPU-bound computation." What is wrong with that statement?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Coroutines give concurrency, not parallelism. A coroutine runs on whichever thread resumes it; with one thread, a thousand coroutines still use one core. To speed up CPU-bound work you need several OS threads (often a pool that resumes coroutines).</p>
+    <p><b>Why.</b> C++20 coroutines are stackless: a coroutine frame stores locals that cross a suspension point, and <code>co_await</code> returns control to the caller or resumer. There is no scheduler and no preemption in the language. They shine for I/O-bound work where most tasks wait. Also, a coroutine that calls a blocking function blocks its whole thread, and a coroutine resumed on a different thread can see <code>thread_local</code> values change across a <code>co_await</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A program creates 10,000 threads, each doing a tiny recursive computation, and fails with "Resource temporarily unavailable" although only a few GB of RAM are in use. What limits apply?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Thread creation fails with <code>EAGAIN</code> (thrown as <code>std::system_error</code> by <code>std::thread</code>) when a limit is hit: the per-user process/task limit (<code>RLIMIT_NPROC</code>, <code>ulimit -u</code>), <code>/proc/sys/kernel/threads-max</code>, cgroup <code>pids.max</code> (common in containers), the number of memory mappings, or virtual address space for the stacks (8 MiB reserved each by default).</p>
+    <p><b>Why.</b> On Linux, threads count as tasks against the same limits as processes. Stack memory is reserved virtually and committed lazily, so RSS stays low while the reservation can still exhaust a limited address space or <code>vm.max_map_count</code> (each stack plus guard page is a mapping). The real fix is a thread pool sized near the core count; shrinking stacks with <code>pthread_attr_setstacksize</code> only treats the symptom.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why use a thread pool instead of creating a thread per task?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A pool pays thread creation once, bounds the number of runnable threads (avoiding oversubscription), keeps caches and thread-locals warm, and gives one place for queueing, back-pressure and orderly shutdown.</p>
+    <p><b>Why.</b> Each creation is a <code>clone</code> system call, a stack mapping and scheduler work, tens of microseconds, which is more than many tasks take. With one thread per request, a load spike creates thousands of threads that thrash the scheduler and memory. The pitfalls a good answer also names: tasks that block on other tasks in the same pool can deadlock it when every worker waits, and long blocking I/O tasks starve CPU tasks unless they get a separate pool.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch01-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print? Each thread is joined before the next starts.</p>
+<pre data-run="ch04-args-copy" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> g = <span class="hljs-number">0</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">check</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">int</span>&amp; r)</span> </span>{
+    std::cout &lt;&lt; (&amp;r == &amp;g ? <span class="hljs-string">&quot;same object&quot;</span> : <span class="hljs-string">&quot;a copy&quot;</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">t1</span><span class="hljs-params">(check, g)</span></span>;
+    t1.<span class="hljs-built_in">join</span>();
+    <span class="hljs-function">std::thread <span class="hljs-title">t2</span><span class="hljs-params">(check, std::cref(g))</span></span>;
+    t2.<span class="hljs-built_in">join</span>();
+    <span class="hljs-function">std::thread <span class="hljs-title">t3</span><span class="hljs-params">([] { check(g); })</span></span>;
+    t3.<span class="hljs-built_in">join</span>();
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch04-args-copy">a copy
+same object
+same object</pre>
+    <p><b>Answer.</b> Only the first call sees a copy.</p>
+    <p><b>Why.</b> <code>std::thread t1(check, g)</code> decay-copies <code>g</code> into the thread's own storage and the <code>const int&amp;</code> binds to that copy (<code>[thread.thread.constr]</code>). <code>std::cref(g)</code> copies a <code>reference_wrapper</code>, which converts back to a reference to <code>g</code>. The lambda calls <code>check(g)</code> directly, so no copy is involved. People expect "same object" for the first line because the parameter is a reference; the reference binds to the thread's copy.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this not compile, and what are the two fixes?</p>
+<pre data-run="ch04-ref-error" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">increment</span><span class="hljs-params">(<span class="hljs-type">int</span>&amp; x)</span> </span>{ ++x; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> n = <span class="hljs-number">0</span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">t</span><span class="hljs-params">(increment, n)</span></span>;
+    t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; n &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The thread stores a copy of <code>n</code> and calls <code>increment</code> with that copy as an rvalue, and an rvalue <code>int</code> cannot bind to <code>int&amp;</code>. GCC reports "std::thread arguments must be invocable after conversion to rvalues". Fix with <code>std::thread t(increment, std::ref(n));</code> or with a lambda <code>std::thread t([&amp;n] { increment(n); });</code>. Either way it prints 1.</p>
+    <p><b>Why.</b> The library deliberately passes rvalues so that a function taking <code>int&amp;</code> cannot silently modify a temporary copy, which would look like it worked but leave <code>n</code> at 0. The compile error is a feature. The common wrong answer is "it compiles and prints 1 because the parameter is a reference": the reference would bind to the thread's internal copy, if it were allowed to bind at all.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The author expects <code>sum = 6</code>. What is wrong? (The sum is atomic.)</p>
+<pre data-run="ch04-loop-race" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; sum{<span class="hljs-number">0</span>};
+    std::vector&lt;std::thread&gt; threads;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">4</span>; ++i)
+        threads.<span class="hljs-built_in">emplace_back</span>([&amp;] { sum += i; });   <span class="hljs-comment">// expected 0+1+2+3 = 6</span>
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : threads) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;sum = &quot;</span> &lt;&lt; sum &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The lambda captures the loop variable <code>i</code> by reference. Each thread reads <code>i</code> whenever it gets to run, while <code>main</code> keeps incrementing it: a data race on <code>i</code>, so undefined behaviour. In practice the printed sum varies from run to run, because a thread that starts late sees a larger <code>i</code> (often 4). ThreadSanitizer reports the race. Fix: capture by value, <code>[&amp;sum, i] { sum += i; }</code>.</p>
+    <p><b>Why.</b> Making <code>sum</code> atomic protects only <code>sum</code>. The read of <code>i</code> in the thread and the write <code>++i</code> in <code>main</code> are unsynchronised conflicting accesses, which is a data race by definition (<code>[intro.races]</code>). After the loop <code>i</code> is also out of scope, so a late thread reads a dead variable. The output is not shown because it is nondeterministic.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print?</p>
+<pre data-run="ch04-move" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">()</span> </span>{}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">t1</span><span class="hljs-params">(work)</span></span>;
+    std::thread t2 = std::<span class="hljs-built_in">move</span>(t1);
+    std::cout &lt;&lt; t1.<span class="hljs-built_in">joinable</span>() &lt;&lt; t2.<span class="hljs-built_in">joinable</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    t1 = std::<span class="hljs-built_in">thread</span>(work);
+    std::cout &lt;&lt; t1.<span class="hljs-built_in">joinable</span>() &lt;&lt; t2.<span class="hljs-built_in">joinable</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    t1.<span class="hljs-built_in">join</span>();
+    t2.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; t1.<span class="hljs-built_in">joinable</span>() &lt;&lt; t2.<span class="hljs-built_in">joinable</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::thread t3;
+    std::cout &lt;&lt; t3.<span class="hljs-built_in">joinable</span>() &lt;&lt; (t3.<span class="hljs-built_in">get_id</span>() == std::thread::id{}) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch04-move">01
+11
+00
+01</pre>
+    <p><b>Answer.</b> <code>01</code>, <code>11</code>, <code>00</code>, <code>01</code>.</p>
+    <p><b>Why.</b> Moving transfers ownership of the OS thread, leaving <code>t1</code> empty (not joinable). Assigning a new thread to the empty <code>t1</code> is fine; had <code>t1</code> still been joinable, the move assignment would have called <code>std::terminate</code>. After <code>join()</code> both handles are empty. A default-constructed thread is not joinable and its id compares equal to <code>std::thread::id{}</code>, the "no thread" id.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The author expects <code>caught boom</code> and <code>end</code>. What actually happens?</p>
+<pre data-run="ch04-exc-terminate" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">()</span> </span>{}
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">risky</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;boom&quot;</span>); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-function">std::thread <span class="hljs-title">t</span><span class="hljs-params">(work)</span></span>;
+        <span class="hljs-built_in">risky</span>();
+        t.<span class="hljs-built_in">join</span>();
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) {
+        std::cout &lt;&lt; <span class="hljs-string">&quot;caught &quot;</span> &lt;&lt; e.<span class="hljs-built_in">what</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+    std::cout &lt;&lt; <span class="hljs-string">&quot;end\n&quot;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Nothing is printed and the program aborts: <code>risky()</code> throws, unwinding destroys <code>t</code> while it is still joinable, and <code>~thread()</code> calls <code>std::terminate</code>. libstdc++ prints "terminate called without an active exception" to stderr. (The snippet is tagged as not compared because it aborts.)</p>
+    <p><b>Why.</b> The <code>join()</code> after the throwing call is skipped. This is the main reason never to hold a raw <code>std::thread</code> across code that can throw. Fixes: use <code>std::jthread</code>, or an RAII joining guard (coding drill 2), or join in a catch block and rethrow. Candidates sometimes expect the catch block to run; it cannot, because terminate happens during unwinding before the handler is reached.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Both workers spin until stopped. What does this print, and in what order?</p>
+<pre data-run="ch04-jthread" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stop_token&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::jthread <span class="hljs-title">make</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* name)</span> </span>{
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">jthread</span>([name](std::stop_token st) {
+        <span class="hljs-keyword">while</span> (!st.<span class="hljs-built_in">stop_requested</span>()) std::this_thread::<span class="hljs-built_in">yield</span>();
+        std::cout &lt;&lt; name &lt;&lt; <span class="hljs-string">&quot; stopped\n&quot;</span>;
+    });
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::jthread a = <span class="hljs-built_in">make</span>(<span class="hljs-string">&quot;a&quot;</span>);
+    std::jthread b = <span class="hljs-built_in">make</span>(<span class="hljs-string">&quot;b&quot;</span>);
+    std::cout &lt;&lt; <span class="hljs-string">&quot;end of main\n&quot;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch04-jthread">end of main
+b stopped
+a stopped</pre>
+    <p><b>Answer.</b> <code>end of main</code>, then <code>b stopped</code>, then <code>a stopped</code>. The order is deterministic.</p>
+    <p><b>Why.</b> Neither worker can print before its stop is requested. Locals are destroyed in reverse order of construction, so <code>b</code>'s destructor runs first: <code>request_stop()</code> and then <code>join()</code>, which waits for "b stopped". Only then is <code>a</code> destroyed and stopped. With <code>std::thread</code> instead, the program would terminate at the end of <code>main</code>. Note that <code>make</code> returns the jthread by value; moving a jthread moves its stop state with it.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print? Watch when the thread-local object is created and destroyed.</p>
+<pre data-run="ch04-tls-dtor" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tracker</span> {
+    <span class="hljs-type">int</span> id;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Tracker</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span> std::cout &lt;&lt; <span class="hljs-string">&quot;ctor &quot;</span> &lt;&lt; id &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+    ~<span class="hljs-built_in">Tracker</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;dtor &quot;</span> &lt;&lt; id &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+};
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> next_id = <span class="hljs-number">0</span>;   <span class="hljs-comment">// touched by one thread at a time (the joins order them)</span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> Tracker&amp; <span class="hljs-title">tracker</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function"><span class="hljs-keyword">thread_local</span> Tracker <span class="hljs-title">t</span><span class="hljs-params">(++next_id)</span></span>;
+    <span class="hljs-keyword">return</span> t;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">([] {
+        <span class="hljs-type">int</span> x = tracker().id;
+        std::cout &lt;&lt; <span class="hljs-string">&quot;a uses &quot;</span> &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    })</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;joined a\n&quot;</span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">b</span><span class="hljs-params">([] {
+        <span class="hljs-type">int</span> x = tracker().id;
+        <span class="hljs-type">int</span> y = tracker().id;
+        std::cout &lt;&lt; <span class="hljs-string">&quot;b uses &quot;</span> &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; y &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    })</span></span>;
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;joined b\n&quot;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch04-tls-dtor">ctor 1
+a uses 1
+dtor 1
+joined a
+ctor 2
+b uses 2 2
+dtor 2
+joined b</pre>
+    <p><b>Answer.</b> Each thread constructs its own <code>Tracker</code> on first use and destroys it when the thread exits, before <code>join()</code> returns. Thread <code>b</code> calls <code>tracker()</code> twice but constructs only once. <code>main</code> never calls it, so no third object exists.</p>
+    <p><b>Why.</b> A block-scope <code>thread_local</code> is initialised the first time control passes its declaration in each thread, and destroyed at that thread's exit. The standard sequences thread-local destructors before the thread's completion, and completion synchronises with the return from <code>join()</code> (<code>[thread.thread.member]</code>), so "dtor 1" always precedes "joined a". The local variable <code>x</code> exists so that construction ("ctor") is printed on its own line; with C++17's left-to-right sequencing of <code>&lt;&lt;</code>, putting <code>tracker()</code> inside the output statement would print "a uses ctor 1".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The test harness captures stdout through a pipe. What does it see?</p>
+<pre data-run="ch04-fork-buffer"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/wait.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;start\n&quot;</span>);
+    <span class="hljs-type">pid_t</span> pid = fork();
+    <span class="hljs-keyword">if</span> (pid == <span class="hljs-number">0</span>) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;child\n&quot;</span>);
+        <span class="hljs-keyword">return</span> <span class="hljs-number">0</span>;              <span class="hljs-comment">// exit() flushes the child&#x27;s copy of the stdio buffer</span>
+    }
+    <span class="hljs-built_in">waitpid</span>(pid, <span class="hljs-literal">nullptr</span>, <span class="hljs-number">0</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;parent\n&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch04-fork-buffer">start
+child
+start
+parent</pre>
+    <p><b>Answer.</b> <code>start</code> appears twice. On a terminal you would see <code>start</code>, <code>child</code>, <code>parent</code>.</p>
+    <p><b>Why.</b> stdout is line buffered only on a terminal; on a pipe or file it is fully buffered, so <code>"start\n"</code> is still in the user-space buffer when <code>fork()</code> copies the address space. Each process flushes its own copy at exit. The child exits first (the parent waits for it), giving <code>start child</code>, then the parent prints <code>start parent</code>. Fix: <code>fflush(stdout)</code> before <code>fork()</code>, and use <code>_exit</code> in a child that should not flush inherited buffers. The same memory-copy rule is why locks held by other threads stay locked in the child (next drill).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Run this and it never prints "child got the lock". Why? (Tagged compile-only because it hangs.)</p>
+<pre data-run="ch04-fork-lock" data-mode="compile"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/wait.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-type">static</span> std::mutex m;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">holder</span><span class="hljs-params">([] {
+        std::lock_guard lk(m);
+        std::this_thread::sleep_for(std::chrono::seconds(<span class="hljs-number">1</span>));
+    })</span></span>;
+    std::this_thread::<span class="hljs-built_in">sleep_for</span>(std::chrono::<span class="hljs-built_in">milliseconds</span>(<span class="hljs-number">100</span>));
+    <span class="hljs-type">pid_t</span> pid = fork();
+    <span class="hljs-keyword">if</span> (pid == <span class="hljs-number">0</span>) {
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">lk</span><span class="hljs-params">(m)</span></span>;
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;child got the lock&quot;</span>);
+        _exit(<span class="hljs-number">0</span>);
+    }
+    <span class="hljs-built_in">waitpid</span>(pid, <span class="hljs-literal">nullptr</span>, <span class="hljs-number">0</span>);
+    holder.<span class="hljs-built_in">join</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;parent done&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The child deadlocks forever, and so does the parent in <code>waitpid</code>. At the fork, <code>holder</code> owns <code>m</code>. The child gets a copy of the mutex in the locked state but no copy of <code>holder</code>, so nobody will ever unlock it.</p>
+    <p><b>Why.</b> <code>fork()</code> duplicates only the calling thread. Locking a mutex in the child of a multithreaded process breaks the POSIX rule that only async-signal-safe functions may be called before <code>exec</code>. Fixes: fork before creating threads, <code>exec</code> immediately, or register <code>pthread_atfork</code> handlers that acquire <code>m</code> in "prepare" and release it in both "parent" and "child". The sleeps only make the timing reliable for the demonstration; they are not a synchronisation tool.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Sometimes this prints garbage or nothing. Explain the exact moment the bug happens. (Compile-only: the result is undefined.)</p>
+<pre data-run="ch04-dangling-buf" data-mode="compile"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">log_line</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; s)</span> </span>{ std::cout &lt;&lt; s &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">start_job</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{
+    <span class="hljs-type">char</span> buf[<span class="hljs-number">32</span>];
+    std::<span class="hljs-built_in">snprintf</span>(buf, <span class="hljs-keyword">sizeof</span> buf, <span class="hljs-string">&quot;job %d started&quot;</span>, id);
+    <span class="hljs-function">std::thread <span class="hljs-title">t</span><span class="hljs-params">(log_line, buf)</span></span>;
+    t.<span class="hljs-built_in">detach</span>();
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">start_job</span>(<span class="hljs-number">1</span>);
+    std::this_thread::<span class="hljs-built_in">sleep_for</span>(std::chrono::<span class="hljs-built_in">milliseconds</span>(<span class="hljs-number">100</span>));
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>std::thread</code> decay-copies the argument, and <code>buf</code> decays to a <code>char*</code>. The conversion from <code>char*</code> to <code>std::string</code> happens later, inside the new thread, when <code>log_line</code> is invoked. By then <code>start_job</code> may have returned and <code>buf</code> is dead. Fix: <code>std::thread t(log_line, std::string(buf));</code> so the string is built and copied before the constructor returns.</p>
+    <p><b>Why.</b> This is the classic example from Anthony Williams' "C++ Concurrency in Action". <code>detach()</code> hides the lifetime problem: if <code>start_job</code> called <code>t.join()</code> before returning, <code>buf</code> would still be alive during the conversion and the code would happen to work. The bug is the combination of a deferred conversion and a buffer that dies first. People often think "the parameter is a <code>std::string</code>, so it was copied": the parameter type does not matter, the stored type is the decayed argument type.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch01-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Parallel sum. Write <code>std::int64_t parallel_sum(const std::vector&lt;int&gt;&amp; v, unsigned n_threads)</code> that splits the vector into contiguous chunks, sums each in its own thread and combines the results. Requirements: correct for any size including empty and for more threads than elements; no locks or atomics on the hot path; no thread is left joinable if something throws.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Clamp the thread count to the range 1 to <code>v.size()</code>. Give thread <i>i</i> a chunk of <code>size / n</code> elements, plus one for the first <code>size % n</code> threads, so chunk sizes differ by at most one. Each thread sums into a local variable and writes its result once into its own slot of a <code>partial</code> vector. Joining the threads makes those writes visible to the caller, which adds them up.</p>
+<pre data-run="ch04-psum" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;numeric&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::<span class="hljs-type">int64_t</span> <span class="hljs-title">parallel_sum</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">int</span>&gt;&amp; v, <span class="hljs-type">unsigned</span> n_threads)</span> </span>{
+    <span class="hljs-keyword">if</span> (v.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span> <span class="hljs-number">0</span>;
+    n_threads = std::<span class="hljs-built_in">clamp</span>&lt;<span class="hljs-type">unsigned</span>&gt;(n_threads, <span class="hljs-number">1</span>, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span>&gt;(v.<span class="hljs-built_in">size</span>()));
+    <span class="hljs-function">std::vector&lt;std::<span class="hljs-type">int64_t</span>&gt; <span class="hljs-title">partial</span><span class="hljs-params">(n_threads, <span class="hljs-number">0</span>)</span></span>;
+    <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> chunk = v.<span class="hljs-built_in">size</span>() / n_threads;
+    <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> extra = v.<span class="hljs-built_in">size</span>() % n_threads;
+    {
+        std::vector&lt;std::jthread&gt; workers;   <span class="hljs-comment">// jthread joins even if a later emplace_back throws</span>
+        workers.<span class="hljs-built_in">reserve</span>(n_threads);
+        std::<span class="hljs-type">size_t</span> begin = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">unsigned</span> i = <span class="hljs-number">0</span>; i &lt; n_threads; ++i) {
+            <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> end = begin + chunk + (i &lt; extra ? <span class="hljs-number">1</span> : <span class="hljs-number">0</span>);
+            workers.<span class="hljs-built_in">emplace_back</span>([&amp;v, &amp;partial, i, begin, end] {
+                std::<span class="hljs-type">int64_t</span> s = <span class="hljs-number">0</span>;          <span class="hljs-comment">// local accumulator: one write to shared memory</span>
+                <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> k = begin; k &lt; end; ++k) s += v[k];
+                partial[i] = s;
+            });
+            begin = end;
+        }
+    }   <span class="hljs-comment">// all workers joined here</span>
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">accumulate</span>(partial.<span class="hljs-built_in">begin</span>(), partial.<span class="hljs-built_in">end</span>(), std::<span class="hljs-type">int64_t</span>{<span class="hljs-number">0</span>});
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">v</span><span class="hljs-params">(<span class="hljs-number">1&#x27;000&#x27;001</span>)</span></span>;
+    std::<span class="hljs-built_in">iota</span>(v.<span class="hljs-built_in">begin</span>(), v.<span class="hljs-built_in">end</span>(), <span class="hljs-number">1</span>);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">unsigned</span> n : {<span class="hljs-number">1u</span>, <span class="hljs-number">3u</span>, <span class="hljs-number">8u</span>, <span class="hljs-number">64u</span>})
+        std::cout &lt;&lt; n &lt;&lt; <span class="hljs-string">&quot; threads: &quot;</span> &lt;&lt; <span class="hljs-built_in">parallel_sum</span>(v, n) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;tiny: &quot;</span> &lt;&lt; <span class="hljs-built_in">parallel_sum</span>({<span class="hljs-number">5</span>, <span class="hljs-number">7</span>}, <span class="hljs-number">16</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;empty: &quot;</span> &lt;&lt; <span class="hljs-built_in">parallel_sum</span>({}, <span class="hljs-number">4</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch04-psum">1 threads: 500001500001
+3 threads: 500001500001
+8 threads: 500001500001
+64 threads: 500001500001
+tiny: 12
+empty: 0</pre>
+    <p><b>Complexity and pitfalls.</b> O(n / threads) time per thread plus O(threads) to combine. Accumulating directly into <code>partial[i]</code> inside the loop would be correct but slow: adjacent slots share a cache line, so every write invalidates the line in the other cores (false sharing, <a href="../cpp/#ch17">C++ guide ch 17</a>). Using <code>std::jthread</code> in a vector means that if the fifth thread fails to start, the first four are joined during unwinding instead of calling terminate. Use a 64-bit accumulator: the sum of a million ints overflows 32 bits.</p>
+    <p class="rating">Estimated rating: ~1200 · straightforward partitioning, with the off-by-one chunking and empty input as the only traps</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>RAII joining thread. Implement <code>JoiningThread</code>, a move-only wrapper around <code>std::thread</code> that joins in its destructor and on move assignment instead of terminating. It must forward any callable and arguments, expose <code>join</code>, <code>detach</code> and <code>joinable</code>, and survive an exception thrown after the thread starts.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Hold a <code>std::thread</code> member and perfect-forward the constructor arguments to it. Delete copying, default the move constructor (it leaves the source empty), and write move assignment to join the current thread before taking the new one, because <code>std::thread</code>'s own move assignment terminates if the target is joinable. The destructor joins if joinable.</p>
+<pre data-run="ch04-guard" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">JoiningThread</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">JoiningThread</span>() <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>, <span class="hljs-keyword">class</span>... Args&gt;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">JoiningThread</span><span class="hljs-params">(F&amp;&amp; f, Args&amp;&amp;... args)</span>
+        : t_(std::forward&lt;F&gt;(f), std::forward&lt;Args&gt;(args)...) {</span>}
+
+    <span class="hljs-built_in">JoiningThread</span>(JoiningThread&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    JoiningThread&amp; <span class="hljs-keyword">operator</span>=(JoiningThread&amp;&amp; other) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;other) {
+            <span class="hljs-built_in">join_if_needed</span>();          <span class="hljs-comment">// std::thread would call terminate here instead</span>
+            t_ = std::<span class="hljs-built_in">move</span>(other.t_);
+        }
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    <span class="hljs-built_in">JoiningThread</span>(<span class="hljs-type">const</span> JoiningThread&amp;) = <span class="hljs-keyword">delete</span>;
+    JoiningThread&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> JoiningThread&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">JoiningThread</span>() { <span class="hljs-built_in">join_if_needed</span>(); }
+
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">joinable</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> t_.<span class="hljs-built_in">joinable</span>(); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">join</span><span class="hljs-params">()</span> </span>{ t_.<span class="hljs-built_in">join</span>(); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">detach</span><span class="hljs-params">()</span> </span>{ t_.<span class="hljs-built_in">detach</span>(); }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">join_if_needed</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-keyword">if</span> (t_.<span class="hljs-built_in">joinable</span>()) t_.<span class="hljs-built_in">join</span>();
+    }
+    std::thread t_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> result = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-function">JoiningThread <span class="hljs-title">worker</span><span class="hljs-params">([&amp;result] { result = <span class="hljs-number">7</span> * <span class="hljs-number">6</span>; })</span></span>;
+        <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;boom&quot;</span>);   <span class="hljs-comment">// unwinding joins the worker, no terminate</span>
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) {
+        std::cout &lt;&lt; <span class="hljs-string">&quot;caught &quot;</span> &lt;&lt; e.<span class="hljs-built_in">what</span>() &lt;&lt; <span class="hljs-string">&quot;, result &quot;</span> &lt;&lt; result &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+
+    <span class="hljs-type">int</span> a = <span class="hljs-number">0</span>, b = <span class="hljs-number">0</span>;
+    <span class="hljs-function">JoiningThread <span class="hljs-title">t</span><span class="hljs-params">([&amp;a] { a = <span class="hljs-number">1</span>; })</span></span>;
+    t = <span class="hljs-built_in">JoiningThread</span>([&amp;b] { b = <span class="hljs-number">2</span>; });     <span class="hljs-comment">// joins the first thread, then takes the second</span>
+    std::cout &lt;&lt; <span class="hljs-string">&quot;a after reassignment: &quot;</span> &lt;&lt; a &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;b: &quot;</span> &lt;&lt; b &lt;&lt; <span class="hljs-string">&quot;, joinable: &quot;</span> &lt;&lt; t.<span class="hljs-built_in">joinable</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch04-guard">caught boom, result 42
+a after reassignment: 1
+b: 2, joinable: 0</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) apart from the join itself. Guard the move assignment against self-assignment, or <code>t = std::move(t)</code> would join and then move from itself. The variadic constructor is <code>explicit</code> so that a lambda does not silently convert to a <code>JoiningThread</code>. A joining destructor can hang if the thread waits for something that the unwinding code was going to provide; that is the gap <code>std::jthread</code> fills with a stop token. In C++20 code, prefer <code>std::jthread</code>; this exercise is how interviewers check that you know why it exists.</p>
+    <p class="rating">Estimated rating: ~1300 · small class, but move assignment and the terminate rule must both be right</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Fixed-size thread pool. Implement <code>ThreadPool(unsigned n)</code> with <code>template &lt;class F&gt; std::future&lt;R&gt; submit(F f)</code> where <code>R</code> is the callable's return type. Exceptions thrown by a task must reach the caller through the future. The destructor must finish all queued tasks and then join the workers. Submitting after shutdown begins must fail loudly.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Workers loop: lock the mutex, wait on a condition variable until there is a job or the pool is stopping, pop one job, unlock, run it. <code>submit</code> wraps the callable in a <code>std::packaged_task</code>, which captures the return value or exception into the shared state behind the future. Because <code>packaged_task</code> is move-only and <code>std::function</code> needs a copyable target, the task is held by a <code>shared_ptr</code> (in C++23, <code>std::move_only_function</code> removes that allocation). The destructor sets <code>stopping_</code> under the lock, notifies all, and joins; workers only exit when the queue is empty, so queued work is drained.</p>
+<pre data-run="ch04-pool" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;condition_variable&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;future&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;queue&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ThreadPool</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ThreadPool</span><span class="hljs-params">(<span class="hljs-type">unsigned</span> n)</span> </span>{
+        <span class="hljs-keyword">if</span> (n == <span class="hljs-number">0</span>) n = <span class="hljs-number">1</span>;
+        workers_.<span class="hljs-built_in">reserve</span>(n);
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">unsigned</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) workers_.<span class="hljs-built_in">emplace_back</span>([<span class="hljs-keyword">this</span>] { <span class="hljs-built_in">run</span>(); });
+    }
+    <span class="hljs-built_in">ThreadPool</span>(<span class="hljs-type">const</span> ThreadPool&amp;) = <span class="hljs-keyword">delete</span>;
+    ThreadPool&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> ThreadPool&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">ThreadPool</span>() {
+        {
+            <span class="hljs-function">std::lock_guard <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+            stopping_ = <span class="hljs-literal">true</span>;
+        }
+        cv_.<span class="hljs-built_in">notify_all</span>();
+        <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; w : workers_) w.<span class="hljs-built_in">join</span>();   <span class="hljs-comment">// workers drain the queue first</span>
+    }
+
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+    <span class="hljs-function"><span class="hljs-keyword">auto</span> <span class="hljs-title">submit</span><span class="hljs-params">(F f)</span> -&gt; std::future&lt;std::<span class="hljs-type">invoke_result_t</span>&lt;F&amp;&gt;&gt; </span>{
+        <span class="hljs-keyword">using</span> R = std::<span class="hljs-type">invoke_result_t</span>&lt;F&amp;&gt;;
+        <span class="hljs-comment">// packaged_task is move-only and std::function needs a copyable target: share it</span>
+        <span class="hljs-keyword">auto</span> task = std::make_shared&lt;std::packaged_task&lt;<span class="hljs-built_in">R</span>()&gt;&gt;(std::<span class="hljs-built_in">move</span>(f));
+        std::future&lt;R&gt; fut = task-&gt;<span class="hljs-built_in">get_future</span>();
+        {
+            <span class="hljs-function">std::lock_guard <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+            <span class="hljs-keyword">if</span> (stopping_) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;submit on a stopped pool&quot;</span>);
+            jobs_.<span class="hljs-built_in">emplace</span>([task] { (*task)(); });
+        }
+        cv_.<span class="hljs-built_in">notify_one</span>();
+        <span class="hljs-keyword">return</span> fut;
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">run</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">for</span> (;;) {
+            std::function&lt;<span class="hljs-type">void</span>()&gt; job;
+            {
+                <span class="hljs-function">std::unique_lock <span class="hljs-title">lk</span><span class="hljs-params">(m_)</span></span>;
+                cv_.<span class="hljs-built_in">wait</span>(lk, [<span class="hljs-keyword">this</span>] { <span class="hljs-keyword">return</span> stopping_ || !jobs_.<span class="hljs-built_in">empty</span>(); });
+                <span class="hljs-keyword">if</span> (jobs_.<span class="hljs-built_in">empty</span>()) <span class="hljs-keyword">return</span>;   <span class="hljs-comment">// stopping and nothing left to do</span>
+                job = std::<span class="hljs-built_in">move</span>(jobs_.<span class="hljs-built_in">front</span>());
+                jobs_.<span class="hljs-built_in">pop</span>();
+            }
+            <span class="hljs-built_in">job</span>();   <span class="hljs-comment">// run outside the lock</span>
+        }
+    }
+
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::queue&lt;std::function&lt;<span class="hljs-type">void</span>()&gt;&gt; jobs_;
+    <span class="hljs-type">bool</span> stopping_ = <span class="hljs-literal">false</span>;
+    std::vector&lt;std::thread&gt; workers_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">ThreadPool <span class="hljs-title">pool</span><span class="hljs-params">(<span class="hljs-number">4</span>)</span></span>;
+    std::vector&lt;std::future&lt;<span class="hljs-type">int</span>&gt;&gt; results;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">1</span>; i &lt;= <span class="hljs-number">10</span>; ++i)
+        results.<span class="hljs-built_in">push_back</span>(pool.<span class="hljs-built_in">submit</span>([i] { <span class="hljs-keyword">return</span> i * i; }));
+    <span class="hljs-type">int</span> total = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; f : results) total += f.<span class="hljs-built_in">get</span>();
+    std::cout &lt;&lt; <span class="hljs-string">&quot;sum of squares: &quot;</span> &lt;&lt; total &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+
+    <span class="hljs-keyword">auto</span> bad = pool.<span class="hljs-built_in">submit</span>([]() -&gt; <span class="hljs-type">int</span> { <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;task failed&quot;</span>); });
+    <span class="hljs-keyword">try</span> {
+        std::cout &lt;&lt; bad.<span class="hljs-built_in">get</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) {
+        std::cout &lt;&lt; <span class="hljs-string">&quot;rethrown: &quot;</span> &lt;&lt; e.<span class="hljs-built_in">what</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+
+    <span class="hljs-keyword">auto</span> text = pool.<span class="hljs-built_in">submit</span>([] { <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;done&quot;</span>); });
+    std::cout &lt;&lt; text.<span class="hljs-built_in">get</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch04-pool">sum of squares: 385
+rethrown: task failed
+done</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per submit and per pop, plus one lock round trip each. Pitfalls: run the job outside the lock, or the pool serialises; set <code>stopping_</code> while holding the mutex, or a worker can check the predicate, miss the notification and sleep forever (a lost wake-up, <a href="#ch03">Ch 3</a>); declare <code>workers_</code> after the mutex, queue and condition variable so they exist before any worker starts. A task that waits on another task's future can deadlock the pool when all workers are waiting. A single shared queue becomes a contention point at high task rates; production pools use per-worker queues with work stealing.</p>
+    <p class="rating">Estimated rating: ~1900 · combines condition variables, type deduction, packaged_task and a correct drain-then-join shutdown</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Per-thread counters. A hot function <code>record_hit()</code> is called millions of times from many threads. Make it lock-free and atomic-free on the hot path by counting in thread-local storage, and merge each thread's count into a global total when the thread exits. After all workers are joined, the global total must be exact.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A <code>thread_local</code> object holds a plain counter. Its destructor runs at thread exit and adds the count into a global total under a mutex, which is taken once per thread instead of once per hit. Because thread-local destructors complete before <code>join()</code> returns, <code>main</code> sees the final totals after joining.</p>
+<pre data-run="ch04-tlstats" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Totals</span> {
+    std::mutex m;
+    <span class="hljs-type">long</span> hits = <span class="hljs-number">0</span>;
+    <span class="hljs-type">int</span> threads_merged = <span class="hljs-number">0</span>;
+};
+<span class="hljs-type">static</span> Totals totals;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">LocalCounter</span> {
+    <span class="hljs-type">long</span> hits = <span class="hljs-number">0</span>;
+    ~<span class="hljs-built_in">LocalCounter</span>() {                 <span class="hljs-comment">// runs at thread exit, before join() returns</span>
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">lk</span><span class="hljs-params">(totals.m)</span></span>;
+        totals.hits += hits;
+        ++totals.threads_merged;
+    }
+};
+<span class="hljs-keyword">thread_local</span> LocalCounter local;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">record_hit</span><span class="hljs-params">()</span> </span>{ ++local.hits; }   <span class="hljs-comment">// hot path: no lock, no atomic</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::thread&gt; workers;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; <span class="hljs-number">4</span>; ++t)
+        workers.<span class="hljs-built_in">emplace_back</span>([t] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span> * (t + <span class="hljs-number">1</span>); ++i) <span class="hljs-built_in">record_hit</span>();
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; w : workers) w.<span class="hljs-built_in">join</span>();
+    <span class="hljs-function">std::lock_guard <span class="hljs-title">lk</span><span class="hljs-params">(totals.m)</span></span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;hits: &quot;</span> &lt;&lt; totals.hits &lt;&lt; <span class="hljs-string">&quot;, threads merged: &quot;</span> &lt;&lt; totals.threads_merged &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch04-tlstats">hits: 1000000, threads merged: 4</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per hit with no shared writes; O(threads) lock acquisitions in total. Pitfalls: the global must outlive every thread-local that merges into it, which holds here because workers are joined before <code>main</code> returns (a detached thread exiting during static destruction would touch a destroyed mutex). The main thread's counter would merge only when <code>main</code> exits, after the print. Totals are only complete at join points; for a live total readable at any time, use one cache-line-aligned atomic per thread and sum them on read.</p>
+    <p class="rating">Estimated rating: ~1500 · needs precise knowledge of thread_local lifetime and the join guarantee rather than much code</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>parallel_for with exceptions. Implement <code>parallel_for(n, threads, f)</code> that calls <code>f(i)</code> for every <code>i</code> in the range 0 to n-1 using up to <code>threads</code> threads. If any call throws, <code>parallel_for</code> must rethrow one of the exceptions in the calling thread after all threads have finished. The program must never terminate because of an exception in a worker.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Split the range into contiguous chunks with <code>n * t / threads</code> boundaries, which distributes the remainder evenly without special cases. Each worker wraps its loop in <code>try { ... } catch (...)</code> and stores <code>std::current_exception()</code> into its own slot, so no lock is needed. After the jthreads are joined at the end of the block, rethrow the first stored exception.</p>
+<pre data-run="ch04-pfor" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;exception&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">parallel_for</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, <span class="hljs-type">unsigned</span> threads, F f)</span> </span>{
+    threads = std::<span class="hljs-built_in">max</span>(<span class="hljs-number">1u</span>, threads);
+    <span class="hljs-function">std::vector&lt;std::exception_ptr&gt; <span class="hljs-title">errors</span><span class="hljs-params">(threads)</span></span>;
+    {
+        std::vector&lt;std::jthread&gt; pool;
+        pool.<span class="hljs-built_in">reserve</span>(threads);
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">unsigned</span> t = <span class="hljs-number">0</span>; t &lt; threads; ++t) {
+            <span class="hljs-type">const</span> std::<span class="hljs-type">size_t</span> begin = n * t / threads, end = n * (t + <span class="hljs-number">1</span>) / threads;
+            pool.<span class="hljs-built_in">emplace_back</span>([&amp;f, &amp;errors, t, begin, end] {
+                <span class="hljs-keyword">try</span> {
+                    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = begin; i &lt; end; ++i) <span class="hljs-built_in">f</span>(i);
+                } <span class="hljs-built_in">catch</span> (...) {
+                    errors[t] = std::<span class="hljs-built_in">current_exception</span>();   <span class="hljs-comment">// an escaping exception would terminate</span>
+                }
+            });
+        }
+    }
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; e : errors)
+        <span class="hljs-keyword">if</span> (e) std::<span class="hljs-built_in">rethrow_exception</span>(e);   <span class="hljs-comment">// report the first chunk that failed</span>
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::vector&lt;<span class="hljs-type">long</span>&gt; <span class="hljs-title">sq</span><span class="hljs-params">(<span class="hljs-number">20</span>)</span></span>;
+    <span class="hljs-built_in">parallel_for</span>(sq.<span class="hljs-built_in">size</span>(), <span class="hljs-number">4</span>, [&amp;sq](std::<span class="hljs-type">size_t</span> i) { sq[i] = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">long</span>&gt;(i * i); });
+    std::cout &lt;&lt; <span class="hljs-string">&quot;sq[19] = &quot;</span> &lt;&lt; sq[<span class="hljs-number">19</span>] &lt;&lt; <span class="hljs-string">&quot;, sq[7] = &quot;</span> &lt;&lt; sq[<span class="hljs-number">7</span>] &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+
+    <span class="hljs-keyword">try</span> {
+        <span class="hljs-built_in">parallel_for</span>(<span class="hljs-number">100</span>, <span class="hljs-number">8</span>, [](std::<span class="hljs-type">size_t</span> i) {
+            <span class="hljs-keyword">if</span> (i == <span class="hljs-number">42</span>) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">out_of_range</span>(<span class="hljs-string">&quot;bad index &quot;</span> + std::<span class="hljs-built_in">to_string</span>(i));
+        });
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) {
+        std::cout &lt;&lt; <span class="hljs-string">&quot;caught: &quot;</span> &lt;&lt; e.<span class="hljs-built_in">what</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+}</code></pre>
+<pre class="out" data-out="ch04-pfor">sq[19] = 361, sq[7] = 49
+caught: bad index 42</pre>
+    <p><b>Complexity and pitfalls.</b> O(n / threads) per worker. An exception that escapes a thread function calls <code>std::terminate</code>, so the catch-all is mandatory. <code>std::exception_ptr</code> keeps the exception object alive and can be rethrown in another thread. The other chunks keep running after one fails; add a shared <code>std::atomic&lt;bool&gt;</code> "cancelled" flag (or a <code>stop_source</code>) to stop early. Writes by different threads to different elements of <code>sq</code> are not a data race: distinct objects, even in one vector, are distinct memory locations.</p>
+    <p class="rating">Estimated rating: ~1600 · the chunking is easy; exception transport across threads is what interviewers look for</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Dynamic work distribution. Count the primes below <code>limit</code> with <code>n_threads</code> threads. Cost per number grows with its size, so a static split gives the last thread the most work. Distribute work dynamically in blocks of <code>block</code> numbers, using no mutex.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A shared <code>std::atomic&lt;int&gt;</code> cursor hands out blocks: each <code>fetch_add(block)</code> atomically claims the range starting at the returned value. A worker stops when the claimed start is past the limit. Each worker counts locally and adds its count to the total once at the end. Relaxed ordering is enough because the only requirement is that each block is claimed exactly once, and the joins publish the totals.</p>
+<pre data-run="ch04-workq" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">is_prime</span><span class="hljs-params">(<span class="hljs-type">int</span> n)</span> </span>{
+    <span class="hljs-keyword">if</span> (n &lt; <span class="hljs-number">2</span>) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> d = <span class="hljs-number">2</span>; d * d &lt;= n; ++d)
+        <span class="hljs-keyword">if</span> (n % d == <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">count_primes</span><span class="hljs-params">(<span class="hljs-type">int</span> limit, <span class="hljs-type">unsigned</span> n_threads, <span class="hljs-type">int</span> block)</span> </span>{
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; next{<span class="hljs-number">0</span>};      <span class="hljs-comment">// shared cursor: each fetch_add claims one block</span>
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; total{<span class="hljs-number">0</span>};
+    {
+        std::vector&lt;std::jthread&gt; workers;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">unsigned</span> t = <span class="hljs-number">0</span>; t &lt; n_threads; ++t)
+            workers.<span class="hljs-built_in">emplace_back</span>([&amp;] {
+                <span class="hljs-type">int</span> mine = <span class="hljs-number">0</span>;
+                <span class="hljs-keyword">for</span> (;;) {
+                    <span class="hljs-type">const</span> <span class="hljs-type">int</span> start = next.<span class="hljs-built_in">fetch_add</span>(block, std::memory_order_relaxed);
+                    <span class="hljs-keyword">if</span> (start &gt;= limit) <span class="hljs-keyword">break</span>;
+                    <span class="hljs-type">const</span> <span class="hljs-type">int</span> stop = std::<span class="hljs-built_in">min</span>(limit, start + block);
+                    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> n = start; n &lt; stop; ++n) mine += <span class="hljs-built_in">is_prime</span>(n);
+                }
+                total.<span class="hljs-built_in">fetch_add</span>(mine, std::memory_order_relaxed);
+            });
+    }   <span class="hljs-comment">// the joins order every fetch_add before the load below</span>
+    <span class="hljs-keyword">return</span> total.<span class="hljs-built_in">load</span>();
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::cout &lt;&lt; <span class="hljs-built_in">count_primes</span>(<span class="hljs-number">200000</span>, <span class="hljs-number">4</span>, <span class="hljs-number">1000</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-built_in">count_primes</span>(<span class="hljs-number">200000</span>, <span class="hljs-number">7</span>, <span class="hljs-number">1</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-built_in">count_primes</span>(<span class="hljs-number">10</span>, <span class="hljs-number">3</span>, <span class="hljs-number">4</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch04-workq">17984
+17984
+4</pre>
+    <p><b>Complexity and pitfalls.</b> About limit × √limit / threads work, with one atomic operation per block. Block size trades contention (too small: every number is a contended <code>fetch_add</code> on one cache line) against load balance (too large: the last blocks leave cores idle). The cursor can overshoot <code>limit</code> by up to <code>threads × block</code>, which is harmless with <code>int</code> here but needs care near the type's maximum. This pattern is the core of OpenMP's <code>schedule(dynamic)</code>.</p>
+    <p class="rating">Estimated rating: ~1400 · one atomic fetch_add and a clean loop, with block size as the design discussion</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch01-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li>Threads share the address space, fds, handlers and pid; each owns registers, stack, TLS, signal mask and tid. On Linux every thread is a task created by <code>clone(CLONE_VM | CLONE_THREAD | ...)</code>; <code>getpid()</code> is the group id, <code>gettid()</code> the task id.</li>
+<li>Models: N:1 (no parallelism, a block stalls all), 1:1 (Linux NPTL, <code>std::thread</code>), M:N (Go, Java virtual threads).</li>
+<li>States: New, Ready, Running, Blocked, Terminated. Wake-ups go to Ready, never straight to Running.</li>
+<li>Thread switch vs process switch: same register work, but no page-table reload and no TLB invalidation, and warmer caches.</li>
+<li>A joinable <code>std::thread</code> destroyed or move-assigned over calls <code>std::terminate</code>. <code>std::jthread</code> requests stop and joins. Stop is cooperative.</li>
+<li>Thread arguments are decay-copied and passed as rvalues: use <code>std::ref</code> for references, convert <code>char*</code> buffers to <code>std::string</code> before the call, capture loop variables by value.</li>
+<li><code>thread_local</code>: one instance per thread, destroyed at thread exit before <code>join()</code> returns; beware reuse in pools.</li>
+<li><code>fork()</code> in a threaded process copies one thread and every lock state: <code>exec</code> straight away. Signals: block in <code>main</code>, <code>sigwait</code> in one thread. Coroutines give concurrency, not parallelism.</li>
+</ul>
+</section>

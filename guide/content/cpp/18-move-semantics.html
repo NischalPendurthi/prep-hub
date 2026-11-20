@@ -1,0 +1,1447 @@
+---
+title: Move semantics
+part: Part D · Move semantics
+lede: Moves let an object hand its resources to another object instead of duplicating them. This chapter covers value categories, rvalue references, what `std::move` really does, how to write the move constructor and move assignment operator, and why `noexcept` decides whether `std::vector` moves or copies. Interviewers use this topic to separate people who memorised "move is faster" from people who can predict which special member runs.
+desc: Value categories, move constructor and assignment, std::move, noexcept
+hours: 4
+prereqs: [Ch 1](#ch01) (rule of 3/5/0), [Ch 9](#ch09) (unique_ptr)
+---
+<section id="ch18-why" data-roles="th"><div class="sec-head"><h2>Why moves exist</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A resource-owning type (a string, a vector, a buffer, a file handle) is a small "header" object that points at something expensive: heap memory, a kernel descriptor, a thread. Copying such an object means duplicating the expensive part. When the source is about to die anyway (a temporary, or a local you will never touch again), that duplication is wasted work. A move copies only the header and leaves the source in an empty but valid state, so its destructor frees nothing.</p>
+<p>Before C++11 the language had no way to tell "an object you may plunder" from "an object you must preserve". Functions returning a <code>std::vector</code> by value relied on the optimiser eliding copies, and code like <code>v.push_back(std::string(1000, 'x'))</code> allocated twice. C++11 added a new reference type, <code>T&amp;&amp;</code>, which binds only to expressions the program has marked as expendable, plus two new special members that overload on it.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="Copying a buffer duplicates the heap block; moving transfers the pointer and nulls the source">
+<defs><marker id="ch18-c20a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="180" y="24" text-anchor="middle" class="t-bold">Copy: Buffer b = a;</text>
+<text x="540" y="24" text-anchor="middle" class="t-bold">Move: Buffer b = std::move(a);</text>
+<line x1="360" y1="10" x2="360" y2="290" class="d-grid d-dash"/>
+<rect x="30" y="50" width="120" height="56" rx="6" class="d-box"/>
+<text x="90" y="70" text-anchor="middle" class="t-mono t-small">a</text>
+<text x="90" y="88" text-anchor="middle" class="t-mono t-small">size=4 data=•</text>
+<rect x="30" y="180" width="120" height="56" rx="6" class="d-acc"/>
+<text x="90" y="200" text-anchor="middle" class="t-mono t-small">b</text>
+<text x="90" y="218" text-anchor="middle" class="t-mono t-small">size=4 data=•</text>
+<rect x="210" y="56" width="120" height="40" rx="4" class="d-soft"/>
+<text x="270" y="81" text-anchor="middle" class="t-mono t-small">heap: a b c d</text>
+<rect x="210" y="186" width="120" height="40" rx="4" class="d-key"/>
+<text x="270" y="211" text-anchor="middle" class="t-mono t-small">heap: a b c d</text>
+<line x1="140" y1="88" x2="208" y2="78" class="d-line" marker-end="url(#ch20-c20a)"/>
+<line x1="140" y1="218" x2="208" y2="208" class="d-line-key" marker-end="url(#ch20-c20a)"/>
+<text x="180" y="262" text-anchor="middle" class="t-small t-muted">new allocation + memcpy: O(n)</text>
+<text x="180" y="280" text-anchor="middle" class="t-small t-muted">two owners, two frees</text>
+<rect x="390" y="50" width="120" height="56" rx="6" class="d-box"/>
+<text x="450" y="70" text-anchor="middle" class="t-mono t-small">a (moved-from)</text>
+<text x="450" y="88" text-anchor="middle" class="t-mono t-small">size=0 data=null</text>
+<rect x="390" y="180" width="120" height="56" rx="6" class="d-acc"/>
+<text x="450" y="200" text-anchor="middle" class="t-mono t-small">b</text>
+<text x="450" y="218" text-anchor="middle" class="t-mono t-small">size=4 data=•</text>
+<rect x="570" y="120" width="120" height="40" rx="4" class="d-soft"/>
+<text x="630" y="145" text-anchor="middle" class="t-mono t-small">heap: a b c d</text>
+<line x1="500" y1="218" x2="568" y2="150" class="d-line-acc" marker-end="url(#ch20-c20a)"/>
+<line x1="500" y1="88" x2="568" y2="132" class="d-line-trap d-dash"/>
+<text x="560" y="100" class="t-small t-trap">pointer stolen</text>
+<text x="540" y="262" text-anchor="middle" class="t-small t-muted">copy two words, null the source: O(1)</text>
+<text x="540" y="280" text-anchor="middle" class="t-small t-muted">one owner, one free</text>
+</svg></div><figcaption><b>A move is a shallow copy plus "disarm the source".</b> The copy duplicates the heap block. The move copies the pointer and size, then sets the source to an empty state so its destructor has nothing to free.</figcaption></figure>
+
+<p>A move only pays off when the type owns something indirectly. For an <code>int</code>, a <code>double</code>, a plain struct of numbers or a <code>std::array&lt;int, 1000&gt;</code>, moving is exactly copying: there is no pointer to steal, so all the bytes must be transferred either way.</p>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>Move semantics is an optimisation of copying for the case where the source will not be used again. It is also the only way to transfer ownership of types that cannot be copied at all, such as <code>std::unique_ptr</code>, <code>std::thread</code> and <code>std::fstream</code>. (Some types, like <code>std::mutex</code>, can be neither copied nor moved.)</p></div>
+</section>
+
+<section id="ch18-categories" data-roles="th"><div class="sec-head"><h2>Value categories</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Every expression in C++ has a type and a <b>value category</b>. The category decides which references can bind to it, and therefore which overload (copy or move) is chosen. C++11 defines three primary categories and two mixed ones, built from two properties:</p>
+<ul>
+<li><b>Has identity</b>: the expression refers to an object with an address you could take (a variable, <code>*p</code>, <code>a[i]</code>).</li>
+<li><b>Can be moved from</b>: the program has said the object's resources may be taken (a temporary, or the result of <code>std::move</code>).</li>
+</ul>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 270" role="img" aria-label="Value category tree: glvalue splits into lvalue and xvalue, rvalue splits into xvalue and prvalue">
+<defs><marker id="ch18-c20b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="300" y="14" width="120" height="34" rx="6" class="d-box"/>
+<text x="360" y="36" text-anchor="middle" class="t-bold">expression</text>
+<rect x="140" y="84" width="140" height="44" rx="6" class="d-soft"/>
+<text x="210" y="104" text-anchor="middle" class="t-bold">glvalue</text>
+<text x="210" y="120" text-anchor="middle" class="t-small t-muted">has identity</text>
+<rect x="440" y="84" width="140" height="44" rx="6" class="d-soft"/>
+<text x="510" y="104" text-anchor="middle" class="t-bold">rvalue</text>
+<text x="510" y="120" text-anchor="middle" class="t-small t-muted">can be moved from</text>
+<rect x="40" y="168" width="170" height="76" rx="6" class="d-key"/>
+<text x="125" y="190" text-anchor="middle" class="t-bold t-key">lvalue</text>
+<text x="125" y="208" text-anchor="middle" class="t-small t-mono">x, *p, a[i], ++x</text>
+<text x="125" y="226" text-anchor="middle" class="t-small t-mono">"lit", r (named T&amp;&amp;)</text>
+<rect x="275" y="168" width="170" height="76" rx="6" class="d-acc"/>
+<text x="360" y="190" text-anchor="middle" class="t-bold t-acc">xvalue</text>
+<text x="360" y="208" text-anchor="middle" class="t-small t-mono">std::move(x)</text>
+<text x="360" y="226" text-anchor="middle" class="t-small t-mono">S{}.m, f() → T&amp;&amp;</text>
+<rect x="510" y="168" width="170" height="76" rx="6" class="d-trap"/>
+<text x="595" y="190" text-anchor="middle" class="t-bold t-trap">prvalue</text>
+<text x="595" y="208" text-anchor="middle" class="t-small t-mono">42, x + 1, S{}, x++</text>
+<text x="595" y="226" text-anchor="middle" class="t-small t-mono">f() → T, this</text>
+<line x1="330" y1="48" x2="230" y2="82" class="d-line" marker-end="url(#ch20-c20b)"/>
+<line x1="390" y1="48" x2="490" y2="82" class="d-line" marker-end="url(#ch20-c20b)"/>
+<line x1="180" y1="128" x2="135" y2="166" class="d-line" marker-end="url(#ch20-c20b)"/>
+<line x1="240" y1="128" x2="340" y2="166" class="d-line" marker-end="url(#ch20-c20b)"/>
+<line x1="480" y1="128" x2="380" y2="166" class="d-line" marker-end="url(#ch20-c20b)"/>
+<line x1="540" y1="128" x2="585" y2="166" class="d-line" marker-end="url(#ch20-c20b)"/>
+<text x="360" y="262" text-anchor="middle" class="t-small t-muted">an xvalue has identity AND may be moved from, so it is both a glvalue and an rvalue</text>
+</svg></div><figcaption><b>Two properties, five names.</b> lvalues have identity and are not movable; prvalues are pure values with no identity yet (C++17: they initialise their result object directly); xvalues ("expiring values") have identity but are marked movable.</figcaption></figure>
+
+<h3 id="ch18-cat-table">Which category is this expression?</h3>
+<p>The rule that trips people up is the first one: <b>the category is a property of the expression, not of the variable's declared type.</b> A variable declared <code>int&amp;&amp; r</code> is an rvalue reference, but the expression <code>r</code> is an lvalue, because it has a name and you can take its address.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Expression</th><th>Category</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><code>x</code> (any named variable, including <code>T&amp;&amp; r</code>)</td><td>lvalue</td><td>A name always denotes an object with identity</td></tr>
+<tr><td><code>42</code>, <code>true</code>, <code>nullptr</code></td><td>prvalue</td><td>Literal with no object behind it</td></tr>
+<tr><td><code>"hello"</code></td><td>lvalue</td><td>String literals are arrays with static storage</td></tr>
+<tr><td><code>x + 1</code>, <code>x++</code>, <code>&amp;x</code></td><td>prvalue</td><td>Built-in operators producing a new value</td></tr>
+<tr><td><code>++x</code>, <code>*p</code>, <code>a[i]</code>, <code>x = y</code></td><td>lvalue</td><td>They return the object itself</td></tr>
+<tr><td><code>f()</code> returning <code>T</code></td><td>prvalue</td><td>Return by value</td></tr>
+<tr><td><code>f()</code> returning <code>T&amp;</code></td><td>lvalue</td><td>Return by lvalue reference</td></tr>
+<tr><td><code>f()</code> returning <code>T&amp;&amp;</code>, <code>std::move(x)</code>, <code>static_cast&lt;T&amp;&amp;&gt;(x)</code></td><td>xvalue</td><td>Returns an rvalue reference to an existing object</td></tr>
+<tr><td><code>S{}.m</code> (member of a prvalue)</td><td>xvalue</td><td>Temporary materialisation creates the object, then <code>.m</code> refers into it</td></tr>
+<tr><td><code>[]{ }</code>, <code>S{}</code>, <code>this</code></td><td>prvalue</td><td>Pure values</td></tr>
+</tbody></table></div>
+<p>You can make the compiler tell you. <code>decltype((e))</code> with double parentheses yields <code>T&amp;</code> for an lvalue, <code>T&amp;&amp;</code> for an xvalue and plain <code>T</code> for a prvalue:</p>
+<pre data-run="ch20-category"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-keyword">struct</span> <span class="hljs-title class_">cat</span>      { <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* v = <span class="hljs-string">&quot;prvalue&quot;</span>; };
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-keyword">struct</span> <span class="hljs-title class_">cat</span>&lt;T&amp;&gt;  { <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* v = <span class="hljs-string">&quot;lvalue&quot;</span>; };
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-keyword">struct</span> <span class="hljs-title class_">cat</span>&lt;T&amp;&amp;&gt; { <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* v = <span class="hljs-string">&quot;xvalue&quot;</span>; };
+<span class="hljs-meta">#<span class="hljs-keyword">define</span> CAT(...) std::printf(<span class="hljs-string">&quot;%s: %s\n&quot;</span>, #__VA_ARGS__, cat<span class="hljs-string">&lt;decltype((__VA_ARGS__))&gt;</span>::v)</span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">S</span> { <span class="hljs-type">int</span> m; };
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> g = <span class="hljs-number">0</span>;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span>&amp; <span class="hljs-title">ref</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> g; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span>&amp;&amp; <span class="hljs-title">rref</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(g); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> x = <span class="hljs-number">1</span>;
+    <span class="hljs-type">int</span>&amp;&amp; r = <span class="hljs-number">5</span>;
+    <span class="hljs-built_in">CAT</span>(x);
+    <span class="hljs-built_in">CAT</span>(<span class="hljs-number">42</span>);
+    <span class="hljs-built_in">CAT</span>(x + <span class="hljs-number">1</span>);
+    <span class="hljs-built_in">CAT</span>(++x);
+    <span class="hljs-built_in">CAT</span>(x++);
+    <span class="hljs-built_in">CAT</span>(<span class="hljs-string">&quot;hi&quot;</span>);
+    <span class="hljs-built_in">CAT</span>(r);
+    <span class="hljs-built_in">CAT</span>(std::<span class="hljs-built_in">move</span>(x));
+    <span class="hljs-built_in">CAT</span>(S{});
+    <span class="hljs-built_in">CAT</span>(S{}.m);
+    <span class="hljs-built_in">CAT</span>(<span class="hljs-built_in">ref</span>());
+    <span class="hljs-built_in">CAT</span>(<span class="hljs-built_in">rref</span>());
+}</code></pre>
+<pre class="out" data-out="ch20-category">x: lvalue
+42: prvalue
+x + 1: prvalue
+++x: lvalue
+x++: prvalue
+"hi": lvalue
+r: lvalue
+std::move(x): xvalue
+S{}: prvalue
+S{}.m: xvalue
+ref(): lvalue
+rref(): xvalue</pre>
+
+<h3 id="ch18-binding">What binds to what</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Parameter</th><th>lvalue</th><th>const lvalue</th><th>rvalue (xvalue or prvalue)</th><th>const rvalue</th></tr></thead>
+<tbody>
+<tr><td><code>T&amp;</code></td><td>yes</td><td>no</td><td>no</td><td>no</td></tr>
+<tr><td><code>const T&amp;</code></td><td>yes</td><td>yes</td><td>yes (lifetime extended for prvalues)</td><td>yes</td></tr>
+<tr><td><code>T&amp;&amp;</code></td><td>no</td><td>no</td><td>yes</td><td>no</td></tr>
+<tr><td><code>const T&amp;&amp;</code></td><td>no</td><td>no</td><td>yes</td><td>yes</td></tr>
+<tr><td><code>T</code> (by value)</td><td>copy</td><td>copy</td><td>move (or elided for prvalues)</td><td>copy</td></tr>
+</tbody></table></div>
+<p>When both <code>const T&amp;</code> and <code>T&amp;&amp;</code> overloads are viable for an rvalue, the rvalue reference wins (a better reference binding, <code>[over.ics.rank]</code>). That single rule is what makes moves happen automatically for temporaries.</p>
+<pre data-run="ch20-named-rref"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">int</span>&amp;)</span>  </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;f(int&amp;)&quot;</span>); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">int</span>&amp;&amp;)</span> </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;f(int&amp;&amp;)&quot;</span>); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> x = <span class="hljs-number">1</span>;
+    <span class="hljs-type">int</span>&amp;&amp; r = std::<span class="hljs-built_in">move</span>(x);   <span class="hljs-comment">// r is an rvalue reference variable...</span>
+    <span class="hljs-built_in">f</span>(x);
+    <span class="hljs-built_in">f</span>(r);                     <span class="hljs-comment">// ...but the expression r is an lvalue</span>
+    <span class="hljs-built_in">f</span>(std::<span class="hljs-built_in">move</span>(r));
+    <span class="hljs-built_in">f</span>(<span class="hljs-number">2</span>);
+    <span class="hljs-built_in">f</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&amp;&amp;&gt;(x));
+}</code></pre>
+<pre class="out" data-out="ch20-named-rref">f(int&amp;)
+f(int&amp;)
+f(int&amp;&amp;)
+f(int&amp;&amp;)
+f(int&amp;&amp;)</pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"Inside <code>void g(Widget&amp;&amp; w)</code>, is <code>w</code> an rvalue?" No. <code>w</code> has a name, so it is an lvalue. Passing it on as <code>h(w)</code> copies. You must write <code>h(std::move(w))</code>. The design is deliberate: a named object may be used several times in the body, and an implicit move on the first use would leave later uses looking at a gutted object.</p></div>
+</section>
+
+<section id="ch18-std-move" data-roles="th"><div class="sec-head"><h2>std::move is only a cast</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><code>std::move</code> moves nothing. It is an unconditional cast to an rvalue reference, which turns its argument into an xvalue. The actual move happens later, if and when overload resolution picks a function taking <code>T&amp;&amp;</code> (usually a move constructor or move assignment operator). If no such function exists, the cast is harmless and the copy runs.</p>
+<pre data-run="ch20-my-move"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> my {
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp;&amp; <span class="hljs-title">move</span><span class="hljs-params">(T&amp;&amp; t)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-keyword">return</span> <span class="hljs-keyword">static_cast</span>&lt;std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp;&amp;&gt;(t);
+}
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::string a = <span class="hljs-string">&quot;payload&quot;</span>;
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(my::<span class="hljs-built_in">move</span>(a)), std::string&amp;&amp;&gt;);
+    std::string b = my::<span class="hljs-built_in">move</span>(a);         <span class="hljs-comment">// the move constructor does the work</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;b=%s a.size()=%zu\n&quot;</span>, b.<span class="hljs-built_in">c_str</span>(), a.<span class="hljs-built_in">size</span>());
+
+    <span class="hljs-type">const</span> std::string c = <span class="hljs-string">&quot;const&quot;</span>;
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(my::<span class="hljs-built_in">move</span>(c)), <span class="hljs-type">const</span> std::string&amp;&amp;&gt;);
+    std::string d = my::<span class="hljs-built_in">move</span>(c);         <span class="hljs-comment">// const string&amp;&amp; binds to const string&amp;: a copy</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;d=%s c=%s\n&quot;</span>, d.<span class="hljs-built_in">c_str</span>(), c.<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+<pre class="out" data-out="ch20-my-move">b=payload a.size()=0
+d=const c=const</pre>
+<p>The parameter is a forwarding reference (<code>T&amp;&amp;</code> in a deduced context, see <a href="#ch19">Ch 19</a>), so <code>move</code> accepts lvalues and rvalues. <code>remove_reference_t</code> is needed because for an lvalue argument <code>T</code> is deduced as <code>std::string&amp;</code>, and <code>T&amp;&amp;</code> would collapse back to <code>std::string&amp;</code>. The printed <code>a.size()=0</code> is what libstdc++ and libc++ do; the standard only promises a valid, unspecified state.</p>
+
+<h3 id="ch18-const-move">Moving a const object silently copies</h3>
+<p><code>std::move(c)</code> on a const object yields <code>const T&amp;&amp;</code>. The move constructor takes <code>T&amp;&amp;</code> and cannot bind to it, but the copy constructor's <code>const T&amp;</code> can. The code compiles, runs and copies, with no warning from either compiler at <code>-Wall -Wextra</code>. The same happens for <code>const</code> data members (moving the enclosing object copies the member) and for <code>const</code> locals you return: <code>const std::string s = ...; return s;</code> can still use NRVO, but if NRVO does not apply, the implicit move becomes a copy.</p>
+<pre data-run="ch20-const-move"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> T a{};
+    T b = std::<span class="hljs-built_in">move</span>(a);   <span class="hljs-comment">// const T&amp;&amp; -&gt; picks T(const T&amp;)</span>
+    T c = std::<span class="hljs-built_in">move</span>(b);
+}</code></pre>
+<pre class="out" data-out="ch20-const-move">copy
+move</pre>
+</section>
+
+<section id="ch18-members" data-roles="th"><div class="sec-head"><h2>Writing the move constructor and move assignment</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The move constructor has the signature <code>T(T&amp;&amp; other) noexcept</code>; move assignment is <code>T&amp; operator=(T&amp;&amp; other) noexcept</code>. Each one does three things: take the source's resources, leave the source in a state its destructor (and assignment) can cope with, and for assignment, release what <code>*this</code> owned before.</p>
+
+<h3 id="ch18-buffer-example">A full Buffer with all five special members</h3>
+<pre data-run="ch20-buffer" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Buffer</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Buffer</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> : size_(n), data_(new char[n]()) {</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ctor(%zu)\n&quot;</span>, n); }
+    ~<span class="hljs-built_in">Buffer</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;dtor(%zu)\n&quot;</span>, size_); <span class="hljs-keyword">delete</span>[] data_; }
+
+    <span class="hljs-built_in">Buffer</span>(<span class="hljs-type">const</span> Buffer&amp; o) : <span class="hljs-built_in">size_</span>(o.size_), <span class="hljs-built_in">data_</span>(<span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[o.size_]) {
+        std::<span class="hljs-built_in">memcpy</span>(data_, o.data_, size_);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;copy(%zu)\n&quot;</span>, size_);
+    }
+    <span class="hljs-built_in">Buffer</span>(Buffer&amp;&amp; o) <span class="hljs-keyword">noexcept</span>
+        : <span class="hljs-built_in">size_</span>(std::<span class="hljs-built_in">exchange</span>(o.size_, <span class="hljs-number">0</span>)), <span class="hljs-built_in">data_</span>(std::<span class="hljs-built_in">exchange</span>(o.data_, <span class="hljs-literal">nullptr</span>)) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;move(%zu)\n&quot;</span>, size_);
+    }
+    Buffer&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Buffer&amp; o) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;o) {
+            <span class="hljs-type">char</span>* p = <span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[o.size_];      <span class="hljs-comment">// allocate first: strong guarantee</span>
+            std::<span class="hljs-built_in">memcpy</span>(p, o.data_, o.size_);
+            <span class="hljs-keyword">delete</span>[] data_;
+            data_ = p;
+            size_ = o.size_;
+        }
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;copy=(%zu)\n&quot;</span>, size_);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    Buffer&amp; <span class="hljs-keyword">operator</span>=(Buffer&amp;&amp; o) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;o) {
+            <span class="hljs-keyword">delete</span>[] data_;
+            data_ = std::<span class="hljs-built_in">exchange</span>(o.data_, <span class="hljs-literal">nullptr</span>);
+            size_ = std::<span class="hljs-built_in">exchange</span>(o.size_, <span class="hljs-number">0</span>);
+        }
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;move=(%zu)\n&quot;</span>, size_);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">size_t</span> size_;
+    <span class="hljs-type">char</span>* data_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Buffer <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-number">100</span>)</span></span>;
+    Buffer b = a;
+    Buffer c = std::<span class="hljs-built_in">move</span>(a);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a=%zu b=%zu c=%zu\n&quot;</span>, a.<span class="hljs-built_in">size</span>(), b.<span class="hljs-built_in">size</span>(), c.<span class="hljs-built_in">size</span>());
+    b = std::<span class="hljs-built_in">move</span>(c);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;b=%zu c=%zu\n&quot;</span>, b.<span class="hljs-built_in">size</span>(), c.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch20-buffer">ctor(100)
+copy(100)
+move(100)
+a=0 b=100 c=100
+move=(100)
+b=100 c=0
+dtor(0)
+dtor(100)
+dtor(0)</pre>
+<p>Destruction runs in reverse order of construction: <code>c</code> (empty), <code>b</code>, then <code>a</code> (empty). Both moved-from objects print <code>dtor(0)</code> and call <code>delete[] nullptr</code>, which is a no-op.</p>
+
+<h3 id="ch18-exchange">std::exchange: "take the value and leave this behind"</h3>
+<p><code>std::exchange(obj, new_value)</code> (header <code>&lt;utility&gt;</code>, C++14) assigns <code>new_value</code> to <code>obj</code> and returns the old value. It turns the two-step "copy the pointer, then null the source" into one expression, which is why it is idiomatic in move constructors' member initialiser lists. It is also <code>constexpr</code> since C++20 and conditionally <code>noexcept</code> since C++23.</p>
+
+<h3 id="ch18-copy-swap">Alternatives: swap-based move, copy-and-swap, unified assignment</h3>
+<p>Three common shapes of move assignment:</p>
+<ul>
+<li><b>Release then steal</b> (as above). Needs a self-check, otherwise <code>x = std::move(x)</code> deletes the buffer and then steals the dangling pointer from itself.</li>
+<li><b>Swap</b>: <code>swap(*this, o); return *this;</code>. Self-safe without a check. The old resources are released later, when <code>o</code> dies, which may surprise people who expect a lock or file to close at the assignment.</li>
+<li><b>Unified assignment</b>: <code>T&amp; operator=(T o) noexcept { swap(*this, o); return *this; }</code>. One function serves both copy and move assignment (the parameter is copy- or move-constructed by the caller). It costs an extra move for rvalues and loses the chance to reuse the existing buffer on copy (std::vector's copy assignment reuses capacity, copy-and-swap never does).</li>
+</ul>
+
+<h3 id="ch18-self-move">Self-move-assignment</h3>
+<p>The standard library's rule (<code>[res.on.arguments]</code>) is that a function taking an rvalue reference may assume it is the only reference to that argument. Self-move-assignment of a standard type therefore only promises a valid but unspecified result. For your own types, either check <code>this != &amp;o</code> or use swap so that <code>x = std::move(x)</code> leaves <code>x</code> usable. It happens in real code through aliasing, for example <code>v[i] = std::move(v[j])</code> with <code>i == j</code> inside a generic algorithm. GCC's <code>-Wself-move</code> (in <code>-Wall</code> since GCC 13) catches the literal spelling.</p>
+</section>
+
+<section id="ch18-moved-from" data-roles="th"><div class="sec-head"><h2>The moved-from state</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>After a move, the source is a live object: its destructor will run, and you may assign to it. The standard's wording for library types (<code>[lib.types.movedfrom]</code>) is that a moved-from object is in a <b>valid but unspecified state</b>. Valid means every operation without preconditions works: <code>size()</code>, <code>clear()</code>, assignment, destruction. Unspecified means you cannot assume its value. Calling <code>front()</code> on a moved-from vector is wrong because <code>front()</code> has the precondition "not empty", which you cannot know holds.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Type</th><th>State after move construction from it</th><th>Guaranteed?</th></tr></thead>
+<tbody>
+<tr><td><code>std::unique_ptr</code></td><td>null</td><td>yes, specified</td></tr>
+<tr><td><code>std::shared_ptr</code>, <code>std::weak_ptr</code></td><td>empty</td><td>yes, specified</td></tr>
+<tr><td><code>std::thread</code>, <code>std::jthread</code></td><td>not joinable</td><td>yes, specified</td></tr>
+<tr><td><code>std::unique_lock</code></td><td>no mutex, not owning</td><td>yes, specified</td></tr>
+<tr><td><code>std::vector</code>, <code>std::string</code></td><td>empty in libstdc++, libc++ and MSVC</td><td>no, only "valid but unspecified"</td></tr>
+<tr><td><code>std::optional&lt;T&gt;</code></td><td><b>still engaged</b>, holding a moved-from <code>T</code></td><td>yes, <code>has_value()</code> is unchanged</td></tr>
+<tr><td><code>int</code>, raw pointers, trivially copyable types</td><td>unchanged (move is a copy)</td><td>yes</td></tr>
+</tbody></table></div>
+<p>For your own types, make the moved-from state the cheapest valid state, usually the same as default-constructed. Keep the class invariants: if the class promises "<code>data_</code> is never null", the move constructor must either allocate (and then it cannot be <code>noexcept</code>) or you must weaken the invariant to allow a null state. This is why <code>std::list</code> in some implementations had a throwing move constructor (it allocated a sentinel node), and why "never empty" designs fight with moves.</p>
+<div class="callout tip"><p class="callout-title">Tip</p><p>The safe rule for any type: after <code>std::move(x)</code>, only destroy <code>x</code> or assign a new value to it. Reusing a moved-from <code>std::string</code> after <code>s.clear()</code> or <code>s = "new"</code> is fine and common in loops.</p></div>
+</section>
+
+<section id="ch18-noexcept" data-roles="th"><div class="sec-head"><h2>noexcept on moves and vector reallocation</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>The problem.</b> <code>std::vector::push_back</code> gives the strong exception guarantee: if it throws, the vector is unchanged. When the vector is full it allocates a bigger buffer and must transfer the old elements. If it moves them and the third move throws, the first two elements are already gutted in the old buffer, and the original state cannot be restored (moving them back could throw too). Copying keeps the old buffer intact, so a throw just discards the new buffer.</p>
+<p><b>The rule.</b> The library uses <code>std::move_if_noexcept</code> for relocation: it moves when the move constructor is <code>noexcept</code> (or the type is not copyable at all), and copies otherwise. A move constructor that is not marked <code>noexcept</code>, even one that never throws in practice, turns every reallocation into a full deep copy.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 280" role="img" aria-label="During reallocation vector moves elements if the move constructor is noexcept, otherwise copies them">
+<defs><marker id="ch18-c20c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="30" class="t-bold">old buffer (capacity 3, full)</text>
+<rect x="20" y="42" width="80" height="40" class="d-box"/><text x="60" y="67" text-anchor="middle" class="t-mono">e0</text>
+<rect x="100" y="42" width="80" height="40" class="d-box"/><text x="140" y="67" text-anchor="middle" class="t-mono">e1</text>
+<rect x="180" y="42" width="80" height="40" class="d-box"/><text x="220" y="67" text-anchor="middle" class="t-mono">e2</text>
+<text x="300" y="30" class="t-bold">new buffer (capacity 6)</text>
+<rect x="300" y="160" width="70" height="40" class="d-acc"/><text x="335" y="185" text-anchor="middle" class="t-mono">e0</text>
+<rect x="370" y="160" width="70" height="40" class="d-acc"/><text x="405" y="185" text-anchor="middle" class="t-mono">e1</text>
+<rect x="440" y="160" width="70" height="40" class="d-acc"/><text x="475" y="185" text-anchor="middle" class="t-mono">e2</text>
+<rect x="510" y="160" width="70" height="40" class="d-key"/><text x="545" y="185" text-anchor="middle" class="t-mono">new</text>
+<rect x="580" y="160" width="70" height="40" class="d-soft"/>
+<rect x="650" y="160" width="50" height="40" class="d-soft"/>
+<line x1="60" y1="82" x2="330" y2="158" class="d-line" marker-end="url(#ch20-c20c)"/>
+<line x1="140" y1="82" x2="400" y2="158" class="d-line" marker-end="url(#ch20-c20c)"/>
+<line x1="220" y1="82" x2="470" y2="158" class="d-line" marker-end="url(#ch20-c20c)"/>
+<text x="300" y="60" class="t-small">1. allocate new storage</text>
+<text x="300" y="80" class="t-small">2. construct the new element at index 3</text>
+<text x="300" y="100" class="t-small">3. relocate e0..e2 with move_if_noexcept:</text>
+<text x="320" y="120" class="t-small t-acc">noexcept move → move (O(1) each)</text>
+<text x="320" y="138" class="t-small t-trap">move may throw and T is copyable → copy</text>
+<text x="20" y="232" class="t-small">4. destroy old elements, free the old buffer</text>
+<text x="20" y="252" class="t-small t-muted">If a copy throws in step 3, the new buffer is destroyed and the old one is untouched: strong guarantee.</text>
+<text x="20" y="270" class="t-small t-muted">If a move threw half-way, e0 and e1 would already be gutted: no way back.</text>
+</svg></div><figcaption><b>Why noexcept decides copy vs move.</b> push_back promises "unchanged on exception". Copies preserve the old buffer; moves destroy it as they go, so vector only moves when the move cannot throw.</figcaption></figure>
+
+<pre data-run="ch20-realloc"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-type">bool</span> NoThrow&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Item</span> {
+    <span class="hljs-built_in">Item</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Item</span>(<span class="hljs-type">const</span> Item&amp;) { ++copies; }
+    <span class="hljs-built_in">Item</span>(Item&amp;&amp;) <span class="hljs-built_in">noexcept</span>(NoThrow) { ++moves; }
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> copies = <span class="hljs-number">0</span>;
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> moves = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-type">bool</span> NoThrow&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">run</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* label)</span> </span>{
+    std::vector&lt;Item&lt;NoThrow&gt;&gt; v;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1000</span>; ++i) v.<span class="hljs-built_in">emplace_back</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%-18s copies=%d moves=%d\n&quot;</span>, label, Item&lt;NoThrow&gt;::copies, Item&lt;NoThrow&gt;::moves);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">run</span>&lt;<span class="hljs-literal">true</span>&gt;(<span class="hljs-string">&quot;noexcept move:&quot;</span>);
+    <span class="hljs-built_in">run</span>&lt;<span class="hljs-literal">false</span>&gt;(<span class="hljs-string">&quot;throwing move:&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch20-realloc">noexcept move:     copies=0 moves=1023
+throwing move:     copies=1023 moves=0</pre>
+<p>Both libstdc++ and libc++ grow capacity 1, 2, 4, ..., 1024 when appending one element at a time from empty, so 1 + 2 + 4 + ... + 512 = 1023 elements are relocated. MSVC grows by 1.5x and would print a different count, but the pattern is the same: all moves in the first line, all copies in the second.</p>
+
+<h3 id="ch18-move-if-noexcept">std::move_if_noexcept</h3>
+<p>The helper (header <code>&lt;utility&gt;</code>) returns <code>const T&amp;</code> when <code>T</code> has a potentially throwing move constructor and is copy constructible, and <code>T&amp;&amp;</code> otherwise. A move-only type with a throwing move (rare) still gets moved, and vector falls back to the basic guarantee for it.</p>
+<pre data-run="ch20-mine"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Risky</span> {
+    <span class="hljs-built_in">Risky</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Risky</span>(<span class="hljs-type">const</span> Risky&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Risky copy&quot;</span>); }
+    <span class="hljs-built_in">Risky</span>(Risky&amp;&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Risky move&quot;</span>); }      <span class="hljs-comment">// not noexcept</span>
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Safe</span> {
+    <span class="hljs-built_in">Safe</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Safe</span>(<span class="hljs-type">const</span> Safe&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Safe copy&quot;</span>); }
+    <span class="hljs-built_in">Safe</span>(Safe&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Safe move&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Risky r;
+    Safe s;
+    Risky r2 = std::<span class="hljs-built_in">move_if_noexcept</span>(r);
+    Safe s2 = std::<span class="hljs-built_in">move_if_noexcept</span>(s);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(std::<span class="hljs-built_in">move_if_noexcept</span>(r)), <span class="hljs-type">const</span> Risky&amp;&gt;);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(std::<span class="hljs-built_in">move_if_noexcept</span>(s)), Safe&amp;&amp;&gt;);
+    <span class="hljs-keyword">auto</span> p = std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">1</span>);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(std::<span class="hljs-built_in">move_if_noexcept</span>(p)), std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&amp;&amp;&gt;);
+}</code></pre>
+<pre class="out" data-out="ch20-mine">Risky copy
+Safe move</pre>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>Mark move constructors, move assignment operators and <code>swap</code> <code>noexcept</code> whenever they cannot throw. Implicitly generated and <code>= default</code> moves are <code>noexcept</code> automatically when every member's move is. Check with <code>static_assert(std::is_nothrow_move_constructible_v&lt;T&gt;)</code>.</p></div>
+</section>
+
+<section id="ch18-implicit" data-roles="th"><div class="sec-head"><h2>Implicit moves, the rule of five and the rule of zero</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The compiler declares an implicit move constructor and move assignment operator only if the class has <b>no user-declared</b> copy constructor, copy assignment operator, move operation (of the other kind) or destructor (<code>[class.copy.ctor]/8</code>). "User-declared" includes <code>= default</code> and <code>= delete</code>. The implicit move moves each base and member in declaration order (memberwise <code>std::move</code>).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>You declare</th><th>default ctor</th><th>destructor</th><th>copy ctor / copy =</th><th>move ctor / move =</th></tr></thead>
+<tbody>
+<tr><td>nothing</td><td>implicit</td><td>implicit</td><td>implicit</td><td>implicit</td></tr>
+<tr><td>any constructor</td><td>not declared</td><td>implicit</td><td>implicit</td><td>implicit</td></tr>
+<tr><td>destructor</td><td>implicit</td><td>yours</td><td>implicit (deprecated)</td><td><b>not declared</b>: moves copy</td></tr>
+<tr><td>copy ctor or copy =</td><td>(not declared if copy ctor)</td><td>implicit</td><td>yours / implicit (deprecated)</td><td><b>not declared</b>: moves copy</td></tr>
+<tr><td>move ctor or move =</td><td>(not declared if move ctor)</td><td>implicit</td><td><b>deleted</b></td><td>yours / not declared</td></tr>
+</tbody></table></div>
+<p>"Not declared" and "deleted" differ in an important way. A not-declared move constructor does not take part in overload resolution, so <code>T b = std::move(a)</code> quietly falls back to the copy constructor. A deleted function does take part, and choosing it is a compile error. A move constructor that is <code>= default</code> but would be ill-formed (for example a member that cannot be moved) is defined as deleted and then <b>ignored</b> by overload resolution (<code>[class.copy.ctor]/10</code>), again falling back to copy.</p>
+<pre data-run="ch20-suppressed"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tracer</span> {
+    <span class="hljs-built_in">Tracer</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Tracer</span>(<span class="hljs-type">const</span> Tracer&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  copy&quot;</span>); }
+    <span class="hljs-built_in">Tracer</span>(Tracer&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  move&quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Plain</span>    { Tracer t; };                                <span class="hljs-comment">// rule of zero</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">WithDtor</span> { Tracer t; ~<span class="hljs-built_in">WithDtor</span>() {} };                 <span class="hljs-comment">// move not declared</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Fixed</span>    { Tracer t; ~<span class="hljs-built_in">Fixed</span>() {}
+                  <span class="hljs-built_in">Fixed</span>() = <span class="hljs-keyword">default</span>;
+                  <span class="hljs-built_in">Fixed</span>(Fixed&amp;&amp;) = <span class="hljs-keyword">default</span>;                   <span class="hljs-comment">// brings the move back</span>
+                  <span class="hljs-built_in">Fixed</span>(<span class="hljs-type">const</span> Fixed&amp;) = <span class="hljs-keyword">default</span>; };           <span class="hljs-comment">// and keeps the copy</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Plain:&quot;</span>);    Plain a;    Plain b = std::<span class="hljs-built_in">move</span>(a);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;WithDtor:&quot;</span>); WithDtor c; WithDtor d = std::<span class="hljs-built_in">move</span>(c);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Fixed:&quot;</span>);    Fixed e;    Fixed f = std::<span class="hljs-built_in">move</span>(e);
+}</code></pre>
+<pre class="out" data-out="ch20-suppressed">Plain:
+  move
+WithDtor:
+  copy
+Fixed:
+  move</pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>Adding a destructor "just to log something" or <code>virtual ~Base() = default;</code> to a class silently disables its moves. Every <code>std::move</code> on it becomes a copy and every <code>vector</code> reallocation deep-copies. For a polymorphic base, declare all five: <code>virtual ~Base() = default;</code> plus defaulted copy and move operations (or delete them to prevent slicing).</p></div>
+
+<h3 id="ch18-rule-of-zero">Rule of zero, rule of five</h3>
+<ul>
+<li><b>Rule of zero</b>: classes that do not manage a resource directly declare none of the five. They hold members that manage themselves (<code>std::string</code>, <code>std::vector</code>, <code>std::unique_ptr</code>), and the implicit members do the right thing, including <code>noexcept</code> moves.</li>
+<li><b>Rule of five</b>: a class that does manage a resource (a raw pointer, a descriptor) declares the destructor, both copy operations and both move operations, or explicitly deletes the ones it does not support. Declaring only some of them changes the others in the ways the table shows.</li>
+<li>A move-only type is the rule of five with the copies deleted: <code>T(const T&amp;) = delete; T&amp; operator=(const T&amp;) = delete;</code> plus real moves.</li>
+</ul>
+<p><b>A template constructor is never a move constructor.</b> <code>template &lt;class U&gt; T(U&amp;&amp;)</code> does not suppress the implicit copy or move constructors, and the reverse trap (it hijacks copies of non-const lvalues) is covered in <a href="#ch19">Ch 19</a>. A constructor <code>T(const T&amp;&amp;)</code> technically is a move constructor by the standard's definition, but it cannot modify the source and so it cannot steal anything.</p>
+</section>
+
+<section id="ch18-passing" data-roles="th"><div class="sec-head"><h2>Moves in interfaces: returning, sinks, move-only types and ref-qualifiers</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+
+<h3 id="ch18-return-move">Do not write return std::move(local)</h3>
+<p>Returning a local by name already does the best possible thing. The compiler may construct the local directly in the caller's slot (NRVO), and when it cannot, the return statement treats the local as an rvalue automatically (the "implicit move", widened in C++20 by P1825 and again in C++23 by P2266). Writing <code>return std::move(local);</code> changes the returned expression from a name to an xvalue, which disables NRVO, so you get a guaranteed move instead of a free elision. GCC and Clang both warn with <code>-Wpessimizing-move</code>. <a href="#ch22">Ch 22</a> covers NRVO in depth and <a href="#ch21">Ch 21</a> covers guaranteed elision for prvalues.</p>
+<pre data-run="ch20-return-move"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">good</span><span class="hljs-params">()</span> </span>{ T t; <span class="hljs-keyword">return</span> t; }
+<span class="hljs-function"><span class="hljs-type">static</span> T <span class="hljs-title">bad</span><span class="hljs-params">()</span>  </span>{ T t; <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(t); }   <span class="hljs-comment">// pessimising move</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-- good&quot;</span>);
+    T a = <span class="hljs-built_in">good</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-- bad&quot;</span>);
+    T b = <span class="hljs-built_in">bad</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-- end&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch20-return-move">-- good
+ctor
+-- bad
+ctor
+move
+dtor
+-- end
+dtor
+dtor</pre>
+<p>NRVO in <code>good()</code> is not guaranteed by the standard, but GCC and Clang apply it to this simple shape at every optimisation level. When <code>std::move</code> on return <i>is</i> right: returning a data member from an rvalue-qualified function (<code>return std::move(member_);</code>), returning a member of a local (<code>return std::move(local.field);</code>, since <code>local.field</code> is not a plain name and gets no implicit move; structured bindings are a murkier case where GCC and Clang disagree, see <a href="#ch22">Ch 22</a>), or, in pre-C++20 code, returning an rvalue-reference parameter or a local whose type differs from the return type in ways the old rule did not cover (for example a <code>Derived</code> local returned as <code>Base</code>).</p>
+
+<h3 id="ch18-sink">Sink arguments: pass by value and move</h3>
+<p>A "sink" function stores its argument (a constructor that keeps a string, a setter, <code>push</code>). Three ways to write it:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Signature</th><th>Caller passes lvalue</th><th>Caller passes rvalue</th><th>Cost to write</th></tr></thead>
+<tbody>
+<tr><td><code>void set(const std::string&amp; s) { s_ = s; }</code></td><td>1 copy</td><td>1 copy (wasted)</td><td>1 function</td></tr>
+<tr><td><code>set(const std::string&amp;)</code> + <code>set(std::string&amp;&amp;)</code></td><td>1 copy</td><td>1 move</td><td>2 functions (2<sup>n</sup> for n params)</td></tr>
+<tr><td><code>void set(std::string s) { s_ = std::move(s); }</code></td><td>1 copy + 1 move</td><td>2 moves (1 for a prvalue)</td><td>1 function</td></tr>
+<tr><td><code>template &lt;class S&gt; void set(S&amp;&amp; s) { s_ = std::forward&lt;S&gt;(s); }</code></td><td>1 copy</td><td>1 move</td><td>template, see <a href="#ch19">Ch 19</a></td></tr>
+</tbody></table></div>
+<p>Pass-by-value is the usual recommendation for constructors that always store the argument: one extra cheap move, one function. It is a poor choice for setters called repeatedly with lvalues on long strings, because <code>s_ = s</code> (const&amp; version) reuses <code>s_</code>'s existing capacity, while by-value always allocates a fresh copy for the parameter. It is also wrong for types that are expensive to move (<code>std::array</code>, large aggregates).</p>
+<pre data-run="ch20-sink"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tracer</span> {
+    <span class="hljs-built_in">Tracer</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Tracer</span>(<span class="hljs-type">const</span> Tracer&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  copy&quot;</span>); }
+    <span class="hljs-built_in">Tracer</span>(Tracer&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  move&quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">ByValue</span> {
+    Tracer t;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ByValue</span><span class="hljs-params">(Tracer x)</span> : t(std::move(x)) {</span>}
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Overloads</span> {
+    Tracer t;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Overloads</span><span class="hljs-params">(<span class="hljs-type">const</span> Tracer&amp; x)</span> : t(x) {</span>}
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Overloads</span><span class="hljs-params">(Tracer&amp;&amp; x)</span> : t(std::move(x)) {</span>}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Tracer a;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;by value, lvalue:&quot;</span>);   <span class="hljs-function">ByValue <span class="hljs-title">v1</span><span class="hljs-params">(a)</span></span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;by value, xvalue:&quot;</span>);   <span class="hljs-function">ByValue <span class="hljs-title">v2</span><span class="hljs-params">(std::move(a))</span></span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;by value, prvalue:&quot;</span>);  <span class="hljs-function">ByValue <span class="hljs-title">v3</span><span class="hljs-params">(Tracer{})</span></span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;overloads, lvalue:&quot;</span>);  <span class="hljs-function">Overloads <span class="hljs-title">o1</span><span class="hljs-params">(a)</span></span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;overloads, xvalue:&quot;</span>);  <span class="hljs-function">Overloads <span class="hljs-title">o2</span><span class="hljs-params">(std::move(a))</span></span>;
+}</code></pre>
+<pre class="out" data-out="ch20-sink">by value, lvalue:
+  copy
+  move
+by value, xvalue:
+  move
+  move
+by value, prvalue:
+  move
+overloads, lvalue:
+  copy
+overloads, xvalue:
+  move</pre>
+<p>The prvalue case shows C++17 guaranteed elision: <code>Tracer{}</code> initialises the parameter directly, so only the move into the member remains.</p>
+
+<h3 id="ch18-move-only">Move-only types</h3>
+<p><code>std::unique_ptr</code>, <code>std::thread</code>, <code>std::jthread</code>, the file and string streams (<code>std::fstream</code>, <code>std::stringstream</code>), <code>std::unique_lock</code>, <code>std::promise</code>, <code>std::future</code> and <code>std::move_only_function</code> (C++23) are movable but not copyable. They can live in containers, be returned from functions and be passed by value, but each transfer must be from an rvalue. <code>std::mutex</code>, <code>std::atomic</code> and <code>std::condition_variable</code> are neither copyable nor movable, because other threads may hold their address.</p>
+<pre data-run="ch20-move-only"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::unique_ptr&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">make</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(v); }  <span class="hljs-comment">// implicit move</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt; v;
+    v.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">make</span>(<span class="hljs-number">1</span>));
+    <span class="hljs-keyword">auto</span> p = <span class="hljs-built_in">make</span>(<span class="hljs-number">2</span>);
+    v.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(p));                 <span class="hljs-comment">// v.push_back(p) does not compile</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;p is %s, v = {%d, %d}\n&quot;</span>, p ? <span class="hljs-string">&quot;set&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>, *v[<span class="hljs-number">0</span>], *v[<span class="hljs-number">1</span>]);
+
+    <span class="hljs-function">std::thread <span class="hljs-title">t</span><span class="hljs-params">([] {})</span></span>;
+    std::thread u = std::<span class="hljs-built_in">move</span>(t);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;t joinable=%d u joinable=%d\n&quot;</span>, t.<span class="hljs-built_in">joinable</span>(), u.<span class="hljs-built_in">joinable</span>());
+    u.<span class="hljs-built_in">join</span>();
+}</code></pre>
+<pre class="out" data-out="ch20-move-only">p is null, v = {1, 2}
+t joinable=0 u joinable=1</pre>
+<pre data-run="ch20-copy-unique" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt; v;
+    <span class="hljs-keyword">auto</span> p = std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">1</span>);
+    v.<span class="hljs-built_in">push_back</span>(p);                                 <span class="hljs-comment">// error: copy constructor is deleted</span>
+    std::vector&lt;std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt; w = v;        <span class="hljs-comment">// error: copying the vector copies elements</span>
+}</code></pre>
+
+<h3 id="ch18-ref-qualifiers">Ref-qualified member functions</h3>
+<p>A member function can overload on the value category of <code>*this</code> by adding <code>&amp;</code> or <code>&amp;&amp;</code> after the parameter list (and after <code>const</code>). The <code>&amp;&amp;</code> overload runs on temporaries and on <code>std::move(obj)</code>, so it may steal from the object. <code>std::optional::value()</code>, <code>std::move_only_function::operator()</code> and <code>std::basic_stringbuf::str()</code> (C++20) use this. If one overload of a name is ref-qualified, all overloads with the same parameter list must be.</p>
+<pre data-run="ch20-refqual"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Builder</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">Builder&amp; <span class="hljs-title">add</span><span class="hljs-params">(std::string_view x)</span> &amp; </span>{ s_ += x; <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+    <span class="hljs-function">Builder&amp;&amp; <span class="hljs-title">add</span><span class="hljs-params">(std::string_view x)</span> &amp;&amp; </span>{ s_ += x; <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(*<span class="hljs-keyword">this</span>); }
+    <span class="hljs-function">std::string <span class="hljs-title">build</span><span class="hljs-params">()</span> <span class="hljs-type">const</span>&amp; </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;build: copy out&quot;</span>); <span class="hljs-keyword">return</span> s_; }
+    <span class="hljs-function">std::string <span class="hljs-title">build</span><span class="hljs-params">()</span> &amp;&amp; </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;build: move out&quot;</span>); <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(s_); }
+<span class="hljs-keyword">private</span>:
+    std::string s_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Builder b;
+    b.<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;a&quot;</span>).<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;b&quot;</span>);
+    std::string s1 = b.<span class="hljs-built_in">build</span>();                          <span class="hljs-comment">// b is an lvalue</span>
+    std::string s2 = Builder{}.<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;x&quot;</span>).<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;y&quot;</span>).<span class="hljs-built_in">build</span>(); <span class="hljs-comment">// chain of xvalues</span>
+    std::string s3 = std::<span class="hljs-built_in">move</span>(b).<span class="hljs-built_in">build</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s %s %s\n&quot;</span>, s1.<span class="hljs-built_in">c_str</span>(), s2.<span class="hljs-built_in">c_str</span>(), s3.<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+<pre class="out" data-out="ch20-refqual">build: copy out
+build: move out
+build: move out
+ab xy ab</pre>
+<p>The <code>&amp;&amp;</code> overload of <code>add</code> returns <code>Builder&amp;&amp;</code>, so the chain stays an xvalue and the final <code>build()</code> also picks the <code>&amp;&amp;</code> overload. Returning a reference into a temporary is safe here because the temporary lives until the end of the full expression.</p>
+</section>
+
+<section id="ch18-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What does <code>std::move</code> do at run time?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Nothing. It is <code>static_cast&lt;std::remove_reference_t&lt;T&gt;&amp;&amp;&gt;(t)</code>, a compile-time cast that changes the expression's value category to xvalue.</p>
+    <p><b>Why.</b> The cast only affects overload resolution: an xvalue binds to <code>T&amp;&amp;</code> parameters, so a move constructor or move assignment (if one exists and is accessible) wins over the copy. The resource transfer happens inside that function. The common wrong answer is "it moves the object" or "it makes the source empty"; <code>std::move(x);</code> as a statement on its own leaves <code>x</code> completely untouched. A better name would have been <code>rvalue_cast</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Inside <code>void store(std::string&amp;&amp; s) { member_ = s; }</code>, does the assignment move or copy?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It copies. Write <code>member_ = std::move(s);</code>.</p>
+    <p><b>Why.</b> The parameter's <i>type</i> is rvalue reference, but the <i>expression</i> <code>s</code> is a named variable and therefore an lvalue. Value category belongs to expressions, not declarations. The rule exists so that a function can use the parameter several times safely; the move must be the explicit last use. People answer "it moves because s is an rvalue reference", which confuses the type with the category.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span><code>const std::vector&lt;int&gt; big(1'000'000); auto v = std::move(big);</code> How expensive is the second statement, and is <code>big</code> empty afterwards?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It is a full copy of a million ints (one allocation and a 4 MB memcpy), and <code>big</code> still holds all its elements.</p>
+    <p><b>Why.</b> <code>std::move(big)</code> yields <code>const std::vector&lt;int&gt;&amp;&amp;</code>. The move constructor takes a non-const <code>vector&amp;&amp;</code> and cannot bind to it; the copy constructor's <code>const vector&amp;</code> can. Overload resolution silently chooses the copy, and no compiler warns at <code>-Wall -Wextra</code> (clang-tidy has <code>performance-move-const-arg</code>). The same happens for <code>const</code> data members, which is why <code>const</code> members make a class effectively non-movable.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Name the five value categories and give an example of each primary one.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Primary: lvalue (<code>x</code>, <code>*p</code>, <code>"lit"</code>), xvalue (<code>std::move(x)</code>, <code>S{}.m</code>, a call returning <code>T&amp;&amp;</code>), prvalue (<code>42</code>, <code>x + 1</code>, a call returning <code>T</code>). Mixed: glvalue = lvalue or xvalue (has identity), rvalue = xvalue or prvalue (movable).</p>
+    <p><b>Why.</b> The two properties "has identity" and "may be moved from" give three useful combinations, and the mixed categories name the overlaps. Since C++17, a prvalue is not an object at all: it is a recipe that initialises a result object, and it is turned into an xvalue only when it must be (temporary materialisation, <code>[conv.rval]</code>). A frequent mistake is to call string literals rvalues; they are lvalue arrays with static storage duration.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why does <code>std::vector</code> copy its elements on reallocation when the element's move constructor is not <code>noexcept</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> To keep the strong exception guarantee of <code>push_back</code>, <code>reserve</code> and friends: if relocation fails, the vector must be unchanged.</p>
+    <p><b>Why.</b> With copies, a throw half-way leaves the old buffer intact, so the new buffer is destroyed and the exception propagates. With moves, the old elements before the failure point are already gutted, and moving them back could throw again. The library therefore uses <code>std::move_if_noexcept</code>, which moves only when the move is <code>noexcept</code> or the type is not copyable. "The compiler adds noexcept for you" is wrong for user-written moves; only implicit and defaulted ones get an inferred exception specification.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A class has a <code>std::string</code> member and a user-written <code>~Logger() { std::puts("bye"); }</code>. Does <code>Logger b = std::move(a);</code> move the string?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. It copies the string.</p>
+    <p><b>Why.</b> A user-declared destructor prevents the implicit declaration of the move constructor and move assignment (<code>[class.copy.ctor]/8</code>). The implicit copy constructor is still generated (deprecated but legal), and <code>const Logger&amp;</code> binds to the xvalue, so the copy runs. <code>~Logger() = default;</code> also counts as user-declared. Fix it with <code>Logger(Logger&amp;&amp;) = default; Logger&amp; operator=(Logger&amp;&amp;) = default;</code> plus defaulted copies, or remove the destructor. The wrong answer "only the copy operations suppress moves" misses the destructor rule.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>After <code>std::optional&lt;std::string&gt; a = "hi"; auto b = std::move(a);</code>, what does <code>a.has_value()</code> return?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>true</code>. <code>a</code> still contains a string, which is itself in a moved-from state (empty in practice).</p>
+    <p><b>Why.</b> <code>optional</code>'s move constructor is specified to move-construct the contained value and leave the source's engaged flag unchanged (<code>[optional.ctor]</code>). Resetting it would cost an extra destructor call and branch. People assume it behaves like <code>unique_ptr</code>, which is specified to become null. The lesson: "moved-from" means whatever that type documents, and for most types only "valid but unspecified".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>After <code>std::vector&lt;int&gt; b = std::move(a);</code>, which of these are allowed on <code>a</code>: <code>a.size()</code>, <code>a.clear()</code>, <code>a.push_back(1)</code>, <code>a = {1, 2}</code>, <code>a[0]</code>, <code>a.front()</code>, letting <code>a</code> go out of scope?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Everything except <code>a[0]</code> and <code>a.front()</code>. Those two have the precondition "not empty", which you cannot know holds. In practice <code>a</code> is empty in every mainstream library, but you should call <code>a.clear()</code> or assign before relying on its contents.</p>
+    <p><b>Why.</b> <code>[lib.types.movedfrom]</code> says a moved-from library object is in a "valid but unspecified state": every operation without preconditions works, and the destructor runs normally. So a moved-from object is usable, and reusing it after <code>clear()</code> or assignment is idiomatic (a buffer reused across loop iterations). The two common wrong answers are opposite extremes: "a moved-from object must not be touched at all except to destroy it" (too strict: <code>size()</code> and assignment are fine) and "it is guaranteed empty" (too loose for <code>std::vector</code> and <code>std::string</code>, although <code>std::unique_ptr</code> really is guaranteed null).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>State the rule of five and the rule of zero. Which should a typical class follow?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Rule of five: a class that manages a resource declares (or deletes) the destructor, copy constructor, copy assignment, move constructor and move assignment together. Rule of zero: every other class declares none of them and lets members like <code>std::vector</code> and <code>std::unique_ptr</code> manage resources. Most classes should follow the rule of zero.</p>
+    <p><b>Why.</b> Declaring any one of the five changes what the compiler generates for the others (a destructor suppresses moves, a move deletes copies), so partial declarations cause silent copies or surprising compile errors. Pushing ownership into a single-purpose RAII member means only that member needs the five, and the outer class gets correct, <code>noexcept</code> moves for free. See <a href="#ch01">Ch 1</a> for the copy side.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is moving a <code>std::array&lt;int, 1000&gt;</code> cheaper than copying it? What about a <code>std::string</code> holding <code>"hi"</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No for the array: move and copy both transfer all 4000 bytes. For a short string, a move is about as cheap as a copy too, because of the small string optimisation.</p>
+    <p><b>Why.</b> A move is faster only when there is an indirection to steal. <code>std::array</code> stores its elements inline, so "moving" each <code>int</code> is copying it. A short <code>std::string</code> stores its characters inside the object (SSO, see <a href="#ch16">Ch 16</a>), so the move constructor copies the inline bytes and resets the source; there is no heap pointer to steal. Interviewers ask this to catch the belief that <code>std::move</code> always makes things O(1).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why is <code>std::exchange</code> popular in move constructors? Write the move constructor for a class holding <code>int fd_</code> where <code>-1</code> means "no descriptor".</p>
+  <pre><code class="language-cpp hljs"><span class="hljs-built_in">Handle</span>(Handle&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">fd_</span>(std::<span class="hljs-built_in">exchange</span>(o.fd_, <span class="hljs-number">-1</span>)) {}</code></pre>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It reads the old value and writes the empty value in one expression, so it fits in the member initialiser list and you cannot forget to reset the source.</p>
+    <p><b>Why.</b> Forgetting to reset the source is the classic move bug: two objects then own the same descriptor or pointer and both release it (double close or double free). <code>std::exchange(obj, v)</code> is defined as <code>T old = std::move(obj); obj = std::forward&lt;U&gt;(v); return old;</code>. For <code>int</code> and pointers this compiles to two moves of registers. It also makes move assignment short: <code>reset(); fd_ = std::exchange(o.fd_, -1);</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is <code>template &lt;class U&gt; Widget(U&amp;&amp; u);</code> a move constructor? Does declaring it stop the compiler from generating one?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No and no. A constructor template is never a copy or move constructor, so the implicit copy and move constructors are still declared.</p>
+    <p><b>Why.</b> <code>[class.copy.ctor]/1</code> defines a copy or move constructor as a <i>non-template</i> constructor whose first parameter is <code>X&amp;</code>, <code>const X&amp;</code>, <code>X&amp;&amp;</code> and so on. The template still competes in overload resolution, and for a non-const lvalue <code>Widget</code> it deduces <code>U = Widget&amp;</code>, which is a better match than the implicit <code>const Widget&amp;</code> copy constructor. That greedy-template problem is the subject of <a href="#ch19">Ch 19</a>. Conversely, <code>Widget(const Widget&amp;&amp;)</code> <i>is</i> formally a move constructor, but useless.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When should a constructor take a <code>std::string</code> by value and move it, and when is <code>const std::string&amp;</code> better?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> By value plus <code>std::move</code> for constructors and other sinks that always keep a copy: callers pay one copy plus one move for lvalues and two moves for rvalues, with a single function. <code>const&amp;</code> is better when the function only reads the argument, when the storage may not happen, or for assignment-style setters called with lvalues, where reusing the member's existing buffer avoids an allocation.</p>
+    <p><b>Why.</b> The overload pair <code>const T&amp;</code> + <code>T&amp;&amp;</code> is optimal but doubles per parameter (2<sup>n</sup> overloads). A forwarding-reference template is also optimal but must be constrained and lives in a header. The by-value version is the simplest good default for constructors, and it is what clang-tidy's <code>modernize-pass-by-value</code> check rewrites to. The C++ Core Guidelines are more conservative: F.16 says <code>const&amp;</code> for "in" parameters, and F.15/F.18 add a <code>T&amp;&amp;</code> overload only when the optimisation matters. People who answer "always pass by value now" miss the setter case.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch18-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Every special member prints its name. What is the output?</p>
+  <pre data-run="ch20-o-basic"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+    T&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy=&quot;</span>); <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+    T&amp; <span class="hljs-keyword">operator</span>=(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move=&quot;</span>); <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    T a;
+    T b = a;
+    T c = std::<span class="hljs-built_in">move</span>(a);
+    b = c;
+    c = std::<span class="hljs-built_in">move</span>(b);
+    T d = T{};
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch20-o-basic">ctor
+copy
+move
+copy=
+move=
+ctor
+dtor
+dtor
+dtor
+dtor</pre>
+    <p><b>Answer.</b> As above: 2 constructions by default ctor, one copy, one move, one of each assignment, four destructors.</p>
+    <p><b>Why.</b> <code>T b = a</code> is initialisation, not assignment, so it calls the copy constructor. <code>b = c</code> and <code>c = std::move(b)</code> assign to existing objects. <code>T d = T{};</code> prints only <code>ctor</code>: since C++17 the prvalue <code>T{}</code> initialises <code>d</code> directly, with no temporary and no move (<a href="#ch21">Ch 21</a>). People often add a "move" and an extra "dtor" there, which was the possible C++14 behaviour without elision.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Two <code>push_back</code> calls on an empty vector with a <code>noexcept</code> move. What is printed?</p>
+  <pre data-run="ch20-o-push"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;T&gt; v;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-- push 1&quot;</span>);
+    v.<span class="hljs-built_in">push_back</span>(T{});
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-- push 2&quot;</span>);
+    v.<span class="hljs-built_in">push_back</span>(T{});
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-- end&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch20-o-push">-- push 1
+ctor
+move
+dtor
+-- push 2
+ctor
+move
+move
+dtor
+dtor
+-- end
+dtor
+dtor</pre>
+    <p><b>Answer.</b> Push 1: the temporary is built, moved into the buffer, then destroyed at the end of the statement. Push 2: capacity is 1, so the vector reallocates to capacity 2. It first move-constructs the new element from the temporary into the new buffer, then moves the old element across, destroys the old element, and finally the temporary is destroyed.</p>
+    <p><b>Why.</b> Both libstdc++ and libc++ construct the new element before relocating the old ones, so that an argument referring into the vector itself (<code>v.push_back(v[0])</code>) is still valid when it is read. A temporary bound to <code>push_back(T&amp;&amp;)</code> cannot be elided into the buffer: it must exist so the reference can bind to it. That is the cost <code>emplace_back</code> avoids (<a href="#ch20">Ch 20</a>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The same program, but the move constructor is no longer <code>noexcept</code>. What changes?</p>
+  <pre data-run="ch20-o-push-throw"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;ctor&quot;</span>); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;T&gt; v;
+    v.<span class="hljs-built_in">push_back</span>(T{});
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-- push 2&quot;</span>);
+    v.<span class="hljs-built_in">push_back</span>(T{});
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-- end&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch20-o-push-throw">ctor
+move
+dtor
+-- push 2
+ctor
+move
+copy
+dtor
+dtor
+-- end
+dtor
+dtor</pre>
+    <p><b>Answer.</b> The new element is still moved in from the temporary, but the existing element is now <b>copied</b> into the new buffer.</p>
+    <p><b>Why.</b> Placing the new element uses plain <code>T&amp;&amp;</code> overload resolution, because if it throws nothing old has been touched. Relocating the existing elements uses <code>std::move_if_noexcept</code>, which returns <code>const T&amp;</code> for a copyable type whose move may throw. With real resource-owning types, this one missing keyword turns every growth step into deep copies.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A function takes an rvalue reference and forwards it on. What is printed?</p>
+  <pre data-run="ch20-o-named"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">keep</span><span class="hljs-params">(T&amp;&amp; t)</span> </span>{
+    T a = t;
+    T b = std::<span class="hljs-built_in">move</span>(t);
+    T c = std::<span class="hljs-built_in">move</span>(t);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">keep</span>(T{});
+    <span class="hljs-type">const</span> T k;
+    T d = std::<span class="hljs-built_in">move</span>(k);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch20-o-named">copy
+move
+move
+copy</pre>
+    <p><b>Answer.</b> <code>copy</code>, <code>move</code>, <code>move</code>, <code>copy</code>.</p>
+    <p><b>Why.</b> <code>t</code> is a named rvalue reference, so <code>T a = t</code> copies. Each <code>std::move(t)</code> is just a cast, so moving twice from the same object compiles and calls the move constructor twice (with real resources, <code>c</code> would get an empty object, which is a logic bug the compiler will not catch). <code>std::move(k)</code> on a <code>const</code> object yields <code>const T&amp;&amp;</code>, which only the copy constructor accepts. A side note: <code>const T k;</code> compiles even though the default constructor is defaulted, because <code>T</code> has no data members that would be left uninitialised, which makes it const-default-constructible (<code>[dcl.init.general]</code>; the paragraph number differs between C++20, C++23 and the current draft).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Two wrapper classes differ only in a destructor. What is printed?</p>
+  <pre data-run="ch20-o-dtor"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Res</span> {
+    <span class="hljs-built_in">Res</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Res</span>(<span class="hljs-type">const</span> Res&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Res copy&quot;</span>); }
+    <span class="hljs-built_in">Res</span>(Res&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Res move&quot;</span>); }
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">A</span> { Res r; };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">B</span> { Res r; <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">B</span>() = <span class="hljs-keyword">default</span>; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    A a1; A a2 = std::<span class="hljs-built_in">move</span>(a1);
+    B b1; B b2 = std::<span class="hljs-built_in">move</span>(b1);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d\n&quot;</span>, std::is_nothrow_move_constructible_v&lt;A&gt;,
+                           std::is_nothrow_move_constructible_v&lt;B&gt;);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch20-o-dtor">Res move
+Res copy
+1 0</pre>
+    <p><b>Answer.</b> <code>A</code> moves; <code>B</code> copies; the traits print <code>1 0</code>.</p>
+    <p><b>Why.</b> <code>virtual ~B() = default;</code> is user-declared, so <code>B</code> gets no implicit move constructor. <code>std::move(b1)</code> binds to the implicit copy constructor, which copies <code>Res</code>. <code>is_nothrow_move_constructible&lt;B&gt;</code> asks whether <code>B(B&amp;&amp;)</code> is a valid non-throwing expression; it is valid (via the copy constructor), but <code>Res</code>'s copy constructor is not <code>noexcept</code>, so the answer is false. A <code>std::vector&lt;B&gt;</code> would copy on every reallocation. The usual wrong answer is that <code>= default</code> on the destructor "doesn't count".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This string class crashes at the end of <code>main</code>. Why?</p>
+  <pre data-run="ch20-b-nonull" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Str</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Str</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s)</span> : len_(std::strlen(s)), p_(new char[len_ + <span class="hljs-number">1</span>]) {</span>
+        std::<span class="hljs-built_in">memcpy</span>(p_, s, len_ + <span class="hljs-number">1</span>);
+    }
+    ~<span class="hljs-built_in">Str</span>() { <span class="hljs-keyword">delete</span>[] p_; }
+    <span class="hljs-built_in">Str</span>(<span class="hljs-type">const</span> Str&amp;) = <span class="hljs-keyword">delete</span>;
+    Str&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Str&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-built_in">Str</span>(Str&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">len_</span>(o.len_), <span class="hljs-built_in">p_</span>(o.p_) {}
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">c_str</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> p_; }
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">size_t</span> len_;
+    <span class="hljs-type">char</span>* p_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Str <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-string">&quot;hello&quot;</span>)</span></span>;
+    <span class="hljs-function">Str <span class="hljs-title">b</span><span class="hljs-params">(<span class="hljs-keyword">static_cast</span>&lt;Str&amp;&amp;&gt;(a))</span></span>;
+    std::<span class="hljs-built_in">puts</span>(b.<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The move constructor copies the pointer but does not reset <code>o.p_</code>. Both <code>a</code> and <code>b</code> own the same buffer, and both destructors call <code>delete[]</code> on it: a double free, which ASan reports as <code>attempting double-free</code>.</p>
+    <p><b>Why.</b> A move is "shallow copy plus disarm the source". Without the second half, it is just a shallow copy, the exact bug the rule of three was invented to prevent. Fix: <code>Str(Str&amp;&amp; o) noexcept : len_(std::exchange(o.len_, 0)), p_(std::exchange(o.p_, nullptr)) {}</code>. Then also make <code>c_str()</code> cope with a null <code>p_</code> (return <code>""</code>), because the moved-from state must keep the class usable. The output is marked as undefined behaviour: without a sanitizer, a double free may abort, corrupt the heap silently or appear to work.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The author expected this move constructor to be cheap. The trace says otherwise. Fix it.</p>
+  <pre data-run="ch20-b-member"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Blob</span> {
+    <span class="hljs-built_in">Blob</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Blob</span>(<span class="hljs-type">const</span> Blob&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Blob copy&quot;</span>); }
+    <span class="hljs-built_in">Blob</span>(Blob&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Blob move&quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Doc</span> {
+    Blob body;
+    Blob meta;
+    <span class="hljs-built_in">Doc</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Doc</span>(Doc&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">body</span>(o.body), <span class="hljs-built_in">meta</span>(std::<span class="hljs-built_in">move</span>(o.meta)) {}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Doc a;
+    Doc b = std::<span class="hljs-built_in">move</span>(a);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch20-b-member">Blob copy
+Blob move</pre>
+    <p><b>Answer.</b> <code>body(o.body)</code> copies: <code>o</code> is a named rvalue reference, so <code>o.body</code> is an lvalue. Write <code>body(std::move(o.body))</code>, or better, delete the hand-written constructor and let the compiler generate <code>Doc(Doc&amp;&amp;) = default;</code>.</p>
+    <p><b>Why.</b> Member access on an lvalue gives an lvalue. Only <code>std::move(o).body</code> or <code>std::move(o.body)</code> gives an xvalue. Hand-written move constructors are a common source of accidental copies, and a missed member compiles silently. The defaulted version moves every base and member in declaration order and gets the right <code>noexcept</code> automatically.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does moving a <code>Person</code> copy its name?</p>
+  <pre data-run="ch20-b-const-member"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Name</span> {
+    std::string s;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Name</span><span class="hljs-params">(std::string v)</span> : s(std::move(v)) {</span>}
+    <span class="hljs-built_in">Name</span>(<span class="hljs-type">const</span> Name&amp; o) : <span class="hljs-built_in">s</span>(o.s) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Name copy&quot;</span>); }
+    <span class="hljs-built_in">Name</span>(Name&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">s</span>(std::<span class="hljs-built_in">move</span>(o.s)) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Name move&quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Person</span> {
+    <span class="hljs-type">const</span> Name name;
+    <span class="hljs-type">int</span> age;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Person a{<span class="hljs-built_in">Name</span>(<span class="hljs-string">&quot;Ada&quot;</span>), <span class="hljs-number">36</span>};
+    Person b = std::<span class="hljs-built_in">move</span>(a);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s %d\n&quot;</span>, b.name.s.<span class="hljs-built_in">c_str</span>(), b.age);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch20-b-const-member">Name copy
+Ada 36</pre>
+    <p><b>Answer.</b> <code>name</code> is a <code>const</code> member, so <code>Person</code>'s implicit move constructor initialises it from <code>std::move(o).name</code>, a <code>const Name&amp;&amp;</code>, which binds only to the copy constructor. That is the single <code>Name copy</code> line. (The aggregate initialisation prints nothing: the prvalue <code>Name("Ada")</code> initialises the member directly.)</p>
+    <p><b>Why.</b> The wrong answer is "the implicit move constructor moves every member". It does, but moving a const member is a copy. Drop the <code>const</code> and enforce immutability through the interface (private member plus a getter). <code>const</code> data members also delete the implicit copy and move <i>assignment</i>, so <code>Person</code> cannot be assigned or sorted in a vector. This is one of the most common accidental-copy sources in real codebases.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The program crashes. Which line is wrong, and why does it compile?</p>
+  <pre data-run="ch20-b-use-after" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Job</span> { <span class="hljs-type">int</span> id; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::unique_ptr&lt;Job&gt;&gt; queue;
+    <span class="hljs-keyword">auto</span> job = std::<span class="hljs-built_in">make_unique</span>&lt;Job&gt;(Job{<span class="hljs-number">7</span>});
+    queue.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(job));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;queued job %d\n&quot;</span>, job-&gt;id);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>job-&gt;id</code> after <code>std::move(job)</code>. <code>unique_ptr</code>'s move constructor is specified to leave the source null, so this dereferences a null pointer (UBSan/ASan report it; a normal build segfaults).</p>
+    <p><b>Why.</b> The compiler does not track moved-from state, so use-after-move compiles cleanly. clang-tidy's <code>bugprone-use-after-move</code> catches it. Fix by reading what you need before the move (<code>int id = job-&gt;id;</code>) or through the container (<code>queue.back()-&gt;id</code>). The output is marked undefined behaviour because a null dereference has no defined result.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch18-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>Buffer</code>, a heap byte buffer with the rule of five. Requirements: <code>explicit Buffer(std::size_t n)</code> zero-fills; <code>size()</code>, <code>data()</code>, <code>operator[]</code>; deep copy; <code>noexcept</code> moves that leave the source with size 0 and null data; copy assignment with the strong exception guarantee; self-assignment and self-move safe; a <code>noexcept</code> member and free <code>swap</code>. Show with <code>static_assert</code> that a vector of Buffers will move on reallocation.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Own a <code>char*</code> and a size. The copy constructor allocates and copies. Moves use <code>std::exchange</code> to steal and reset. Copy assignment uses copy-and-swap (construct a temporary copy, which may throw, then swap, which cannot), giving the strong guarantee and self-assignment safety. Move assignment uses swap, which is self-safe without a branch, and the old buffer is freed by the source's destructor.</p>
+<pre data-run="ch20-c-buffer" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cassert&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Buffer</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Buffer</span>() <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Buffer</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> : size_(n), data_(n ? new char[n]() : nullptr) {</span>}
+    ~<span class="hljs-built_in">Buffer</span>() { <span class="hljs-keyword">delete</span>[] data_; }
+
+    <span class="hljs-built_in">Buffer</span>(<span class="hljs-type">const</span> Buffer&amp; o) : <span class="hljs-built_in">size_</span>(o.size_), <span class="hljs-built_in">data_</span>(o.size_ ? <span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[o.size_] : <span class="hljs-literal">nullptr</span>) {
+        <span class="hljs-keyword">if</span> (size_) std::<span class="hljs-built_in">memcpy</span>(data_, o.data_, size_);
+    }
+    <span class="hljs-built_in">Buffer</span>(Buffer&amp;&amp; o) <span class="hljs-keyword">noexcept</span>
+        : <span class="hljs-built_in">size_</span>(std::<span class="hljs-built_in">exchange</span>(o.size_, <span class="hljs-number">0</span>)), <span class="hljs-built_in">data_</span>(std::<span class="hljs-built_in">exchange</span>(o.data_, <span class="hljs-literal">nullptr</span>)) {}
+
+    Buffer&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Buffer&amp; o) {
+        Buffer <span class="hljs-built_in">tmp</span>(o);          <span class="hljs-comment">// may throw; *this untouched</span>
+        <span class="hljs-built_in">swap</span>(tmp);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    Buffer&amp; <span class="hljs-keyword">operator</span>=(Buffer&amp;&amp; o) <span class="hljs-keyword">noexcept</span> {
+        Buffer <span class="hljs-built_in">tmp</span>(std::<span class="hljs-built_in">move</span>(o));   <span class="hljs-comment">// o is now empty, even when &amp;o == this</span>
+        <span class="hljs-built_in">swap</span>(tmp);                  <span class="hljs-comment">// old contents die with tmp</span>
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">swap</span><span class="hljs-params">(Buffer&amp; o)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        std::<span class="hljs-built_in">swap</span>(size_, o.size_);
+        std::<span class="hljs-built_in">swap</span>(data_, o.data_);
+    }
+    <span class="hljs-function"><span class="hljs-keyword">friend</span> <span class="hljs-type">void</span> <span class="hljs-title">swap</span><span class="hljs-params">(Buffer&amp; a, Buffer&amp; b)</span> <span class="hljs-keyword">noexcept</span> </span>{ a.<span class="hljs-built_in">swap</span>(b); }
+
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+    <span class="hljs-function"><span class="hljs-type">char</span>* <span class="hljs-title">data</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> data_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">data</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> data_; }
+    <span class="hljs-type">char</span>&amp; <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) { <span class="hljs-keyword">return</span> data_[i]; }
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>&amp; <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> data_[i]; }
+
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">size_t</span> size_ = <span class="hljs-number">0</span>;
+    <span class="hljs-type">char</span>* data_ = <span class="hljs-literal">nullptr</span>;
+};
+
+<span class="hljs-built_in">static_assert</span>(std::is_nothrow_move_constructible_v&lt;Buffer&gt;);
+<span class="hljs-built_in">static_assert</span>(std::is_nothrow_move_assignable_v&lt;Buffer&gt;);
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Buffer <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-number">4</span>)</span></span>;
+    std::<span class="hljs-built_in">memcpy</span>(a.<span class="hljs-built_in">data</span>(), <span class="hljs-string">&quot;abc&quot;</span>, <span class="hljs-number">4</span>);
+    Buffer b = a;                      <span class="hljs-comment">// deep copy</span>
+    b[<span class="hljs-number">0</span>] = <span class="hljs-string">&#x27;X&#x27;</span>;
+    <span class="hljs-built_in">assert</span>(a[<span class="hljs-number">0</span>] == <span class="hljs-string">&#x27;a&#x27;</span>);
+    Buffer c = std::<span class="hljs-built_in">move</span>(a);
+    <span class="hljs-built_in">assert</span>(a.<span class="hljs-built_in">size</span>() == <span class="hljs-number">0</span> &amp;&amp; a.<span class="hljs-built_in">data</span>() == <span class="hljs-literal">nullptr</span> &amp;&amp; c.<span class="hljs-built_in">size</span>() == <span class="hljs-number">4</span>);
+    b = b;                             <span class="hljs-comment">// self copy-assign</span>
+    <span class="hljs-built_in">assert</span>(std::<span class="hljs-built_in">strcmp</span>(b.<span class="hljs-built_in">data</span>(), <span class="hljs-string">&quot;Xbc&quot;</span>) == <span class="hljs-number">0</span>);
+    Buffer&amp; alias = c;
+    c = std::<span class="hljs-built_in">move</span>(alias);              <span class="hljs-comment">// self move-assign keeps the value</span>
+    <span class="hljs-built_in">assert</span>(std::<span class="hljs-built_in">strcmp</span>(c.<span class="hljs-built_in">data</span>(), <span class="hljs-string">&quot;abc&quot;</span>) == <span class="hljs-number">0</span>);
+    a = c;                             <span class="hljs-comment">// reuse a moved-from object</span>
+    std::vector&lt;Buffer&gt; v;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100</span>; ++i) v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">16</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a=%s b=%s c=%s v=%zu\n&quot;</span>, a.<span class="hljs-built_in">data</span>(), b.<span class="hljs-built_in">data</span>(), c.<span class="hljs-built_in">data</span>(), v.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch20-c-buffer">a=abc b=Xbc c=abc v=100</pre>
+    <p><b>Complexity and pitfalls.</b> Copy O(n), move O(1), swap O(1). Pitfalls: forgetting to reset the source in the move constructor (double free); forgetting <code>noexcept</code> (vector copies); calling <code>memcpy</code> with a null pointer even for size 0 (undefined behaviour under the C rules that C++20 inherits, so guard it); declaring <code>data_</code> before <code>size_</code> and then reading <code>size_</code> in <code>data_</code>'s initialiser (members initialise in declaration order). The <code>b = b</code> line triggers <code>-Wself-assign-overloaded</code> on Clang, which is expected in a test. The swap-based move assignment frees the old buffer immediately here because <code>tmp</code> dies at the end of the function.</p>
+    <p class="rating">Estimated rating: ~1500 · standard rule-of-five boilerplate, but four special members each have a distinct trap</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a move-only <code>UniqueHandle</code> that owns an integer descriptor (<code>-1</code> means empty) and closes it with a given function. Interface: <code>explicit UniqueHandle(int fd)</code>, <code>get()</code>, <code>release()</code>, <code>reset(int = -1)</code>, <code>explicit operator bool</code>. Copies must not compile. Use a fake <code>close</code> that records calls so the test can check that every descriptor is closed exactly once.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Delete both copy operations. The move constructor takes the descriptor with <code>std::exchange(o.fd_, -1)</code>. Move assignment is <code>reset(o.release())</code>, which is self-safe: on self-move, <code>release()</code> first sets our own fd to <code>-1</code> and returns it, so <code>reset</code> finds nothing old to close and simply takes the fd back. The <code>old != fd</code> check in <code>reset</code> covers the separate case <code>h.reset(h.get())</code>. The destructor calls <code>reset()</code>.</p>
+<pre data-run="ch20-c-handle" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cassert&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> std::vector&lt;<span class="hljs-type">int</span>&gt; closed;                 <span class="hljs-comment">// fake ::close for the test</span>
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">fake_close</span><span class="hljs-params">(<span class="hljs-type">int</span> fd)</span> </span>{ closed.<span class="hljs-built_in">push_back</span>(fd); }
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">UniqueHandle</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">UniqueHandle</span>() <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">UniqueHandle</span><span class="hljs-params">(<span class="hljs-type">int</span> fd)</span> <span class="hljs-keyword">noexcept</span> : fd_(fd) {</span>}
+    ~<span class="hljs-built_in">UniqueHandle</span>() { <span class="hljs-built_in">reset</span>(); }
+
+    <span class="hljs-built_in">UniqueHandle</span>(<span class="hljs-type">const</span> UniqueHandle&amp;) = <span class="hljs-keyword">delete</span>;
+    UniqueHandle&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> UniqueHandle&amp;) = <span class="hljs-keyword">delete</span>;
+
+    <span class="hljs-built_in">UniqueHandle</span>(UniqueHandle&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">fd_</span>(std::<span class="hljs-built_in">exchange</span>(o.fd_, <span class="hljs-number">-1</span>)) {}
+    UniqueHandle&amp; <span class="hljs-keyword">operator</span>=(UniqueHandle&amp;&amp; o) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-built_in">reset</span>(o.<span class="hljs-built_in">release</span>());
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">get</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> fd_; }
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">bool</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> fd_ != <span class="hljs-number">-1</span>; }
+    [[nodiscard]] <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">release</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">exchange</span>(fd_, <span class="hljs-number">-1</span>); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">(<span class="hljs-type">int</span> fd = <span class="hljs-number">-1</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-type">int</span> old = std::<span class="hljs-built_in">exchange</span>(fd_, fd);
+        <span class="hljs-keyword">if</span> (old != <span class="hljs-number">-1</span> &amp;&amp; old != fd) <span class="hljs-built_in">fake_close</span>(old);
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">int</span> fd_ = <span class="hljs-number">-1</span>;
+};
+
+<span class="hljs-built_in">static_assert</span>(!std::is_copy_constructible_v&lt;UniqueHandle&gt;);
+<span class="hljs-built_in">static_assert</span>(std::is_nothrow_move_constructible_v&lt;UniqueHandle&gt;);
+
+<span class="hljs-function"><span class="hljs-type">static</span> UniqueHandle <span class="hljs-title">open_fake</span><span class="hljs-params">(<span class="hljs-type">int</span> fd)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">UniqueHandle</span>(fd); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    {
+        UniqueHandle a = <span class="hljs-built_in">open_fake</span>(<span class="hljs-number">3</span>);
+        UniqueHandle b = std::<span class="hljs-built_in">move</span>(a);
+        <span class="hljs-built_in">assert</span>(!a &amp;&amp; b.<span class="hljs-built_in">get</span>() == <span class="hljs-number">3</span>);
+        <span class="hljs-function">UniqueHandle <span class="hljs-title">c</span><span class="hljs-params">(<span class="hljs-number">4</span>)</span></span>;
+        c = std::<span class="hljs-built_in">move</span>(b);              <span class="hljs-comment">// closes 4, takes 3</span>
+        UniqueHandle&amp; alias = c;
+        c = std::<span class="hljs-built_in">move</span>(alias);          <span class="hljs-comment">// self-move: no close</span>
+        <span class="hljs-built_in">assert</span>(c.<span class="hljs-built_in">get</span>() == <span class="hljs-number">3</span>);
+        std::vector&lt;UniqueHandle&gt; v;
+        v.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">UniqueHandle</span>(<span class="hljs-number">5</span>));
+        v.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">open_fake</span>(<span class="hljs-number">6</span>));
+        <span class="hljs-type">int</span> raw = v[<span class="hljs-number">0</span>].<span class="hljs-built_in">release</span>();      <span class="hljs-comment">// caller now owns 5</span>
+        <span class="hljs-built_in">fake_close</span>(raw);
+    }                                  <span class="hljs-comment">// closes 6, then 3</span>
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> fd : closed) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d &quot;</span>, fd);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch20-c-handle">4 5 6 3</pre>
+    <p><b>Complexity and pitfalls.</b> Every operation is O(1). Destruction order at the closing brace is reverse declaration: <code>v</code> (closes 6, element 0 is empty), then <code>c</code> (closes 3), then the empty <code>b</code> and <code>a</code>. Pitfalls: a move assignment written as <code>reset(); fd_ = o.fd_; o.fd_ = -1;</code> closes our own descriptor on self-move; forgetting <code>[[nodiscard]]</code> on <code>release()</code> lets callers leak; using <code>0</code> as the empty value is wrong because descriptor 0 (stdin) is valid. In production, prefer <code>std::unique_ptr</code> with a custom deleter only if the handle is a pointer; for <code>int</code> descriptors a small class like this is the norm (<a href="#ch10">Ch 10</a>).</p>
+    <p class="rating">Estimated rating: ~1400 · move-only RAII is short but the self-move and release semantics are easy to get wrong</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>my::move</code> and <code>my::move_if_noexcept</code> without using the standard versions. Prove with <code>static_assert</code> that they return the same types as <code>std::move</code> and <code>std::move_if_noexcept</code> for: a non-const lvalue, a const lvalue, an rvalue, a type with a throwing move, and a move-only type with a throwing move.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>move</code> takes a forwarding reference and casts to <code>remove_reference_t&lt;T&gt;&amp;&amp;</code>. <code>move_if_noexcept</code> picks its return type with <code>std::conditional_t</code>: <code>const T&amp;</code> when the move may throw and a copy is possible, <code>T&amp;&amp;</code> otherwise. Both are <code>constexpr</code> and <code>noexcept</code> because they are pure casts.</p>
+<pre data-run="ch20-c-mymove"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> my {
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+[[nodiscard]] <span class="hljs-function"><span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp;&amp; <span class="hljs-title">move</span><span class="hljs-params">(T&amp;&amp; t)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-keyword">return</span> <span class="hljs-keyword">static_cast</span>&lt;std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp;&amp;&gt;(t);
+}
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">using</span> <span class="hljs-type">move_if_noexcept_t</span> = std::<span class="hljs-type">conditional_t</span>&lt;
+    !std::is_nothrow_move_constructible_v&lt;T&gt; &amp;&amp; std::is_copy_constructible_v&lt;T&gt;,
+    <span class="hljs-type">const</span> T&amp;, T&amp;&amp;&gt;;
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+[[nodiscard]] <span class="hljs-function"><span class="hljs-keyword">constexpr</span> <span class="hljs-type">move_if_noexcept_t</span>&lt;T&gt; <span class="hljs-title">move_if_noexcept</span><span class="hljs-params">(T&amp; x)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-keyword">return</span> <span class="hljs-keyword">static_cast</span>&lt;<span class="hljs-type">move_if_noexcept_t</span>&lt;T&gt;&gt;(x);
+}
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Throwing</span> { <span class="hljs-built_in">Throwing</span>() = <span class="hljs-keyword">default</span>; <span class="hljs-built_in">Throwing</span>(<span class="hljs-type">const</span> Throwing&amp;) {} <span class="hljs-built_in">Throwing</span>(Throwing&amp;&amp;) {} };
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">ThrowingMoveOnly</span> { <span class="hljs-built_in">ThrowingMoveOnly</span>() = <span class="hljs-keyword">default</span>; <span class="hljs-built_in">ThrowingMoveOnly</span>(ThrowingMoveOnly&amp;&amp;) {} };
+
+<span class="hljs-meta">#<span class="hljs-keyword">define</span> SAME(a, b) static_assert(std::is_same_v<span class="hljs-string">&lt;decltype(a), decltype(b)&gt;</span>)</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::string s = <span class="hljs-string">&quot;x&quot;</span>;
+    <span class="hljs-type">const</span> std::string cs = <span class="hljs-string">&quot;y&quot;</span>;
+    Throwing t;
+    ThrowingMoveOnly m;
+    <span class="hljs-keyword">auto</span> u = std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">1</span>);
+
+    <span class="hljs-built_in">SAME</span>(my::<span class="hljs-built_in">move</span>(s), std::<span class="hljs-built_in">move</span>(s));
+    <span class="hljs-built_in">SAME</span>(my::<span class="hljs-built_in">move</span>(cs), std::<span class="hljs-built_in">move</span>(cs));
+    <span class="hljs-built_in">SAME</span>(my::<span class="hljs-built_in">move</span>(std::string{}), std::<span class="hljs-built_in">move</span>(std::string{}));
+    <span class="hljs-built_in">SAME</span>(my::<span class="hljs-built_in">move_if_noexcept</span>(s), std::<span class="hljs-built_in">move_if_noexcept</span>(s));
+    <span class="hljs-built_in">SAME</span>(my::<span class="hljs-built_in">move_if_noexcept</span>(t), std::<span class="hljs-built_in">move_if_noexcept</span>(t));
+    <span class="hljs-built_in">SAME</span>(my::<span class="hljs-built_in">move_if_noexcept</span>(m), std::<span class="hljs-built_in">move_if_noexcept</span>(m));
+    <span class="hljs-built_in">SAME</span>(my::<span class="hljs-built_in">move_if_noexcept</span>(u), std::<span class="hljs-built_in">move_if_noexcept</span>(u));
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(my::<span class="hljs-built_in">move_if_noexcept</span>(t)), <span class="hljs-type">const</span> Throwing&amp;&gt;);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(my::<span class="hljs-built_in">move_if_noexcept</span>(m)), ThrowingMoveOnly&amp;&amp;&gt;);
+
+    std::string moved = my::<span class="hljs-built_in">move</span>(s);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;moved=%s source_size=%zu\n&quot;</span>, moved.<span class="hljs-built_in">c_str</span>(), s.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch20-c-mymove">moved=x source_size=0</pre>
+    <p><b>Complexity and pitfalls.</b> Zero run-time cost. Pitfalls: returning <code>T&amp;&amp;</code> instead of <code>remove_reference_t&lt;T&gt;&amp;&amp;</code> (for an lvalue argument, <code>T = std::string&amp;</code> and <code>T&amp;&amp;</code> collapses to <code>std::string&amp;</code>, so nothing would move); taking the parameter by <code>T&amp;</code> only (then <code>move(std::string{})</code> fails); forgetting <code>is_copy_constructible</code> in <code>move_if_noexcept</code>, which would try to copy a move-only type. The source size 0 is what both standard libraries do; it is not guaranteed.</p>
+    <p class="rating">Estimated rating: ~1300 · tiny code, but needs reference collapsing and the exact move_if_noexcept condition</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a numeric <code>Vec</code> (heap array of doubles, rule of five with <code>noexcept</code> moves) and overload <code>operator+</code> so that <code>Vec s = a + b + c + d;</code> performs exactly <b>one</b> heap allocation. Count allocations to prove it, and explain how many a single <code>const Vec&amp;, const Vec&amp;</code> overload would make.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>a + b + c + d</code> parses as <code>((a + b) + c) + d</code>. Only the first addition sees two lvalues; every later one has a temporary on the left. Overload on the value category of the operands: when an operand is an rvalue, add into its buffer with <code>+=</code> and move it out as the result. Four overloads are needed, because with only <code>(Vec&amp;&amp;, const Vec&amp;)</code> and <code>(const Vec&amp;, Vec&amp;&amp;)</code> the call with two temporaries would be ambiguous. This is the same trick <code>std::string</code>'s <code>operator+</code> uses.</p>
+<pre data-run="ch20-c-vecplus" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Vec</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Vec</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, <span class="hljs-type">double</span> x = <span class="hljs-number">0</span>)</span> : n_(n), d_(alloc(n)) {</span>
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n_; ++i) d_[i] = x;
+    }
+    <span class="hljs-built_in">Vec</span>(<span class="hljs-type">const</span> Vec&amp; o) : <span class="hljs-built_in">n_</span>(o.n_), <span class="hljs-built_in">d_</span>(<span class="hljs-built_in">alloc</span>(o.n_)) {
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n_; ++i) d_[i] = o.d_[i];
+    }
+    <span class="hljs-built_in">Vec</span>(Vec&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    Vec&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Vec&amp; o) { Vec <span class="hljs-built_in">t</span>(o); <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span> = std::<span class="hljs-built_in">move</span>(t); }
+    Vec&amp; <span class="hljs-keyword">operator</span>=(Vec&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    ~<span class="hljs-built_in">Vec</span>() = <span class="hljs-keyword">default</span>;
+
+    Vec&amp; <span class="hljs-keyword">operator</span>+=(<span class="hljs-type">const</span> Vec&amp; o) {
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n_; ++i) d_[i] += o.d_[i];
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    <span class="hljs-type">double</span> <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> d_[i]; }
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> allocations = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">static</span> std::unique_ptr&lt;<span class="hljs-type">double</span>[]&gt; <span class="hljs-title">alloc</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        ++allocations;
+        <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">double</span>[]&gt;(n);
+    }
+    std::<span class="hljs-type">size_t</span> n_;
+    std::unique_ptr&lt;<span class="hljs-type">double</span>[]&gt; d_;
+};
+
+<span class="hljs-comment">// Both operands are lvalues: the result needs a new buffer.</span>
+<span class="hljs-keyword">inline</span> Vec <span class="hljs-keyword">operator</span>+(<span class="hljs-type">const</span> Vec&amp; a, <span class="hljs-type">const</span> Vec&amp; b) { <span class="hljs-function">Vec <span class="hljs-title">r</span><span class="hljs-params">(a)</span></span>; r += b; <span class="hljs-keyword">return</span> r; }
+<span class="hljs-comment">// The left operand is a temporary: reuse its buffer.</span>
+<span class="hljs-keyword">inline</span> Vec <span class="hljs-keyword">operator</span>+(Vec&amp;&amp; a, <span class="hljs-type">const</span> Vec&amp; b) { a += b; <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(a); }
+<span class="hljs-comment">// The right operand is a temporary: addition commutes, so reuse it.</span>
+<span class="hljs-keyword">inline</span> Vec <span class="hljs-keyword">operator</span>+(<span class="hljs-type">const</span> Vec&amp; a, Vec&amp;&amp; b) { b += a; <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(b); }
+<span class="hljs-comment">// Both temporaries: needed, otherwise the two overloads above are ambiguous.</span>
+<span class="hljs-keyword">inline</span> Vec <span class="hljs-keyword">operator</span>+(Vec&amp;&amp; a, Vec&amp;&amp; b) { a += b; <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(a); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Vec <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-number">1000</span>, <span class="hljs-number">1</span>)</span>, <span class="hljs-title">b</span><span class="hljs-params">(<span class="hljs-number">1000</span>, <span class="hljs-number">2</span>)</span>, <span class="hljs-title">c</span><span class="hljs-params">(<span class="hljs-number">1000</span>, <span class="hljs-number">3</span>)</span>, <span class="hljs-title">d</span><span class="hljs-params">(<span class="hljs-number">1000</span>, <span class="hljs-number">4</span>)</span></span>;
+    Vec::allocations = <span class="hljs-number">0</span>;
+    Vec s = a + b + c + d;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a+b+c+d: allocations=%d s[0]=%g\n&quot;</span>, Vec::allocations, s[<span class="hljs-number">0</span>]);
+    Vec::allocations = <span class="hljs-number">0</span>;
+    Vec t = (a + b) + (c + d);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;(a+b)+(c+d): allocations=%d t[0]=%g\n&quot;</span>, Vec::allocations, t[<span class="hljs-number">0</span>]);
+    Vec::allocations = <span class="hljs-number">0</span>;
+    Vec u = a + (b + (c + d));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a+(b+(c+d)): allocations=%d u[0]=%g\n&quot;</span>, Vec::allocations, u[<span class="hljs-number">0</span>]);
+}</code></pre>
+<pre class="out" data-out="ch20-c-vecplus">a+b+c+d: allocations=1 s[0]=10
+(a+b)+(c+d): allocations=2 t[0]=10
+a+(b+(c+d)): allocations=1 u[0]=10</pre>
+    <p><b>Complexity and pitfalls.</b> Each addition is O(n); the chain does one allocation instead of three, which is what a lone <code>operator+(const Vec&amp;, const Vec&amp;)</code> makes (each temporary result binds to <code>const Vec&amp;</code> and a new buffer is allocated for the next result). <code>(a+b)+(c+d)</code> needs two, because two independent sums exist at the same time. Pitfalls: returning <code>Vec&amp;&amp;</code> instead of <code>Vec</code> from the rvalue overloads (<code>const Vec&amp; r = a + b + c;</code> would then dangle, since the result refers to a temporary that dies at the semicolon); forgetting the <code>(Vec&amp;&amp;, Vec&amp;&amp;)</code> overload (ambiguity); reusing the right operand for a non-commutative operation such as <code>-</code>. In C++20, <code>return a;</code> would also move the rvalue-reference parameter implicitly (P1825); <code>std::move</code> keeps the code correct in C++17.</p>
+    <p class="rating">Estimated rating: ~1600 · needs value-category overloading of a free operator and the ambiguity case, not just a move constructor</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a minimal <code>Stack&lt;T&gt;</code> over raw storage with <code>push(const T&amp;)</code>, <code>push(T&amp;&amp;)</code>, <code>pop()</code>, <code>top()</code> and <code>size()</code>. When it grows (doubling), it must relocate elements with <code>std::move_if_noexcept</code> and keep the strong exception guarantee. Test with a type whose copy constructor throws on the third copy, and show the stack is unchanged after the failed push.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Allocate raw memory with <code>std::allocator&lt;T&gt;</code>. On growth, allocate the new block, construct the new element at index <code>size</code> first (the argument may alias an existing element), then relocate old elements with <code>std::construct_at(dst, std::move_if_noexcept(src))</code>. If any construction throws, destroy what was built in the new block, free it and rethrow; the old block is untouched. Only after full success destroy the old elements and swap in the new block.</p>
+<pre data-run="ch20-c-stack" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Stack</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Stack</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Stack</span>(<span class="hljs-type">const</span> Stack&amp;) = <span class="hljs-keyword">delete</span>;
+    Stack&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Stack&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">Stack</span>() { std::<span class="hljs-built_in">destroy_n</span>(data_, size_); alloc_.<span class="hljs-built_in">deallocate</span>(data_, cap_); }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push</span><span class="hljs-params">(<span class="hljs-type">const</span> T&amp; v)</span> </span>{ <span class="hljs-built_in">emplace</span>(v); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push</span><span class="hljs-params">(T&amp;&amp; v)</span> </span>{ <span class="hljs-built_in">emplace</span>(std::<span class="hljs-built_in">move</span>(v)); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">pop</span><span class="hljs-params">()</span> </span>{ std::<span class="hljs-built_in">destroy_at</span>(data_ + --size_); }
+    <span class="hljs-function">T&amp; <span class="hljs-title">top</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> data_[size_ - <span class="hljs-number">1</span>]; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">U</span>&gt;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">emplace</span><span class="hljs-params">(U&amp;&amp; v)</span> </span>{
+        <span class="hljs-keyword">if</span> (size_ &lt; cap_) { std::<span class="hljs-built_in">construct_at</span>(data_ + size_, std::forward&lt;U&gt;(v)); ++size_; <span class="hljs-keyword">return</span>; }
+        std::<span class="hljs-type">size_t</span> ncap = cap_ ? <span class="hljs-number">2</span> * cap_ : <span class="hljs-number">1</span>;
+        T* nd = alloc_.<span class="hljs-built_in">allocate</span>(ncap);
+        std::<span class="hljs-type">size_t</span> built = <span class="hljs-number">0</span>;
+        <span class="hljs-type">bool</span> placed = <span class="hljs-literal">false</span>;
+        <span class="hljs-keyword">try</span> {
+            std::<span class="hljs-built_in">construct_at</span>(nd + size_, std::forward&lt;U&gt;(v));   <span class="hljs-comment">// new element first</span>
+            placed = <span class="hljs-literal">true</span>;
+            <span class="hljs-keyword">for</span> (; built &lt; size_; ++built)
+                std::<span class="hljs-built_in">construct_at</span>(nd + built, std::<span class="hljs-built_in">move_if_noexcept</span>(data_[built]));
+        } <span class="hljs-built_in">catch</span> (...) {
+            std::<span class="hljs-built_in">destroy_n</span>(nd, built);
+            <span class="hljs-keyword">if</span> (placed) std::<span class="hljs-built_in">destroy_at</span>(nd + size_);
+            alloc_.<span class="hljs-built_in">deallocate</span>(nd, ncap);
+            <span class="hljs-keyword">throw</span>;
+        }
+        std::<span class="hljs-built_in">destroy_n</span>(data_, size_);
+        alloc_.<span class="hljs-built_in">deallocate</span>(data_, cap_);
+        data_ = nd; cap_ = ncap; ++size_;
+    }
+
+    std::allocator&lt;T&gt; alloc_;
+    T* data_ = <span class="hljs-literal">nullptr</span>;
+    std::<span class="hljs-type">size_t</span> size_ = <span class="hljs-number">0</span>, cap_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Fragile</span> {
+    <span class="hljs-type">int</span> v;
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> copies = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Fragile</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> : v(x) {</span>}
+    <span class="hljs-built_in">Fragile</span>(<span class="hljs-type">const</span> Fragile&amp; o) : <span class="hljs-built_in">v</span>(o.v) {
+        <span class="hljs-keyword">if</span> (++copies == <span class="hljs-number">3</span>) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">runtime_error</span>(<span class="hljs-string">&quot;copy failed&quot;</span>);
+    }
+    <span class="hljs-built_in">Fragile</span>(Fragile&amp;&amp; o) : <span class="hljs-built_in">v</span>(o.v) { o.v = <span class="hljs-number">-1</span>; }   <span class="hljs-comment">// may throw, so Stack copies on growth</span>
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Stack&lt;Fragile&gt; s;
+    s.<span class="hljs-built_in">push</span>(<span class="hljs-built_in">Fragile</span>(<span class="hljs-number">1</span>));                 <span class="hljs-comment">// cap 1</span>
+    s.<span class="hljs-built_in">push</span>(<span class="hljs-built_in">Fragile</span>(<span class="hljs-number">2</span>));                 <span class="hljs-comment">// grow to 2: copy #1</span>
+    <span class="hljs-keyword">try</span> {
+        s.<span class="hljs-built_in">push</span>(<span class="hljs-built_in">Fragile</span>(<span class="hljs-number">3</span>));             <span class="hljs-comment">// grow to 4: copy #2 ok, copy #3 throws</span>
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::exception&amp; e) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;caught: %s\n&quot;</span>, e.<span class="hljs-built_in">what</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;size=%zu top=%d\n&quot;</span>, s.<span class="hljs-built_in">size</span>(), s.<span class="hljs-built_in">top</span>().v);
+    s.<span class="hljs-built_in">pop</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;size=%zu top=%d\n&quot;</span>, s.<span class="hljs-built_in">size</span>(), s.<span class="hljs-built_in">top</span>().v);
+}</code></pre>
+<pre class="out" data-out="ch20-c-stack">caught: copy failed
+size=2 top=2
+size=1 top=1</pre>
+    <p><b>Complexity and pitfalls.</b> Amortised O(1) push. Pitfalls: relocating with <code>std::move</code> instead of <code>move_if_noexcept</code> (a throwing move half-way corrupts the old buffer); constructing the new element after relocation, which breaks <code>s.push(s.top())</code> because the reference points into the old buffer only until it is destroyed; leaking the new block on exception; destroying the old elements before the new ones are complete. The values are intact after the failure (<code>top=2</code>, then <code>1</code>), which proves no element was moved from.</p>
+    <p class="rating">Estimated rating: ~1900 · raw storage, exception safety and move_if_noexcept together, where most candidates leak or corrupt on the failure path</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>move_remove_if(first, last, pred)</code> with the semantics of <code>std::remove_if</code>: keep the elements that do not satisfy <code>pred</code>, in order, at the front, and return the new logical end. It must move (never copy) elements, so it works for <code>std::unique_ptr</code>. Show what is left in the tail and why <code>erase</code> must follow.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Find the first element to remove; that slot becomes the write position. Walk the rest with a read iterator and move-assign every kept element into the write position, advancing it. Elements already in the right place are never touched, so the cost is one move assignment per kept element after the first removal. The range <code>[result, last)</code> then holds moved-from or leftover objects, which the caller erases (the erase-remove idiom, or C++20's <code>std::erase_if</code>).</p>
+<pre data-run="ch20-c-remove" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">It</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">Pred</span>&gt;
+<span class="hljs-function">It <span class="hljs-title">move_remove_if</span><span class="hljs-params">(It first, It last, Pred pred)</span> </span>{
+    first = std::<span class="hljs-built_in">find_if</span>(first, last, pred);
+    <span class="hljs-keyword">if</span> (first == last) <span class="hljs-keyword">return</span> last;
+    <span class="hljs-keyword">for</span> (It it = std::<span class="hljs-built_in">next</span>(first); it != last; ++it)
+        <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">pred</span>(*it)) *first++ = std::<span class="hljs-built_in">move</span>(*it);
+    <span class="hljs-keyword">return</span> first;
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tr</span> {
+    <span class="hljs-type">int</span> v;
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> copies = <span class="hljs-number">0</span>, moves = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">Tr</span>(<span class="hljs-type">int</span> x) : <span class="hljs-built_in">v</span>(x) {}
+    <span class="hljs-built_in">Tr</span>(<span class="hljs-type">const</span> Tr&amp; o) : <span class="hljs-built_in">v</span>(o.v) { ++copies; }
+    <span class="hljs-built_in">Tr</span>(Tr&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">v</span>(o.v) { ++moves; }
+    Tr&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Tr&amp; o) { v = o.v; ++copies; <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+    Tr&amp; <span class="hljs-keyword">operator</span>=(Tr&amp;&amp; o) <span class="hljs-keyword">noexcept</span> { v = o.v; ++moves; <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Tr&gt; t{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">4</span>, <span class="hljs-number">5</span>, <span class="hljs-number">6</span>};
+    Tr::copies = Tr::moves = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">auto</span> mid = <span class="hljs-built_in">move_remove_if</span>(t.<span class="hljs-built_in">begin</span>(), t.<span class="hljs-built_in">end</span>(), [](<span class="hljs-type">const</span> Tr&amp; x) { <span class="hljs-keyword">return</span> x.v % <span class="hljs-number">2</span> == <span class="hljs-number">0</span>; });
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;kept=%td copies=%d moves=%d\n&quot;</span>, mid - t.<span class="hljs-built_in">begin</span>(), Tr::copies, Tr::moves);
+    t.<span class="hljs-built_in">erase</span>(mid, t.<span class="hljs-built_in">end</span>());
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Tr&amp; x : t) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d &quot;</span>, x.v);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+
+    std::vector&lt;std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt; p;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">5</span>; ++i) p.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(i));
+    <span class="hljs-keyword">auto</span> pend = <span class="hljs-built_in">move_remove_if</span>(p.<span class="hljs-built_in">begin</span>(), p.<span class="hljs-built_in">end</span>(), [](<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; q) { <span class="hljs-keyword">return</span> *q &lt; <span class="hljs-number">2</span>; });
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;tail after remove: %td elements, first tail is %s\n&quot;</span>, p.<span class="hljs-built_in">end</span>() - pend,
+                *pend ? <span class="hljs-string">&quot;non-null&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>);
+    p.<span class="hljs-built_in">erase</span>(pend, p.<span class="hljs-built_in">end</span>());
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; q : p) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d &quot;</span>, *q);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch20-c-remove">kept=3 copies=0 moves=2
+1 3 5
+tail after remove: 2 elements, first tail is null
+2 3 4</pre>
+    <p><b>Complexity and pitfalls.</b> O(n) predicate calls and at most n move assignments, no allocation. The tail is the lesson: after <code>std::remove_if</code> the elements in <code>[new_end, end)</code> are valid but unspecified (here the first tail <code>unique_ptr</code> is null because it was moved from, but the standard algorithm promises nothing about which values remain), so reading them is a logic error and forgetting <code>erase</code> leaves them in the container. Pitfalls: writing <code>*first++ = *it</code> (copies, and does not compile for <code>unique_ptr</code>); swapping instead of moving (correct but slower, and it changes what the tail holds); calling <code>pred</code> on an element after it has been moved from.</p>
+    <p class="rating">Estimated rating: ~1300 · short loop, but it forces you to reason about moved-from elements left behind by a standard algorithm</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch18-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>Categories</b>: lvalue (has a name or identity), prvalue (pure value), xvalue (<code>std::move(x)</code>, <code>S{}.m</code>). A named <code>T&amp;&amp;</code> variable is an lvalue.</li>
+<li><b><code>std::move</code></b> is <code>static_cast&lt;remove_reference_t&lt;T&gt;&amp;&amp;&gt;</code>. It moves nothing; the move constructor or assignment does. On a <code>const</code> object it silently copies.</li>
+<li><b>Move members</b>: steal with <code>std::exchange(o.p_, nullptr)</code>, leave the source destructible and assignable, mark them <code>noexcept</code>, handle self-move (check or swap).</li>
+<li><b>noexcept</b>: vector relocation uses <code>std::move_if_noexcept</code>; a throwing move means copies on every growth.</li>
+<li><b>Suppression</b>: a user-declared destructor or copy operation (even <code>= default</code>) stops implicit moves, and <code>std::move</code> then copies. Declaring a move deletes the copies.</li>
+<li><b>Rule of zero</b> for normal classes, rule of five for resource owners, copies deleted for move-only types.</li>
+<li><b>Interfaces</b>: never <code>return std::move(local)</code> (<a href="#ch22">Ch 22</a>); sinks take by value then move; ref-qualify members to steal from temporaries.</li>
+<li><b>Moved-from</b>: valid but unspecified; only <code>unique_ptr</code>, <code>shared_ptr</code>, <code>thread</code> and a few others specify empty. Moved-from <code>optional</code> stays engaged.</li>
+</ul>
+</section>

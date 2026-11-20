@@ -1,0 +1,1511 @@
+---
+title: Abstraction and class design
+part: Part A · Object-oriented programming
+lede: How to design classes that other people can use correctly: interfaces, operator overloading with the canonical signatures, static members, friends, const correctness and the `this` pointer, then the design rules (SOLID, composition over inheritance, PIMPL) and compile-time polymorphism with CRTP. Interviewers ask these to see whether you can write a type that behaves like a built-in type and a class hierarchy that survives change.
+desc: Interfaces, operator overloading, static, friend, const, SOLID, composition
+hours: 6
+prereqs: [Ch 1](#ch01) (special members, rule of 3/5/0), [Ch 2](#ch02) (virtual functions)
+---
+<section id="ch03-abstraction" data-roles="th"><div class="sec-head"><h2>Abstraction and encapsulation</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> <i>Abstraction</i> decides <b>what</b> a type offers: the smallest set of operations that lets callers think about the concept without the details. <i>Encapsulation</i> decides <b>how that is protected</b>: the representation is hidden behind access control so that only the class's own functions can break its invariants. Abstraction is a design activity (choosing the interface); encapsulation is a language mechanism (<code>private</code>, the PIMPL idiom, modules) that enforces it.</p>
+<p>A <code>std::vector</code> abstracts "a resizable sequence" (<code>push_back</code>, <code>size</code>, indexing). It encapsulates three pointers whose relationship (<code>begin &lt;= end &lt;= capacity_end</code>) is an invariant that no caller can violate because the pointers are private. You could replace the representation with a pointer plus two sizes and no caller would notice: that is the test of a good abstraction.</p>
+<ul>
+<li>You can have encapsulation without much abstraction: a class with private fields and a getter and setter for each one hides the representation in name only, because every caller is still coupled to it.</li>
+<li>You can have abstraction without encapsulation: a <code>struct</code> of public fields with free functions that operate on it, as in C APIs. Nothing stops a caller from breaking the invariant.</li>
+</ul>
+<p>Constructors establish the invariant and the destructor releases resources (<a href="#ch01">Ch 1</a>); every public member function may assume the invariant on entry and must restore it on exit, including when it throws.</p>
+</section>
+
+<section id="ch03-interfaces" data-roles="th"><div class="sec-head"><h2>Interfaces via pure virtual classes</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>C++ has no <code>interface</code> keyword. The idiom is a class with only pure virtual functions, a virtual (or protected) destructor and no data. Concrete classes inherit from one or more interfaces publicly and implement them. Because an interface has no data, multiple inheritance of interfaces has no diamond problem worth worrying about (<a href="#ch02">Ch 2</a>).</p>
+<pre data-run="ch03-interface"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Clock</span> {  <span class="hljs-comment">// the interface: what the code needs, nothing more</span>
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Clock</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> std::<span class="hljs-type">int64_t</span> <span class="hljs-title">now_ms</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+<span class="hljs-keyword">protected</span>:
+    <span class="hljs-built_in">Clock</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Clock</span>(<span class="hljs-type">const</span> Clock&amp;) = <span class="hljs-keyword">default</span>;             <span class="hljs-comment">// no slicing through the interface</span>
+    Clock&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Clock&amp;) = <span class="hljs-keyword">default</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">FakeClock</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Clock {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::<span class="hljs-type">int64_t</span> <span class="hljs-title">now_ms</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> t_; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">advance</span><span class="hljs-params">(std::<span class="hljs-type">int64_t</span> ms)</span> </span>{ t_ += ms; }
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">int64_t</span> t_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Timeout</span> {  <span class="hljs-comment">// depends on the abstraction, not on a real clock</span>
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Timeout</span>(<span class="hljs-type">const</span> Clock&amp; clock, std::<span class="hljs-type">int64_t</span> ms) : <span class="hljs-built_in">clock_</span>(clock), <span class="hljs-built_in">deadline_</span>(clock.<span class="hljs-built_in">now_ms</span>() + ms) {}
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">expired</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> clock_.<span class="hljs-built_in">now_ms</span>() &gt;= deadline_; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">const</span> Clock&amp; clock_;
+    std::<span class="hljs-type">int64_t</span> deadline_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    FakeClock clock;
+    <span class="hljs-function">Timeout <span class="hljs-title">t</span><span class="hljs-params">(clock, <span class="hljs-number">100</span>)</span></span>;
+    std::cout &lt;&lt; t.<span class="hljs-built_in">expired</span>();
+    clock.<span class="hljs-built_in">advance</span>(<span class="hljs-number">99</span>);
+    std::cout &lt;&lt; t.<span class="hljs-built_in">expired</span>();
+    clock.<span class="hljs-built_in">advance</span>(<span class="hljs-number">1</span>);
+    std::cout &lt;&lt; t.<span class="hljs-built_in">expired</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-interface">001</pre>
+<p>Design rules for an interface class:</p>
+<ul>
+<li><b>Destructor:</b> public virtual if owners delete through the interface, otherwise protected non-virtual (Core Guidelines C.35).</li>
+<li><b>No data members and no constructors that take arguments.</b> Data turns the interface into a base class with state, and then the diamond and slicing problems come back.</li>
+<li><b>Small and focused:</b> clients should not depend on functions they do not use (the interface segregation principle, below). Several small interfaces composed by multiple inheritance beat one large one.</li>
+<li><b>Protected or deleted copy operations</b>, so code cannot copy "a Clock" and slice it.</li>
+</ul>
+<p>The alternative in modern C++ is a <i>concept</i>: a compile-time interface checked at template instantiation, with no vtable and no inheritance. Use a virtual interface when the implementation is chosen at run time or must be hidden behind a library boundary; use a concept (or CRTP, <a href="#ch03-crtp">below</a>) when the type is known at compile time and the call is on a hot path.</p>
+</section>
+
+<section id="ch03-operators" data-roles="th"><div class="sec-head"><h2>Operator overloading</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> An overloaded operator is an ordinary function with a special name, picked by overload resolution. <code>a + b</code> looks for both <code>a.operator+(b)</code> and <code>operator+(a, b)</code>. The rule for a good overload: it must do what the operator does for <code>int</code>, with the same arity, precedence (which you cannot change anyway) and expected semantics. If <code>+</code> would surprise a reader, use a named function.</p>
+
+<h3 id="ch03-op-member">Member or non-member?</h3>
+<ul>
+<li><b>Must be members:</b> <code>=</code>, <code>()</code>, <code>[]</code>, <code>-&gt;</code> and conversion operators. (C++23 lets <code>operator()</code> and <code>operator[]</code> be <code>static</code> members, and lets <code>operator[]</code> take several arguments.)</li>
+<li><b>Should be members:</b> operators that modify the left operand: compound assignment (<code>+=</code>, <code>-=</code>) and <code>++</code>/<code>--</code>.</li>
+<li><b>Should be non-members:</b> symmetric binary operators (<code>+</code>, <code>==</code>, <code>&lt;</code>), so that implicit conversions apply to both operands. With a member <code>operator+</code>, <code>money + 5</code> compiles but <code>5 + money</code> does not, because conversions are never applied to the object a member function is called on.</li>
+<li><b>Must be non-members:</b> <code>operator&lt;&lt;</code> and <code>operator&gt;&gt;</code> for streams, because the left operand is the stream, not your class.</li>
+<li><b>Hidden friends:</b> define the non-member inside the class as a <code>friend</code>. It can access private members, it is found only by argument-dependent lookup (so it does not pollute overload sets for unrelated types) and it is the standard modern style.</li>
+</ul>
+
+<h3 id="ch03-op-canonical">Canonical signatures</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Operator</th><th>Canonical declaration (for a class <code>T</code>)</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>copy <code>=</code></td><td><code>T&amp; operator=(const T&amp; other);</code></td><td>member; returns <code>*this</code> for chaining; handle self-assignment (<a href="#ch01">Ch 1</a>)</td></tr>
+<tr><td>move <code>=</code></td><td><code>T&amp; operator=(T&amp;&amp; other) noexcept;</code></td><td>member; <code>noexcept</code> so containers use it</td></tr>
+<tr><td><code>+=</code></td><td><code>T&amp; operator+=(const T&amp; rhs);</code></td><td>member; does the real work</td></tr>
+<tr><td><code>+</code></td><td><code>friend T operator+(T lhs, const T&amp; rhs) { lhs += rhs; return lhs; }</code></td><td>non-member; returns a new value, not a reference and not <code>const T</code></td></tr>
+<tr><td><code>==</code></td><td><code>friend bool operator==(const T&amp;, const T&amp;) = default;</code></td><td>C++20: also gives <code>!=</code> and the reversed order</td></tr>
+<tr><td><code>&lt;=&gt;</code></td><td><code>auto operator&lt;=&gt;(const T&amp;) const = default;</code></td><td>C++20: gives <code>&lt; &gt; &lt;= &gt;=</code>; defaulting it also declares a defaulted <code>==</code></td></tr>
+<tr><td><code>[]</code></td><td><code>V&amp; operator[](std::size_t i);</code> and <code>const V&amp; operator[](std::size_t i) const;</code></td><td>member; provide both const overloads</td></tr>
+<tr><td><code>()</code></td><td><code>R operator()(Args...) const;</code></td><td>member; makes a function object</td></tr>
+<tr><td><code>&lt;&lt;</code></td><td><code>friend std::ostream&amp; operator&lt;&lt;(std::ostream&amp; os, const T&amp; x);</code></td><td>non-member; returns the stream for chaining</td></tr>
+<tr><td>prefix <code>++</code></td><td><code>T&amp; operator++();</code></td><td>member; increments and returns <code>*this</code></td></tr>
+<tr><td>postfix <code>++</code></td><td><code>T operator++(int);</code></td><td>member; the <code>int</code> is a dummy tag; returns the old value by copy</td></tr>
+<tr><td>conversion</td><td><code>explicit operator bool() const;</code></td><td><code>explicit</code> still allows <code>if (x)</code> (contextual conversion) but blocks <code>int n = x;</code></td></tr>
+</tbody></table></div>
+
+<h3 id="ch03-op-arith">Arithmetic in terms of compound assignment</h3>
+<p>Write <code>+=</code> as the member that does the work and <code>+</code> as a non-member that copies its left operand and calls <code>+=</code>. Taking <code>lhs</code> by value lets the caller's temporary be moved in, and returning the local enables NRVO (<a href="#ch22">Ch 22</a>). Do not return <code>const T</code> from <code>operator+</code>: that old advice (to block <code>(a + b) = c</code>) also blocks moving from the result. If you want to block assignment to temporaries, ref-qualify the assignment operator instead: <code>T&amp; operator=(const T&amp;) &amp;;</code>.</p>
+<pre data-run="ch03-money"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;compare&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iomanip&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Money</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">constexpr</span> <span class="hljs-title">Money</span><span class="hljs-params">(std::<span class="hljs-type">int64_t</span> cents = <span class="hljs-number">0</span>)</span> : cents_(cents) {</span>}  <span class="hljs-comment">// implicit on purpose: 5 means 5 cents</span>
+    Money&amp; <span class="hljs-keyword">operator</span>+=(<span class="hljs-type">const</span> Money&amp; rhs) { cents_ += rhs.cents_; <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+    Money&amp; <span class="hljs-keyword">operator</span>-=(<span class="hljs-type">const</span> Money&amp; rhs) { cents_ -= rhs.cents_; <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+    Money <span class="hljs-keyword">operator</span>-() <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> <span class="hljs-built_in">Money</span>(-cents_); }
+
+    <span class="hljs-keyword">friend</span> Money <span class="hljs-keyword">operator</span>+(Money lhs, <span class="hljs-type">const</span> Money&amp; rhs) { lhs += rhs; <span class="hljs-keyword">return</span> lhs; }
+    <span class="hljs-keyword">friend</span> Money <span class="hljs-keyword">operator</span>-(Money lhs, <span class="hljs-type">const</span> Money&amp; rhs) { lhs -= rhs; <span class="hljs-keyword">return</span> lhs; }
+    <span class="hljs-keyword">friend</span> <span class="hljs-keyword">auto</span> <span class="hljs-built_in">operator</span>&lt;=&gt;(<span class="hljs-type">const</span> Money&amp;, <span class="hljs-type">const</span> Money&amp;) = <span class="hljs-keyword">default</span>;  <span class="hljs-comment">// also declares ==</span>
+    <span class="hljs-keyword">friend</span> std::ostream&amp; <span class="hljs-keyword">operator</span>&lt;&lt;(std::ostream&amp; os, <span class="hljs-type">const</span> Money&amp; m) {
+        std::<span class="hljs-type">int64_t</span> c = m.cents_ &lt; <span class="hljs-number">0</span> ? -m.cents_ : m.cents_;
+        <span class="hljs-keyword">return</span> os &lt;&lt; (m.cents_ &lt; <span class="hljs-number">0</span> ? <span class="hljs-string">&quot;-&quot;</span> : <span class="hljs-string">&quot;&quot;</span>) &lt;&lt; c / <span class="hljs-number">100</span> &lt;&lt; <span class="hljs-string">&#x27;.&#x27;</span> &lt;&lt; std::<span class="hljs-built_in">setw</span>(<span class="hljs-number">2</span>) &lt;&lt; std::<span class="hljs-built_in">setfill</span>(<span class="hljs-string">&#x27;0&#x27;</span>) &lt;&lt; c % <span class="hljs-number">100</span>;
+    }
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">int64_t</span> cents_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Money price = <span class="hljs-number">1999</span>;
+    Money total = price + <span class="hljs-number">5</span>;    <span class="hljs-comment">// Money + int: 5 converts</span>
+    Money more = <span class="hljs-number">250</span> + price;   <span class="hljs-comment">// int + Money: works because operator+ is a non-member</span>
+    std::cout &lt;&lt; total &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; more &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; -(more - total) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; (total &lt; more) &lt;&lt; (total == <span class="hljs-number">2004</span>) &lt;&lt; (<span class="hljs-number">2004</span> != total) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-money">20.04 22.49 -2.45
+110</pre>
+
+<h3 id="ch03-op-incdec">Prefix and postfix increment</h3>
+<p>The postfix form takes a dummy <code>int</code> parameter purely so the two can be overloaded. Prefix increments and returns a reference to the same object. Postfix must return the <i>old</i> value, so it makes a copy, increments, and returns the copy by value. Implement postfix in terms of prefix:</p>
+<pre><code class="language-cpp hljs">Iter&amp; <span class="hljs-keyword">operator</span>++()    { <span class="hljs-built_in">advance</span>(); <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+Iter  <span class="hljs-keyword">operator</span>++(<span class="hljs-type">int</span>) { Iter old = *<span class="hljs-keyword">this</span>; ++*<span class="hljs-keyword">this</span>; <span class="hljs-keyword">return</span> old; }</code></pre>
+<p>That copy is why <code>++it</code> is the habit for iterators; for <code>int</code> and simple iterators the optimiser removes it.</p>
+
+<h3 id="ch03-op-stream">Stream operators</h3>
+<p><code>operator&lt;&lt;</code> takes the stream by non-const reference and the object by const reference, writes only the object's representation (no trailing newline) and returns the stream so that <code>os &lt;&lt; a &lt;&lt; b</code> chains. <code>operator&gt;&gt;</code> takes the object by non-const reference and must set <code>std::ios::failbit</code> on malformed input rather than leaving the object half-written.</p>
+
+<h3 id="ch03-op-spaceship">C++20 comparisons: <code>&lt;=&gt;</code> and <code>==</code></h3>
+<p>C++20 replaced writing six comparison operators with two primary ones. The compiler <i>rewrites</i> secondary operators in terms of them ([over.match.oper]):</p>
+<ul>
+<li><code>a != b</code> is rewritten as <code>!(a == b)</code>, and <code>a == b</code> also tries the reversed <code>b == a</code>. So one <code>operator==(const T&amp;, int)</code> handles <code>t == 1</code>, <code>1 == t</code>, <code>t != 1</code> and <code>1 != t</code>.</li>
+<li><code>a &lt; b</code> is rewritten as <code>(a &lt;=&gt; b) &lt; 0</code>, also trying <code>0 &lt; (b &lt;=&gt; a)</code>.</li>
+<li><code>= default</code> on <code>&lt;=&gt;</code> compares bases, then members in declaration order, lexicographically. Defaulting <code>&lt;=&gt;</code> implicitly declares a defaulted <code>==</code>; a user-written <code>&lt;=&gt;</code> does not, because equality can often be checked faster (compare sizes first) than ordering.</li>
+<li>The return type says what kind of ordering you have: <code>std::strong_ordering</code> (equal values are interchangeable: integers), <code>std::weak_ordering</code> (equivalent but distinguishable values: case-insensitive strings) or <code>std::partial_ordering</code> (some values are unordered: floating point with NaN). <code>auto</code> picks the weakest category among the members.</li>
+</ul>
+<pre data-run="ch03-spaceship"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cctype&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;compare&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Caseless</span> {  <span class="hljs-comment">// equal ignoring case, so the ordering is only weak</span>
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Caseless</span><span class="hljs-params">(std::string s)</span> : s_(std::move(s)) {</span>}
+    std::weak_ordering <span class="hljs-built_in">operator</span>&lt;=&gt;(<span class="hljs-type">const</span> Caseless&amp; o) <span class="hljs-type">const</span> {
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; s_.<span class="hljs-built_in">size</span>() &amp;&amp; i &lt; o.s_.<span class="hljs-built_in">size</span>(); ++i) {
+            <span class="hljs-type">int</span> a = std::<span class="hljs-built_in">tolower</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(s_[i]));
+            <span class="hljs-type">int</span> b = std::<span class="hljs-built_in">tolower</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span> <span class="hljs-type">char</span>&gt;(o.s_[i]));
+            <span class="hljs-keyword">if</span> (a != b) <span class="hljs-keyword">return</span> a &lt;=&gt; b;
+        }
+        <span class="hljs-keyword">return</span> s_.<span class="hljs-built_in">size</span>() &lt;=&gt; o.s_.<span class="hljs-built_in">size</span>();
+    }
+    <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> Caseless&amp; o) <span class="hljs-type">const</span> { <span class="hljs-built_in">return</span> (*<span class="hljs-keyword">this</span> &lt;=&gt; o) == <span class="hljs-number">0</span>; }  <span class="hljs-comment">// not implied</span>
+<span class="hljs-keyword">private</span>:
+    std::string s_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Caseless <span class="hljs-title">x</span><span class="hljs-params">(<span class="hljs-string">&quot;Hello&quot;</span>)</span>, <span class="hljs-title">y</span><span class="hljs-params">(<span class="hljs-string">&quot;hello&quot;</span>)</span>, <span class="hljs-title">z</span><span class="hljs-params">(<span class="hljs-string">&quot;help&quot;</span>)</span></span>;
+    std::cout &lt;&lt; (x == y) &lt;&lt; (x &lt; z) &lt;&lt; (z &gt; y) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-spaceship">111</pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p>
+<p>Overloading <code>&amp;&amp;</code>, <code>||</code> or the comma operator is legal but loses the built-in behaviour: an overloaded <code>&amp;&amp;</code> is a function call, so both operands are always evaluated and there is no short-circuit. (C++17 at least fixed the evaluation order of the overloaded forms to left to right.) Overloading unary <code>&amp;</code> breaks code that takes addresses, which is why generic code uses <code>std::addressof</code>. Operators you cannot overload at all: <code>::</code>, <code>.</code>, <code>.*</code>, <code>?:</code>, <code>sizeof</code>, <code>alignof</code>, <code>typeid</code>.</p></div>
+</section>
+
+<section id="ch03-static-members" data-roles="th"><div class="sec-head"><h2>Static members and the initialisation order fiasco</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A <b>static data member</b> belongs to the class, not to any object: one instance for the whole program, stored outside every object, so it does not contribute to <code>sizeof</code>. A <b>static member function</b> has no <code>this</code>; it can be called as <code>T::f()</code> without an object, can access private members of any <code>T</code> passed to it, and cannot be <code>virtual</code>, <code>const</code> or ref-qualified.</p>
+<p>Before C++17, a non-const static data member had to be defined in exactly one <code>.cpp</code> file (<code>int Widget::count = 0;</code>), otherwise the linker reported an undefined reference. C++17 <code>inline</code> variables remove that: <code>inline static int count = 0;</code> in the class is a definition, merged across translation units. <code>static constexpr</code> data members are implicitly inline since C++17.</p>
+<pre data-run="ch03-static"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Connection</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Connection</span>() : <span class="hljs-built_in">id_</span>(next_id_++) { ++open_; }
+    ~<span class="hljs-built_in">Connection</span>() { --open_; }
+    <span class="hljs-built_in">Connection</span>(<span class="hljs-type">const</span> Connection&amp;) = <span class="hljs-keyword">delete</span>;            <span class="hljs-comment">// a counted resource: not copyable</span>
+    Connection&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Connection&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">open</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> open_; }                <span class="hljs-comment">// no this: callable as Connection::open()</span>
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">id</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> id_; }
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> max_open = <span class="hljs-number">64</span>;                <span class="hljs-comment">// implicitly inline since C++17</span>
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">inline</span> <span class="hljs-type">static</span> <span class="hljs-type">int</span> open_ = <span class="hljs-number">0</span>;                       <span class="hljs-comment">// C++17: no out-of-class definition</span>
+    <span class="hljs-keyword">inline</span> <span class="hljs-type">static</span> <span class="hljs-type">int</span> next_id_ = <span class="hljs-number">1</span>;
+    <span class="hljs-type">int</span> id_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Connection a;
+    {
+        Connection b, c;
+        std::cout &lt;&lt; Connection::<span class="hljs-built_in">open</span>() &lt;&lt; <span class="hljs-string">&quot; open, last id &quot;</span> &lt;&lt; c.<span class="hljs-built_in">id</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+    std::cout &lt;&lt; Connection::<span class="hljs-built_in">open</span>() &lt;&lt; <span class="hljs-string">&quot; open of max &quot;</span> &lt;&lt; Connection::max_open &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;sizeof &quot;</span> &lt;&lt; <span class="hljs-built_in">sizeof</span>(Connection) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-static">3 open, last id 3
+1 open of max 64
+sizeof 4</pre>
+
+<h3 id="ch03-init-order">The static initialisation order fiasco</h3>
+<p>Objects with static storage duration at namespace scope (globals, static members) are initialised in two phases. <i>Constant initialisation</i> happens at compile time when the initialiser is a constant expression. <i>Dynamic initialisation</i> runs code before <code>main</code>, in declaration order within one translation unit, but in an <b>unspecified order across translation units</b>. If a global in <code>a.cpp</code> uses a global in <code>b.cpp</code> during its own construction, it may see it unconstructed (zero-initialised memory). That bug is the fiasco, and it typically appears or disappears when the link order changes.</p>
+<p>Fixes, from most to least preferred:</p>
+<ul>
+<li><b>Make it constant:</b> <code>constexpr</code> or C++20 <code>constinit</code>, which forces constant initialisation and fails to compile if the initialiser is not constant. A <code>constinit</code> variable can still be modified at run time.</li>
+<li><b>Construct on first use:</b> a function-local static, <code>Registry&amp; registry() { static Registry r; return r; }</code>. It is built the first time the function is called, and since C++11 that initialisation is thread-safe (the compiler adds a guard variable and a lock). <a href="#ch02">Ch 2</a>'s plugin registry depends on this.</li>
+<li><b>Avoid the dependency:</b> pass the object explicitly instead of reaching for a global.</li>
+</ul>
+<p>The mirror problem exists at exit: statics are destroyed in reverse order of construction completion, so a static destructor that uses another static may find it already destroyed. The usual answers are to construct the dependency first (it is then destroyed last) or to deliberately leak it: <code>static Registry&amp; r = *new Registry;</code>.</p>
+</section>
+
+<section id="ch03-friend" data-roles="th"><div class="sec-head"><h2>Friend</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A <code>friend</code> declaration grants one function or class access to the private and protected members of the class that declares it. The class grants access; nobody can take it. The rules:</p>
+<ul>
+<li><b>Not inherited:</b> a friend of <code>Base</code> has no special access to <code>Derived</code>'s own members, and a class derived from a friend is not a friend.</li>
+<li><b>Not transitive:</b> a friend of a friend is not a friend.</li>
+<li><b>Not reciprocal:</b> if <code>A</code> declares <code>friend class B;</code>, <code>B</code> can see into <code>A</code> but not the reverse.</li>
+<li><b>Not affected by access specifiers:</b> writing it under <code>private:</code> changes nothing.</li>
+</ul>
+<p>Friendship does not break encapsulation when it is used for functions that are logically part of the class's interface but cannot be members, such as <code>operator&lt;&lt;</code> or a symmetric <code>operator==</code>. It extends the set of functions that can touch the representation by exactly the ones the class author listed. Overuse (befriending a whole unrelated class to save writing an accessor) is the smell.</p>
+<p><b>Hidden friends.</b> A friend function defined inside the class body is not visible to ordinary name lookup at namespace scope; it is found only by argument-dependent lookup when one of the arguments is the class. That keeps the overload set small (faster compiles, better error messages) and prevents surprising implicit conversions, since the function is considered only when a real <code>T</code> is involved.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">namespace</span> geo {
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Point</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Point</span>(<span class="hljs-type">int</span> x, <span class="hljs-type">int</span> y) : <span class="hljs-built_in">x_</span>(x), <span class="hljs-built_in">y_</span>(y) {}
+    <span class="hljs-keyword">friend</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> Point&amp;, <span class="hljs-type">const</span> Point&amp;) = <span class="hljs-keyword">default</span>;  <span class="hljs-comment">// hidden friend</span>
+    <span class="hljs-keyword">friend</span> std::ostream&amp; <span class="hljs-keyword">operator</span>&lt;&lt;(std::ostream&amp; os, <span class="hljs-type">const</span> Point&amp; p) {
+        <span class="hljs-keyword">return</span> os &lt;&lt; <span class="hljs-string">&#x27;(&#x27;</span> &lt;&lt; p.x_ &lt;&lt; <span class="hljs-string">&quot;, &quot;</span> &lt;&lt; p.y_ &lt;&lt; <span class="hljs-string">&#x27;)&#x27;</span>;
+    }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">int</span> x_, y_;
+};
+}  <span class="hljs-comment">// std::cout &lt;&lt; p finds operator&lt;&lt; through ADL on geo::Point</span></code></pre>
+<p>The <i>attorney-client</i> and <i>passkey</i> idioms give finer control: instead of befriending a whole class, a member function takes a parameter of a <code>Key</code> type whose constructor is private and befriends only the intended caller.</p>
+</section>
+
+<section id="ch03-const-this" data-roles="th"><div class="sec-head"><h2>const member functions, mutable and the this pointer</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch03-this-pointer">The this pointer</h3>
+<p>Every non-static member function receives a hidden parameter: the address of the object it was called on. Inside a member function of <code>T</code>, <code>this</code> is a prvalue of type <code>T*</code>, or <code>const T*</code> in a <code>const</code> member function (<code>volatile</code> works the same way). Member names used inside the function implicitly mean <code>this-&gt;name</code>. You need <code>this</code> explicitly to return <code>*this</code> for chaining, to pass the object elsewhere, to check self-assignment and to name members of a dependent base class inside a template (<code>this-&gt;x</code>).</p>
+<p><code>this</code> is never null in a valid program: calling a member function through a null pointer is undefined behaviour even if the function does not touch members, and compilers delete <code>if (this == nullptr)</code> checks for that reason. <code>delete this</code> is legal under strict conditions (see the drill below).</p>
+
+<h3 id="ch03-const-members">const member functions</h3>
+<p>A trailing <code>const</code> makes <code>this</code> a pointer to const, so the function cannot modify non-static members or call non-const member functions. Only const member functions can be called on a const object or through a const reference, which is how most objects are passed. So the rule is simple: <b>every member function that does not change the observable state must be <code>const</code></b>, or your class becomes unusable through <code>const T&amp;</code>.</p>
+<p>The compiler enforces <i>bitwise</i> constness of the object's own bytes, which is shallow: in a const member function, a member <code>int* p</code> becomes <code>int* const p</code>, not <code>const int*</code>, so <code>*p = 1</code> compiles. The PIMPL section shows the consequence. What the class should promise is <i>logical</i> constness: callers cannot observe a change.</p>
+
+<h3 id="ch03-mutable">mutable</h3>
+<p><code>mutable</code> on a data member lets const member functions modify it. Use it for state that is not part of the observable value: caches, memoisation, access statistics, and the mutex that protects the object. Since the standard library treats <code>const</code> member functions as safe to call concurrently ([res.on.data.races]), a const function that writes a <code>mutable</code> cache must synchronise that write, typically with a <code>mutable std::mutex</code> or an atomic.</p>
+<pre data-run="ch03-mutable" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Document</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Document</span><span class="hljs-params">(std::string text)</span> : text_(std::move(text)) {</span>}
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">word_count</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{           <span class="hljs-comment">// logically const</span>
+        <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>;              <span class="hljs-comment">// const functions may be called concurrently</span>
+        <span class="hljs-keyword">if</span> (!cached_) {
+            std::<span class="hljs-type">size_t</span> n = <span class="hljs-number">0</span>;
+            <span class="hljs-type">bool</span> in_word = <span class="hljs-literal">false</span>;
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">char</span> c : text_) {
+                <span class="hljs-type">bool</span> space = (c == <span class="hljs-string">&#x27; &#x27;</span>);
+                <span class="hljs-keyword">if</span> (!space &amp;&amp; !in_word) ++n;
+                in_word = !space;
+            }
+            count_ = n;
+            cached_ = <span class="hljs-literal">true</span>;
+            ++computations_;
+        }
+        <span class="hljs-keyword">return</span> count_;
+    }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">computations</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-function">std::lock_guard <span class="hljs-title">lock</span><span class="hljs-params">(m_)</span></span>; <span class="hljs-keyword">return</span> computations_; }
+<span class="hljs-keyword">private</span>:
+    std::string text_;
+    <span class="hljs-keyword">mutable</span> std::mutex m_;                     <span class="hljs-comment">// mutable: locking is not a logical change</span>
+    <span class="hljs-keyword">mutable</span> <span class="hljs-type">bool</span> cached_ = <span class="hljs-literal">false</span>;
+    <span class="hljs-keyword">mutable</span> std::<span class="hljs-type">size_t</span> count_ = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">mutable</span> <span class="hljs-type">int</span> computations_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function"><span class="hljs-type">const</span> Document <span class="hljs-title">doc</span><span class="hljs-params">(<span class="hljs-string">&quot;the quick brown fox&quot;</span>)</span></span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">t</span><span class="hljs-params">([&amp;doc] { (<span class="hljs-type">void</span>)doc.word_count(); })</span></span>;
+    std::<span class="hljs-type">size_t</span> n = doc.<span class="hljs-built_in">word_count</span>();
+    t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; n &lt;&lt; <span class="hljs-string">&quot; words, computed &quot;</span> &lt;&lt; doc.<span class="hljs-built_in">computations</span>() &lt;&lt; <span class="hljs-string">&quot; time\n&quot;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-mutable">4 words, computed 1 time</pre>
+
+<h3 id="ch03-const-overloads">const overloads</h3>
+<p>Member functions can be overloaded on <code>const</code>: the const version is chosen for const objects, the non-const one otherwise. Accessors that return references need both, so <code>v[i] = x</code> works on a mutable container and <code>v[i]</code> still works on a const one. To avoid writing the body twice, the classic trick is to implement the non-const version by calling the const one and casting the result (Effective C++ item 3); casting away const from the result is safe here because the object is known to be non-const. C++23 "deducing this" removes the duplication properly with one template.</p>
+<pre data-run="ch03-deducing-this" data-std="c++23"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Grid</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Grid</span>(std::<span class="hljs-type">size_t</span> w, std::<span class="hljs-type">size_t</span> h) : <span class="hljs-built_in">w_</span>(w), <span class="hljs-built_in">cells_</span>(w * h) {}
+
+    <span class="hljs-comment">// C++20 style: two overloads, the non-const one reusing the const one</span>
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">int</span>&amp; <span class="hljs-title">at</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> x, std::<span class="hljs-type">size_t</span> y)</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> cells_.<span class="hljs-built_in">at</span>(y * w_ + x); }
+    <span class="hljs-function"><span class="hljs-type">int</span>&amp; <span class="hljs-title">at</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> x, std::<span class="hljs-type">size_t</span> y)</span> </span>{
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">const_cast</span>&lt;<span class="hljs-type">int</span>&amp;&gt;(std::<span class="hljs-built_in">as_const</span>(*<span class="hljs-keyword">this</span>).<span class="hljs-built_in">at</span>(x, y));
+    }
+
+    <span class="hljs-comment">// C++23 deducing this: one template, self is Grid&amp; or const Grid&amp;</span>
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">Self</span>&gt;
+    <span class="hljs-function"><span class="hljs-keyword">auto</span>&amp;&amp; <span class="hljs-title">cell</span><span class="hljs-params">(<span class="hljs-keyword">this</span> Self&amp;&amp; self, std::<span class="hljs-type">size_t</span> x, std::<span class="hljs-type">size_t</span> y)</span> </span>{
+        <span class="hljs-keyword">return</span> std::forward&lt;Self&gt;(self).cells_.<span class="hljs-built_in">at</span>(y * self.w_ + x);
+    }
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">size_t</span> w_;
+    std::vector&lt;<span class="hljs-type">int</span>&gt; cells_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Grid <span class="hljs-title">g</span><span class="hljs-params">(<span class="hljs-number">3</span>, <span class="hljs-number">2</span>)</span></span>;
+    g.<span class="hljs-built_in">at</span>(<span class="hljs-number">1</span>, <span class="hljs-number">1</span>) = <span class="hljs-number">7</span>;
+    g.<span class="hljs-built_in">cell</span>(<span class="hljs-number">2</span>, <span class="hljs-number">0</span>) = <span class="hljs-number">5</span>;
+    <span class="hljs-type">const</span> Grid&amp; cg = g;
+    std::cout &lt;&lt; cg.<span class="hljs-built_in">at</span>(<span class="hljs-number">1</span>, <span class="hljs-number">1</span>) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; cg.<span class="hljs-built_in">cell</span>(<span class="hljs-number">2</span>, <span class="hljs-number">0</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-comment">// cg.cell(2, 0) = 1;  // error: returns const int&amp;</span>
+}</code></pre>
+<pre class="out" data-out="ch03-deducing-this">7 5</pre>
+<p><b>Ref-qualifiers</b> overload on the value category of <code>*this</code>: <code>std::string name() const &amp;</code> returns a copy for lvalues, <code>std::string name() &amp;&amp;</code> can move the member out of a temporary. A function cannot mix ref-qualified and unqualified overloads of the same name and parameters.</p>
+</section>
+
+<section id="ch03-solid" data-roles="th"><div class="sec-head"><h2>SOLID with small C++ examples</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>SOLID is five heuristics for classes that survive change. Interviewers want a one-line definition, a C++ example of the violation and the fix, not a recital.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Principle</th><th>One line</th><th>Violation in C++</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td><b>S</b>ingle responsibility</td><td>a class has one reason to change</td><td><code>Report</code> computes totals, formats HTML and writes files</td><td>split into <code>ReportData</code>, <code>HtmlFormatter</code>, <code>FileSink</code></td></tr>
+<tr><td><b>O</b>pen/closed</td><td>extend behaviour without editing working code</td><td>a <code>switch (shape.kind)</code> repeated in ten functions</td><td>a virtual function, a strategy object, or <code>std::variant</code> with one visitor per operation</td></tr>
+<tr><td><b>L</b>iskov substitution</td><td>a derived object must keep every promise of the base</td><td><code>Square : Rectangle</code> whose <code>set_width</code> also changes the height</td><td>do not inherit; share an immutable <code>Shape</code> interface instead</td></tr>
+<tr><td><b>I</b>nterface segregation</td><td>clients should not depend on functions they do not use</td><td>one <code>IDevice</code> with <code>print</code>, <code>scan</code>, <code>fax</code>; a printer must stub <code>fax</code></td><td><code>Printer</code>, <code>Scanner</code>, <code>Fax</code> interfaces; a copier implements two</td></tr>
+<tr><td><b>D</b>ependency inversion</td><td>high-level code and low-level code both depend on an abstraction</td><td><code>OrderService</code> constructs a <code>PostgresDb</code> member</td><td>take a <code>Database&amp;</code> (or a template parameter) in the constructor</td></tr>
+</tbody></table></div>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 250" role="img" aria-label="Dependency inversion: before, OrderService depends on PostgresDb; after, both OrderService and the databases depend on a Database interface">
+<defs><marker id="ch03-c03a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="40" y="24" class="t-bold" font-size="12">Before: policy depends on detail</text>
+<rect x="60" y="50" width="200" height="40" class="d-box"/><text x="160" y="75" class="t-mono" font-size="12" text-anchor="middle">OrderService</text>
+<rect x="60" y="160" width="200" height="40" class="d-trap"/><text x="160" y="185" class="t-mono" font-size="12" text-anchor="middle">PostgresDb</text>
+<path d="M160,90 L160,158" class="d-line" marker-end="url(#ch03-c03a)"/>
+<text x="170" y="128" class="t-small t-muted" font-size="11">owns and calls</text>
+<text x="40" y="230" class="t-small t-trap" font-size="11">Tests need a real database; switching DB edits OrderService.</text>
+<path d="M350,20 L350,230" class="d-grid"/>
+<text x="380" y="24" class="t-bold" font-size="12">After: both depend on the abstraction</text>
+<rect x="450" y="40" width="200" height="40" class="d-box"/><text x="550" y="65" class="t-mono" font-size="12" text-anchor="middle">OrderService</text>
+<rect x="450" y="112" width="200" height="40" class="d-key"/><text x="550" y="137" class="t-mono" font-size="12" text-anchor="middle">Database (interface)</text>
+<rect x="390" y="186" width="140" height="36" class="d-soft"/><text x="460" y="209" class="t-mono" font-size="12" text-anchor="middle">PostgresDb</text>
+<rect x="570" y="186" width="140" height="36" class="d-soft"/><text x="640" y="209" class="t-mono" font-size="12" text-anchor="middle">FakeDb</text>
+<path d="M550,80 L550,110" class="d-line" marker-end="url(#ch03-c03a)"/>
+<path d="M460,186 L520,154" class="d-line-key d-dash" marker-end="url(#ch03-c03a)"/>
+<path d="M640,186 L580,154" class="d-line-key d-dash" marker-end="url(#ch03-c03a)"/>
+<text x="560" y="100" class="t-small t-muted" font-size="11">uses</text>
+<text x="380" y="244" class="t-small t-key" font-size="11">dashed: implements. Arrows now point toward the abstraction.</text>
+</svg></div><figcaption><b>Dependency inversion flips the arrow.</b> The concrete database depends on an interface owned by the high-level code, so the service can be tested with a fake and the database swapped without recompiling the service. The <code>Clock</code> example above and the token bucket drill below use the same shape.</figcaption></figure>
+
+<h3 id="ch03-lsp">Liskov substitution and the square/rectangle problem</h3>
+<p>The Liskov substitution principle says: if code works with a <code>Base&amp;</code>, it must keep working when given any derived object. That is about <i>behaviour</i>, not taxonomy. A mutable <code>Rectangle</code> promises that <code>set_width</code> leaves the height unchanged. A <code>Square</code> cannot keep that promise, so <code>Square : Rectangle</code> breaks any caller that sets width and height independently, even though "a square is a rectangle" in geometry. The reading drill below shows a function that computes 16 where it expected 20.</p>
+<p>Formally, a derived class may <b>weaken preconditions</b> (accept more) and <b>strengthen postconditions</b> (promise more), and must preserve the base's invariants; it may not throw new kinds of exceptions the caller does not expect. Fixes for the square case: make shapes immutable (then a square really is a rectangle, because nobody can set the sides independently), or make <code>Square</code> and <code>Rectangle</code> siblings under an abstract <code>Shape</code> with only <code>area()</code>. Other classic violations: a <code>ReadOnlyList</code> derived from <code>List</code> whose <code>add</code> throws, and a derived class that requires a call to <code>init()</code> the base did not need.</p>
+</section>
+
+<section id="ch03-composition" data-roles="th"><div class="sec-head"><h2>Composition versus inheritance</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Inheritance says "is a, and shares the implementation"; composition says "has a, and uses it through its public interface". Composition couples less: the containing class depends only on the member's public interface, can swap it for another implementation, can hold several, and does not inherit functions it never wanted. Hence the rule from the Gang of Four: <b>prefer composition over inheritance</b>; inherit to be reused polymorphically, not to reuse code.</p>
+<p><b>The fragile base class problem.</b> A derived class that overrides virtual functions depends on <i>how</i> the base calls its own functions, which is an implementation detail. The classic example: a <code>CountingSet</code> that overrides both <code>insert</code> and <code>insert_all</code> to count insertions double-counts, because the base's <code>insert_all</code> happens to call <code>insert</code>. If the base author changes that detail in a later version, the derived class breaks without any change of its own. A reading drill below reproduces it. A wrapper that holds a set and forwards calls has no such dependency.</p>
+<p><b>Strategy by composition.</b> Behaviour that varies is a member, injected through the constructor: an interface pointer (run-time choice), a template parameter (compile-time choice, zero overhead) or a <code>std::function</code> (any callable, one allocation and an indirect call).</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">class</span> <span class="hljs-title class_">Retrier</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Retrier</span><span class="hljs-params">(std::function&lt;std::chrono::milliseconds(<span class="hljs-type">int</span> attempt)&gt; backoff)</span>
+        : backoff_(std::move(backoff)) {</span>}
+    <span class="hljs-comment">// ... uses backoff_(n) between attempts; no subclass per policy</span>
+<span class="hljs-keyword">private</span>:
+    std::function&lt;std::chrono::milliseconds(<span class="hljs-type">int</span>)&gt; backoff_;
+};</code></pre>
+<p><b>When inheritance is right:</b> the derived type really is substitutable (Liskov holds), you need run-time polymorphism through a base pointer, or the base is an interface designed for extension (an abstract class with a documented contract for each virtual function, often in NVI style, <a href="#ch02">Ch 2</a>). Mark classes not designed for inheritance <code>final</code>.</p>
+</section>
+
+<section id="ch03-pimpl" data-roles="th"><div class="sec-head"><h2>PIMPL: the compilation firewall</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> The header declares the class with one private member, a pointer to an incomplete <code>Impl</code> type. All real data members and private helpers live in <code>Impl</code>, defined only in the <code>.cpp</code> file. Clients see a class whose size and layout never change, so editing the implementation recompiles one file and keeps the binary interface (ABI) stable for shared libraries.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 250" role="img" aria-label="PIMPL: the Widget object in the header holds only a pointer to Impl; Impl and its members are defined in the cpp file and live on the heap">
+<defs><marker id="ch03-c03b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="30" y="26" class="t-bold" font-size="12">widget.h (seen by every client)</text>
+<rect x="30" y="44" width="250" height="34" class="d-box"/><text x="155" y="66" class="t-mono" font-size="12" text-anchor="middle">class Widget</text>
+<rect x="30" y="78" width="250" height="34" class="d-acc"/><text x="155" y="100" class="t-mono" font-size="11" text-anchor="middle">std::unique_ptr&lt;Impl&gt; p_  (8 bytes)</text>
+<text x="30" y="136" class="t-small t-mono" font-size="11">struct Impl;   // declared, not defined</text>
+<text x="30" y="154" class="t-small t-mono" font-size="11">~Widget();     // declared, not defined here</text>
+<path d="M350,20 L350,200" class="d-grid d-dash"/>
+<text x="400" y="26" class="t-bold" font-size="12">widget.cpp (private, on the heap)</text>
+<rect x="400" y="44" width="290" height="34" class="d-key"/><text x="545" y="66" class="t-mono" font-size="12" text-anchor="middle">struct Widget::Impl</text>
+<rect x="400" y="78" width="290" height="30" class="d-box"/><text x="545" y="98" class="t-mono" font-size="11" text-anchor="middle">std::string name_</text>
+<rect x="400" y="108" width="290" height="30" class="d-box"/><text x="545" y="128" class="t-mono" font-size="11" text-anchor="middle">std::vector&lt;int&gt; data_</text>
+<rect x="400" y="138" width="290" height="30" class="d-box"/><text x="545" y="158" class="t-mono" font-size="11" text-anchor="middle">ThirdPartyCache cache_</text>
+<path d="M280,95 C330,95 350,62 398,62" class="d-line-acc" marker-end="url(#ch03-c03b)"/>
+<text x="30" y="214" class="t-small" font-size="11">Editing Impl recompiles widget.cpp only. sizeof(Widget) stays 8, so clients built against the old header still link.</text>
+<text x="30" y="232" class="t-small t-trap" font-size="11">Cost: one heap allocation per object and one extra pointer hop per call; no inlining of the hidden functions.</text>
+</svg></div><figcaption><b>The header holds a pointer, the source file holds the class.</b> Third-party headers needed by <code>Impl</code> (here <code>ThirdPartyCache</code>) are included only in <code>widget.cpp</code>, so clients do not pay their compile time.</figcaption></figure>
+<pre><code class="language-cpp hljs"><span class="hljs-comment">// widget.h</span>
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Widget</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Widget</span>();
+    ~<span class="hljs-built_in">Widget</span>();                              <span class="hljs-comment">// declared here, defined in widget.cpp</span>
+    <span class="hljs-built_in">Widget</span>(Widget&amp;&amp;) <span class="hljs-keyword">noexcept</span>;              <span class="hljs-comment">// likewise: these need the complete Impl</span>
+    Widget&amp; <span class="hljs-keyword">operator</span>=(Widget&amp;&amp;) <span class="hljs-keyword">noexcept</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">draw</span><span class="hljs-params">()</span> <span class="hljs-type">const</span></span>;
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Impl</span>;
+    std::unique_ptr&lt;Impl&gt; p_;
+};
+
+<span class="hljs-comment">// widget.cpp</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Widget</span>::Impl { std::string name_; std::vector&lt;<span class="hljs-type">int</span>&gt; data_; };
+Widget::<span class="hljs-built_in">Widget</span>() : <span class="hljs-built_in">p_</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Impl&gt;()) {}
+Widget::~<span class="hljs-built_in">Widget</span>() = <span class="hljs-keyword">default</span>;                <span class="hljs-comment">// Impl is complete here</span>
+Widget::<span class="hljs-built_in">Widget</span>(Widget&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+Widget&amp; Widget::<span class="hljs-keyword">operator</span>=(Widget&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;</code></pre>
+<p>The rules that trip people up:</p>
+<ul>
+<li><b>The destructor must be defined where <code>Impl</code> is complete.</b> If you let the compiler generate <code>~Widget()</code> in the header, it instantiates <code>std::default_delete&lt;Impl&gt;</code> in every client, where <code>Impl</code> is incomplete, and the library's <code>static_assert(sizeof(Impl) &gt; 0)</code> fails ("invalid application of sizeof to an incomplete type"). Declaring <code>~Widget();</code> in the header and writing <code>Widget::~Widget() = default;</code> in the <code>.cpp</code> fixes it. The same applies to move assignment (it destroys the old <code>Impl</code>) and to the move constructor (the generated code must be able to destroy <code>p_</code> if a later member's construction throws). Declaring the destructor also suppresses the implicit move operations, so you must declare them anyway.</li>
+<li><b>Copying is not automatic:</b> <code>unique_ptr</code> is move-only, so write a deep-copy constructor that does <code>std::make_unique&lt;Impl&gt;(*other.p_)</code>, or leave the class move-only.</li>
+<li><b>Shallow const:</b> in a const member function, <code>p_-&gt;name_ = "x"</code> compiles, because constness does not propagate through the pointer. Discipline (or <code>std::experimental::propagate_const</code>) restores it.</li>
+<li><b>Moved-from state:</b> after a move, <code>p_</code> is null, so every member function must either tolerate that or document that a moved-from object may only be assigned or destroyed.</li>
+</ul>
+<p><code>std::shared_ptr&lt;Impl&gt;</code> does not have the incomplete-destructor problem (its deleter is captured at construction, <a href="#ch10">Ch 10</a>) but gives shared, not value, semantics, which is rarely what you want.</p>
+</section>
+
+<section id="ch03-crtp" data-roles="th"><div class="sec-head"><h2>CRTP: static polymorphism</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> In the Curiously Recurring Template Pattern a class derives from a base template instantiated with itself: <code>class Square : public Shape&lt;Square&gt;</code>. Inside the base, the derived type is a template parameter, so the base can call derived functions with <code>static_cast&lt;Derived&amp;&gt;(*this).impl()</code>. The call is resolved at compile time and can be inlined: polymorphism without a vptr or an indirect call.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 210" role="img" aria-label="A virtual call goes through vptr and slot loads at run time; a CRTP call is a static_cast resolved at compile time and inlined">
+<defs><marker id="ch03-c03c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="26" class="t-bold" font-size="12">virtual: Shape&#38; s; s.area()</text>
+<rect x="20" y="40" width="140" height="40" class="d-box"/><text x="90" y="64" class="t-mono" font-size="11" text-anchor="middle">s.area()</text>
+<rect x="190" y="40" width="140" height="40" class="d-trap"/><text x="260" y="64" class="t-mono" font-size="11" text-anchor="middle">load vptr</text>
+<rect x="360" y="40" width="140" height="40" class="d-trap"/><text x="430" y="64" class="t-mono" font-size="11" text-anchor="middle">load slot</text>
+<rect x="530" y="40" width="170" height="40" class="d-trap"/><text x="615" y="64" class="t-mono" font-size="11" text-anchor="middle">indirect call</text>
+<path d="M160,60 L188,60" class="d-line" marker-end="url(#ch03-c03c)"/>
+<path d="M330,60 L358,60" class="d-line" marker-end="url(#ch03-c03c)"/>
+<path d="M500,60 L528,60" class="d-line" marker-end="url(#ch03-c03c)"/>
+<text x="20" y="100" class="t-small t-trap" font-size="11">run time: any derived type, chosen per object; one vtable per class, 8 bytes per object</text>
+<text x="20" y="136" class="t-bold" font-size="12">CRTP: Shape&#60;Square&#62;&#38; s; s.area()</text>
+<rect x="20" y="150" width="140" height="40" class="d-box"/><text x="90" y="174" class="t-mono" font-size="11" text-anchor="middle">s.area()</text>
+<rect x="190" y="150" width="250" height="40" class="d-key"/><text x="315" y="174" class="t-mono" font-size="11" text-anchor="middle">static_cast&#60;const Square&#38;&#62;(*this)</text>
+<rect x="470" y="150" width="230" height="40" class="d-key"/><text x="585" y="174" class="t-mono" font-size="11" text-anchor="middle">Square::area_impl, inlined</text>
+<path d="M160,170 L188,170" class="d-line" marker-end="url(#ch03-c03c)"/>
+<path d="M440,170 L468,170" class="d-line" marker-end="url(#ch03-c03c)"/>
+<text x="20" y="206" class="t-small t-key" font-size="11">compile time: the type is fixed by the template argument; no vptr, nothing to predict</text>
+</svg></div><figcaption><b>CRTP trades flexibility for speed.</b> <code>Shape&lt;Square&gt;</code> and <code>Shape&lt;Circle&gt;</code> are unrelated types, so you cannot put both in one container or choose between them at run time. In exchange, every call is direct and inlinable.</figcaption></figure>
+<pre data-run="ch03-crtp"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">Derived</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Shape</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">self</span>().<span class="hljs-built_in">area_impl</span>(); }               <span class="hljs-comment">// no virtual</span>
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">describe</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ std::cout &lt;&lt; <span class="hljs-built_in">self</span>().<span class="hljs-built_in">name</span>() &lt;&lt; <span class="hljs-string">&quot; area &quot;</span> &lt;&lt; <span class="hljs-built_in">area</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">const</span> Derived&amp; <span class="hljs-title">self</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">const</span> Derived&amp;&gt;(*<span class="hljs-keyword">this</span>); }
+    <span class="hljs-built_in">Shape</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-keyword">friend</span> Derived;  <span class="hljs-comment">// only Derived can construct Shape&lt;Derived&gt;: catches Circle : Shape&lt;Square&gt;</span>
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Square</span> : <span class="hljs-keyword">public</span> Shape&lt;Square&gt; {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Square</span><span class="hljs-params">(<span class="hljs-type">double</span> s)</span> : s_(s) {</span>}
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area_impl</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> s_ * s_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">name</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;square&quot;</span>; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">double</span> s_;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Rect</span> : <span class="hljs-keyword">public</span> Shape&lt;Rect&gt; {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Rect</span>(<span class="hljs-type">double</span> w, <span class="hljs-type">double</span> h) : <span class="hljs-built_in">w_</span>(w), <span class="hljs-built_in">h_</span>(h) {}
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area_impl</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> w_ * h_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">name</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;rect&quot;</span>; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">double</span> w_, h_;
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">double</span> <span class="hljs-title">doubled</span><span class="hljs-params">(<span class="hljs-type">const</span> Shape&lt;D&gt;&amp; s)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">2</span> * s.<span class="hljs-built_in">area</span>(); }  <span class="hljs-comment">// generic over every Shape&lt;D&gt;</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Square <span class="hljs-title">sq</span><span class="hljs-params">(<span class="hljs-number">3</span>)</span></span>;
+    <span class="hljs-function">Rect <span class="hljs-title">r</span><span class="hljs-params">(<span class="hljs-number">2</span>, <span class="hljs-number">5</span>)</span></span>;
+    sq.<span class="hljs-built_in">describe</span>();
+    r.<span class="hljs-built_in">describe</span>();
+    std::cout &lt;&lt; <span class="hljs-built_in">doubled</span>(sq) + <span class="hljs-built_in">doubled</span>(r) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; <span class="hljs-built_in">sizeof</span>(Square) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-crtp">square area 9
+rect area 10
+38 8</pre>
+<p>Common uses: <b>mixins</b> that add operations to a class (<code>std::enable_shared_from_this&lt;T&gt;</code>, an instance counter per type, comparison or printing helpers); <b>static interfaces</b> in hot loops (expression templates in Eigen, HFT order book handlers); and <b>clone helpers</b> that write <code>do_clone</code> for every derived class.</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Virtual functions</th><th>CRTP</th></tr></thead>
+<tbody>
+<tr><td>Binding</td><td>run time</td><td>compile time</td></tr>
+<tr><td>Per-object cost</td><td>vptr (8 bytes)</td><td>none</td></tr>
+<tr><td>Call cost</td><td>indirect call, usually not inlined</td><td>direct, inlinable</td></tr>
+<tr><td>Heterogeneous container</td><td>yes: <code>vector&lt;unique_ptr&lt;Base&gt;&gt;</code></td><td>no: each <code>Base&lt;D&gt;</code> is a different type (wrap in <code>std::variant</code>)</td></tr>
+<tr><td>Code in headers</td><td>no</td><td>yes, and one instantiation per derived type (code size)</td></tr>
+<tr><td>Missing implementation</td><td>abstract class, error at instantiation of the object</td><td>error at the call inside the base template, often a long message; or infinite recursion if the base and derived functions share a name</td></tr>
+</tbody></table></div>
+<p>C++23 "deducing this" (<code>template &lt;class Self&gt; void f(this const Self&amp; self)</code>) gives the base access to the derived type without the class being a template, and removes the <code>static_cast</code>. CRTP remains common because a great deal of existing code and C++20 codebases use it.</p>
+</section>
+
+<section id="ch03-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the difference between abstraction and encapsulation? Give a C++ example where you have one without the other.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Abstraction chooses the operations a type exposes so callers can ignore the details. Encapsulation hides the representation behind access control so only the class can break its invariants. A C <code>struct</code> plus free functions (like <code>FILE</code> used through <code>fopen</code>/<code>fread</code> but with public fields) is an abstraction without enforced encapsulation; a class with a private field and a getter and setter for each one is encapsulated in syntax but offers no abstraction.</p>
+    <p><b>Why.</b> Interviewers want to hear that the two are related but different levels: abstraction is the design decision, encapsulation the enforcement mechanism. The test of both together is whether you could change the representation (three pointers in <code>std::vector</code> versus a pointer and two sizes) without any caller noticing. Answering "encapsulation is data hiding and abstraction is hiding complexity" without an example sounds memorised.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Name the four pillars of object-oriented programming and the C++ feature behind each. Does polymorphism need inheritance?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <i>Encapsulation</i>: access control (<code>private</code>, <code>protected</code>) so that only member functions can break an invariant. <i>Abstraction</i>: choosing a small public interface, expressed as a class's public members, an abstract class or a concept. <i>Inheritance</i>: derivation, with public, protected or private access and optional <code>virtual</code> bases. <i>Polymorphism</i>: one interface, many types, either at compile time (overloading, templates, CRTP) or at run time (virtual functions). Polymorphism does not need inheritance.</p>
+    <p><b>Why.</b> Interviewers want each pillar tied to a mechanism and a caveat, not four definitions recited. Templates, <code>std::function</code> and <code>std::variant</code> give polymorphism with no common base class, and a non-virtual or private base gives inheritance with no polymorphism. C++ is multi-paradigm, so a design can use only some of the pillars. A frequent weak answer treats abstraction and encapsulation as synonyms; the previous drill separates them.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What is the difference between an abstract class and an interface in C++? Can an abstract class have a constructor, data members and non-virtual functions?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> An abstract class is any class with at least one pure virtual function, declared or inherited and not overridden. An "interface" is only a convention: an abstract class with nothing but pure virtual functions, a virtual (or protected) destructor and no data. So yes, an abstract class can have constructors, data members, non-virtual functions and implemented virtual functions. You just cannot create an object of it, or pass or return one by value.</p>
+    <p><b>Why.</b> Derived constructors call the abstract base's constructor to initialise its part, so the constructor is useful (make it <code>protected</code>, since only derived classes can call it anyway). The common wrong answer is "an abstract class cannot have a constructor because it cannot be instantiated". Use pure interfaces at module boundaries and for multiple inheritance, because without data there is nothing to duplicate in a diamond. Use an abstract class with state for shared implementation, as in the template method and NVI idioms (<a href="#ch02">Ch 2</a>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Which operators must be member functions? Why can <code>operator&lt;&lt;</code> for printing your class not usefully be a member?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>operator=</code>, <code>operator()</code>, <code>operator[]</code>, <code>operator-&gt;</code> and conversion operators must be members ([over.oper]). A member <code>operator&lt;&lt;</code> would make your object the <i>left</i> operand, so you would have to write <code>obj &lt;&lt; std::cout</code>.</p>
+    <p><b>Why.</b> For a member operator, the left operand is the object the function is called on. Streams put the stream on the left, and you cannot add members to <code>std::ostream</code>, so the printing operator must be a non-member, usually a hidden friend. The reason these five must be members is that the language wants them tied to the class (for example, a non-member <code>operator=</code> could change the meaning of assignment for a type from outside). Many candidates also list <code>+=</code>: it should be a member by convention, but a non-member <code>operator+=</code> is legal.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why does postfix <code>operator++</code> take an unused <code>int</code>, why does it return by value, and should it return <code>const T</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The <code>int</code> is a dummy tag that lets prefix and postfix overload each other. It returns by value because it must return the old value, which no longer exists in the object. It should not return <code>const T</code> in modern C++.</p>
+    <p><b>Why.</b> Prefix returns <code>T&amp;</code> to the incremented object. Postfix must copy the old state first, so it returns that copy. Older books recommended <code>const T</code> to make <code>it++++</code> fail to compile, but a const return value cannot be moved from, which costs a copy wherever the result is used. Some style guides still say "return const for postfix", so be ready to explain the trade-off; the C++ Core Guidelines and the standard library return plain <code>T</code>. The copy is also why <code>++it</code> is preferred for non-trivial iterators.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>In C++20 you define only <code>bool operator==(const Id&amp;, int)</code>. Do <code>id != 5</code>, <code>5 == id</code> and <code>5 != id</code> compile? If you write your own <code>operator&lt;=&gt;</code>, does <code>==</code> work?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> All three compile in C++20: the compiler rewrites <code>!=</code> as <code>!(==)</code> and also tries operands in reversed order. A user-written <code>operator&lt;=&gt;</code> does <i>not</i> provide <code>==</code>; only a <i>defaulted</i> <code>&lt;=&gt;</code> implicitly declares a defaulted <code>==</code>.</p>
+    <p><b>Why.</b> [over.match.oper]/3 adds rewritten candidates: for <code>x != y</code>, <code>x == y</code> and <code>y == x</code>; for <code>x &lt; y</code>, <code>(x &lt;=&gt; y) &lt; 0</code> and <code>0 &lt; (y &lt;=&gt; x)</code>. Equality is deliberately separate from ordering because it can often be faster (two strings of different length are unequal without comparing characters). In C++17 you needed four functions for the four expressions above. A pitfall from the reversal: a member <code>bool operator==(const T&amp;)</code> that forgot its <code>const</code> makes <code>a == b</code> formally ambiguous with its own reversed form in C++20; GCC and Clang accept it with a warning (Clang's <code>-Wambiguous-reversed-operator</code>), but code that was clean in C++17 starts warning. Make comparison operators <code>const</code> or hidden friends.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What can a <code>const</code> member function still modify?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>mutable</code> members, anything a member pointer or reference points to (constness is shallow), static members, globals, and other objects reached through parameters. It can also <code>const_cast</code> away const, which is defined only if the object itself was not created const.</p>
+    <p><b>Why.</b> <code>const</code> on a member function only changes <code>this</code> to <code>const T*</code>, so the members of <code>*this</code> become const: a member <code>int* p</code> becomes <code>int* const p</code>, and <code>*p = 1</code> still compiles. Modifying an object that was defined const (for example a global <code>const Widget w;</code>) through a <code>const_cast</code> is undefined behaviour, and the compiler may have placed it in read-only memory. The design rule is logical constness: callers must not observe a change, and a <code>mutable</code> cache written from a const function must be synchronised because const functions are assumed safe to call concurrently.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How does a static member function differ from a non-static one? Can it access private members? Can it be <code>const</code> or <code>virtual</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It has no <code>this</code>, so it can be called without an object (<code>T::f()</code>) and cannot use non-static members directly. It can access private members of any <code>T</code> object it is given. It cannot be <code>const</code>, <code>volatile</code>, ref-qualified or <code>virtual</code>.</p>
+    <p><b>Why.</b> <code>const</code> and ref-qualifiers describe the implicit object, and <code>virtual</code> dispatches on it; without an object neither means anything. Access control is per class, so a static factory can call a private constructor. A pointer to a static member function is an ordinary function pointer (usable as a C callback), unlike a pointer to a non-static member function. People often wrongly say a static member function cannot touch private members.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What is the static initialisation order fiasco, and what are the fixes? Is a function-local static thread-safe?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Dynamic initialisation of namespace-scope statics in different translation units happens in an unspecified order, so a global constructor that uses a global from another file may see it before it is constructed. Fixes: make the dependency <code>constexpr</code> or <code>constinit</code>, construct it on first use with a function-local static, or remove the global. Function-local static initialisation is thread-safe since C++11 ([stmt.dcl]/4).</p>
+    <p><b>Why.</b> Across units the order depends on the link order, so the bug comes and goes with build changes. A function-local static is initialised when control first passes through its declaration, behind a guard variable and a lock (<code>__cxa_guard_acquire</code>), so concurrent first calls block until one finishes. The often-forgotten half is destruction, in reverse order of construction completion, so one static's destructor can touch an already destroyed static. A common slip: <code>constinit</code> does not make the variable const; it only guarantees there is no dynamic initialisation to order.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Is friendship inherited, transitive or symmetric? Does <code>friend</code> break encapsulation?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> None of the three: not inherited, not transitive, not symmetric. Used properly, it does not break encapsulation, because the class itself names exactly which functions may see its representation.</p>
+    <p><b>Why.</b> A friend function such as <code>operator&lt;&lt;</code> is part of the class's interface that happens to need non-member syntax; making it a friend is no worse than making it a member. Stroustrup's phrasing: friendship is granted, not taken. It becomes a problem when a class befriends an unrelated class to avoid designing an interface, because then changes to the representation can break code far away. Hidden friends (defined inside the class) are the preferred form for operators.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is deriving <code>Square</code> from <code>Rectangle</code> always a Liskov violation?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. It is a violation when <code>Rectangle</code> is mutable with independent <code>set_width</code> and <code>set_height</code>. If rectangles are immutable values, a square satisfies every promise a rectangle makes, and the inheritance is fine.</p>
+    <p><b>Why.</b> Liskov substitution is about behavioural contracts, not real-world taxonomy. The mutable rectangle's contract includes "setting the width leaves the height unchanged", which a square cannot honour. Remove the setters and the only promises left (it has a width, a height and <code>area() == w * h</code>) hold for squares. The common wrong answers are "always a violation because squares have one side" and "never, because a square is a rectangle in maths". Both miss that the answer depends on the operations.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When should you use composition, and when is inheritance the right tool?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Default to composition for reuse. Use public inheritance only when the derived type is truly substitutable for the base (Liskov holds) and you need run-time polymorphism through a base pointer or reference, typically from an interface or an abstract class designed for extension.</p>
+    <p><b>Why.</b> Composition depends only on the member's public interface, so it survives changes to the member's implementation, lets you hold several or swap implementations, and exposes only what you forward. Inheriting for code reuse couples you to how the base calls its own virtual functions (the fragile base class problem in the reading drills) and exposes every public base member on your type. Private inheritance is the middle ground for "implemented in terms of" when you need to override a virtual function of the helper (<a href="#ch02">Ch 2</a>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A PIMPL class holds <code>std::unique_ptr&lt;Impl&gt;</code>. Clients that create a <code>Widget</code> fail to compile with "invalid application of sizeof to an incomplete type". The header declares no destructor. Why, and what is the fix?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The implicitly defined destructor is generated inline in each client's translation unit, where <code>Impl</code> is incomplete, and it instantiates <code>std::default_delete&lt;Impl&gt;::operator()</code>, which static-asserts that the type is complete. Fix: declare <code>~Widget();</code> in the header and define <code>Widget::~Widget() = default;</code> in the <code>.cpp</code> after <code>Impl</code> is defined. Do the same for the move operations.</p>
+    <p><b>Why.</b> <code>delete</code> on a pointer to an incomplete class type is undefined if the class has a non-trivial destructor, so <code>std::unique_ptr</code> turns that into a compile error. Defining the special members out of line moves the instantiation to the one file where <code>Impl</code> is complete. <code>std::shared_ptr&lt;Impl&gt;</code> would compile without this because it captures the deleter when constructed, which happens in the <code>.cpp</code>, but it also gives the class shared semantics, which is usually wrong.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What can CRTP not do that virtual functions can, and how do you stop someone writing <code>class Circle : public Shape&lt;Square&gt;</code> by mistake?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> CRTP cannot choose the type at run time or store different derived types in one container, because <code>Shape&lt;Square&gt;</code> and <code>Shape&lt;Circle&gt;</code> are unrelated types. To catch the wrong template argument, make the base constructor private and declare <code>friend Derived;</code>, so only the named derived class can construct it.</p>
+    <p><b>Why.</b> With the wrong argument, <code>static_cast&lt;const Square&amp;&gt;(*this)</code> inside the base is applied to a <code>Circle</code>, which is undefined behaviour that usually reads garbage. With a private constructor, <code>Circle</code>'s constructor cannot call <code>Shape&lt;Square&gt;()</code> and compilation fails. For a heterogeneous collection of CRTP types, combine them with <code>std::variant</code> and <code>std::visit</code>, or add a thin virtual interface on top. A third limitation: if the derived class forgets to implement the function and it has the same name as the base one, the base calls itself recursively for ever, which is why implementations often use a distinct name such as <code>area_impl</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can a member function execute <code>delete this;</code>? Under what conditions is it safe?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes. It is safe if the object was allocated with plain <code>new</code> (not <code>new[]</code>, not on the stack, not as a member or inside a container), nothing in the function touches members or calls virtual functions after the delete, and no other code uses the object afterwards.</p>
+    <p><b>Why.</b> After <code>delete this</code>, <code>this</code> is a dangling pointer, but the function's code is still valid and can return. Intrusive reference counting does exactly this: <code>void release() { if (--refs_ == 0) delete this; }</code>. To force heap allocation, make the destructor private or protected so stack objects fail to compile. Interviewers sometimes follow up with "can <code>this</code> be null?": not in a valid program, because calling a member function through a null pointer is already undefined behaviour.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Which operators cannot be overloaded, and which can but usually should not be?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Cannot: <code>::</code>, <code>.</code>, <code>.*</code>, <code>?:</code>, <code>sizeof</code>, <code>alignof</code>, <code>typeid</code> and the cast keywords. Should not: <code>&amp;&amp;</code>, <code>||</code> and <code>,</code> (they lose short-circuiting and built-in sequencing semantics) and unary <code>&amp;</code> (it breaks taking addresses).</p>
+    <p><b>Why.</b> The non-overloadable ones either take a name rather than a value as an operand (<code>.</code>, <code>::</code>) or are needed to reason about any type (<code>sizeof</code>). An overloaded <code>&amp;&amp;</code> is a function call, so both operands are evaluated before the call. Libraries that overload them (Boost.Spirit's <code>,</code>, expression templates) do so for embedded languages, never for ordinary value types. Generic code uses <code>std::addressof</code> to be robust against overloaded <code>&amp;</code>.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch03-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Prefix and postfix. What does this print?</p>
+<pre data-run="ch03-incdec"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Counter</span> {
+    <span class="hljs-type">int</span> n = <span class="hljs-number">0</span>;
+    Counter&amp; <span class="hljs-keyword">operator</span>++() { ++n; std::cout &lt;&lt; <span class="hljs-string">&quot;pre &quot;</span>; <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+    Counter <span class="hljs-keyword">operator</span>++(<span class="hljs-type">int</span>) { Counter old = *<span class="hljs-keyword">this</span>; ++*<span class="hljs-keyword">this</span>; std::cout &lt;&lt; <span class="hljs-string">&quot;post &quot;</span>; <span class="hljs-keyword">return</span> old; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Counter c;
+    Counter a = c++;
+    Counter b = ++c;
+    std::cout &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span> &lt;&lt; a.n &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; b.n &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; c.n &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    ++++c;
+    std::cout &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span> &lt;&lt; c.n &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch03-incdec">pre post pre
+0 2 2
+pre pre
+4</pre>
+    <p><b>Why.</b> <code>c++</code> runs the postfix operator, which saves the old value, calls the prefix operator (printing <code>pre</code>) and then prints <code>post</code>, returning the old <code>n == 0</code>. <code>++c</code> prints <code>pre</code> and returns a reference to <code>c</code>, which is copied into <code>b</code> with <code>n == 2</code>. <code>++++c</code> works because prefix returns a non-const reference, so the second increment applies to <code>c</code> itself, giving 4. With postfix, <code>c++++</code> would increment a temporary and leave <code>c</code> unchanged by the second step.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This <code>operator+</code> compiles (with a warning). What is wrong? (Output is not compared: the behaviour is undefined, and with GCC the program crashes.)</p>
+<pre data-run="ch03-ref-local" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Vec</span> { <span class="hljs-type">int</span> x, y; };
+
+<span class="hljs-type">static</span> <span class="hljs-type">const</span> Vec&amp; <span class="hljs-keyword">operator</span>+(<span class="hljs-type">const</span> Vec&amp; a, <span class="hljs-type">const</span> Vec&amp; b) {
+    Vec r{a.x + b.x, a.y + b.y};
+    <span class="hljs-keyword">return</span> r;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Vec a{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>}, b{<span class="hljs-number">3</span>, <span class="hljs-number">4</span>};
+    <span class="hljs-type">const</span> Vec&amp; c = a + b;
+    std::cout &lt;&lt; c.x &lt;&lt; <span class="hljs-string">&#x27;,&#x27;</span> &lt;&lt; c.y &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It returns a reference to a local variable that is destroyed when the function returns, so <code>c</code> dangles. Binding the result to <code>const Vec&amp;</code> in <code>main</code> does not extend anything: lifetime extension applies only to temporaries bound directly, not to a reference returned from a function.</p>
+    <p><b>Why.</b> GCC warns with <code>-Wreturn-local-addr</code> and, since the behaviour is undefined, compiles the function to return a null pointer, so the program crashes; Clang warns with <code>-Wreturn-stack-address</code> and may print garbage or the "right" answer by luck. Arithmetic operators produce new values, so the canonical signature returns by value: <code>Vec operator+(Vec a, const Vec&amp; b) { a.x += b.x; a.y += b.y; return a; }</code>. Returning a value is cheap thanks to copy elision (<a href="#ch21">Ch 21</a>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Which overload of <code>operator[]</code> runs? What does this print?</p>
+<pre data-run="ch03-const-overload"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Row</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-type">int</span>&amp; <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) { std::cout &lt;&lt; <span class="hljs-string">&quot;mutable &quot;</span>; <span class="hljs-keyword">return</span> v_[i]; }
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span>&amp; <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) <span class="hljs-type">const</span> { std::cout &lt;&lt; <span class="hljs-string">&quot;const &quot;</span>; <span class="hljs-keyword">return</span> v_[i]; }
+<span class="hljs-keyword">private</span>:
+    std::vector&lt;<span class="hljs-type">int</span>&gt; v_{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>};
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">first</span><span class="hljs-params">(<span class="hljs-type">const</span> Row&amp; r)</span> </span>{ <span class="hljs-keyword">return</span> r[<span class="hljs-number">0</span>]; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Row r;
+    <span class="hljs-type">const</span> Row&amp; cr = r;
+    r[<span class="hljs-number">1</span>] = <span class="hljs-number">20</span>;
+    <span class="hljs-type">int</span> a = cr[<span class="hljs-number">1</span>];
+    <span class="hljs-type">int</span> b = <span class="hljs-built_in">first</span>(r);
+    std::cout &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span> &lt;&lt; a &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; b &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch03-const-overload">mutable const const
+20 1</pre>
+    <p><b>Why.</b> The overload is chosen by the constness of the object expression, not by whether the result is read or written. <code>r</code> is non-const, so <code>r[1]</code> uses the mutable overload. <code>cr</code> and the parameter <code>r</code> inside <code>first</code> are const references, so they use the const overload, even though they refer to the same non-const object. A common wrong answer is that "reading uses the const version": <code>int x = r[0];</code> on a non-const <code>r</code> still calls the mutable one.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A set of points silently loses an element. What does this print, and what is the fix?</p>
+<pre data-run="ch03-set-less"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;set&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Point</span> {
+    <span class="hljs-type">int</span> x, y;
+    <span class="hljs-keyword">friend</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>&lt;(<span class="hljs-type">const</span> Point&amp; a, <span class="hljs-type">const</span> Point&amp; b) { <span class="hljs-keyword">return</span> a.x &lt; b.x; }
+    <span class="hljs-keyword">friend</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> Point&amp;, <span class="hljs-type">const</span> Point&amp;) = <span class="hljs-keyword">default</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::set&lt;Point&gt; pts{{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>}, {<span class="hljs-number">1</span>, <span class="hljs-number">3</span>}, {<span class="hljs-number">2</span>, <span class="hljs-number">0</span>}};
+    std::cout &lt;&lt; pts.<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; pts.<span class="hljs-built_in">count</span>({<span class="hljs-number">1</span>, <span class="hljs-number">99</span>}) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    Point p{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>}, q{<span class="hljs-number">1</span>, <span class="hljs-number">3</span>};
+    std::cout &lt;&lt; (p == q) &lt;&lt; (p &lt; q) &lt;&lt; (q &lt; p) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch03-set-less">2 1
+000</pre>
+    <p><b>Answer.</b> <code>std::set</code> never calls <code>==</code>. It treats <code>a</code> and <code>b</code> as the same key when <code>!(a &lt; b) &amp;&amp; !(b &lt; a)</code>, and this <code>operator&lt;</code> looks only at <code>x</code>, so <code>{1, 3}</code> counts as a duplicate of <code>{1, 2}</code> and is dropped, and <code>count({1, 99})</code> finds a "match". Meanwhile <code>==</code> says <code>p</code> and <code>q</code> differ, so the type has two inconsistent notions of sameness.</p>
+    <p><b>Why.</b> Ordered containers and algorithms use <i>equivalence</i> derived from the comparator, not equality. The fix is to compare every member that <code>==</code> compares, in a fixed order: <code>friend auto operator&lt;=&gt;(const Point&amp;, const Point&amp;) = default;</code>, which also keeps <code>==</code> consistent, or <code>std::tie(a.x, a.y) &lt; std::tie(b.x, b.y)</code> before C++20. The common wrong answer is "the set uses <code>==</code> to detect duplicates". A worse variant, <code>a.x &lt; b.x || a.y &lt; b.y</code>, is not a strict weak ordering at all, and using it in a <code>std::set</code> is undefined behaviour.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Defaulted comparisons. What does this print?</p>
+<pre data-run="ch03-default-cmp"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cmath&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;compare&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Version</span> {
+    <span class="hljs-type">int</span> major, minor, patch;
+    <span class="hljs-keyword">auto</span> <span class="hljs-built_in">operator</span>&lt;=&gt;(<span class="hljs-type">const</span> Version&amp;) <span class="hljs-type">const</span> = <span class="hljs-keyword">default</span>;
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Player</span> {
+    std::string name;
+    <span class="hljs-type">int</span> score;
+    <span class="hljs-keyword">auto</span> <span class="hljs-built_in">operator</span>&lt;=&gt;(<span class="hljs-type">const</span> Player&amp;) <span class="hljs-type">const</span> = <span class="hljs-keyword">default</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Version a{<span class="hljs-number">1</span>, <span class="hljs-number">10</span>, <span class="hljs-number">0</span>}, b{<span class="hljs-number">1</span>, <span class="hljs-number">9</span>, <span class="hljs-number">7</span>};
+    std::cout &lt;&lt; (a &gt; b) &lt;&lt; (a == Version{<span class="hljs-number">1</span>, <span class="hljs-number">10</span>, <span class="hljs-number">0</span>}) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    Player p{<span class="hljs-string">&quot;bob&quot;</span>, <span class="hljs-number">10</span>}, q{<span class="hljs-string">&quot;alice&quot;</span>, <span class="hljs-number">99</span>};
+    std::cout &lt;&lt; (p &lt; q) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-keyword">auto</span> c = <span class="hljs-number">1.0</span> &lt;=&gt; std::<span class="hljs-built_in">nan</span>(<span class="hljs-string">&quot;&quot;</span>);
+    std::cout &lt;&lt; (c == std::partial_ordering::unordered) &lt;&lt; (<span class="hljs-number">1.0</span> &lt; std::<span class="hljs-built_in">nan</span>(<span class="hljs-string">&quot;&quot;</span>)) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch03-default-cmp">11
+0
+10</pre>
+    <p><b>Why.</b> A defaulted <code>&lt;=&gt;</code> compares members lexicographically in declaration order. <code>1.10.0 &gt; 1.9.7</code> because the minor field 10 is greater than 9 (which a string comparison of <code>"1.10.0"</code> and <code>"1.9.7"</code> would get wrong). <code>Player</code> compares <code>name</code> first, so <code>"bob" &lt; "alice"</code> is false and the score is never looked at: member order is part of the meaning. For <code>double</code>, <code>&lt;=&gt;</code> returns <code>std::partial_ordering</code>, and any comparison with NaN is <code>unordered</code>, so <code>1.0 &lt; NaN</code> is false.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A Liskov violation. What does this print, and which design rule does it break?</p>
+<pre data-run="ch03-lsp"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Rectangle</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Rectangle</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">set_width</span><span class="hljs-params">(<span class="hljs-type">int</span> w)</span> </span>{ w_ = w; }
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">set_height</span><span class="hljs-params">(<span class="hljs-type">int</span> h)</span> </span>{ h_ = h; }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> w_ * h_; }
+<span class="hljs-keyword">protected</span>:
+    <span class="hljs-type">int</span> w_ = <span class="hljs-number">0</span>, h_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Square</span> : <span class="hljs-keyword">public</span> Rectangle {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">set_width</span><span class="hljs-params">(<span class="hljs-type">int</span> w)</span> <span class="hljs-keyword">override</span> </span>{ w_ = h_ = w; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">set_height</span><span class="hljs-params">(<span class="hljs-type">int</span> h)</span> <span class="hljs-keyword">override</span> </span>{ w_ = h_ = h; }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">stretch</span><span class="hljs-params">(Rectangle&amp; r)</span> </span>{
+    r.<span class="hljs-built_in">set_width</span>(<span class="hljs-number">5</span>);
+    r.<span class="hljs-built_in">set_height</span>(<span class="hljs-number">4</span>);
+    std::cout &lt;&lt; <span class="hljs-string">&quot;expected 20, got &quot;</span> &lt;&lt; r.<span class="hljs-built_in">area</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Rectangle r;
+    Square s;
+    <span class="hljs-built_in">stretch</span>(r);
+    <span class="hljs-built_in">stretch</span>(s);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch03-lsp">expected 20, got 20
+expected 20, got 16</pre>
+    <p><b>Answer.</b> <code>Square</code> breaks the Liskov substitution principle: <code>stretch</code> relies on the rectangle's promise that <code>set_height</code> does not change the width, and the square's override silently changes both.</p>
+    <p><b>Why.</b> The code compiles and every class is "correct" in isolation; the bug only appears when a <code>Square</code> is used where a <code>Rectangle</code> is expected, which is the whole point of public inheritance. Fixes: drop the inheritance and make both siblings under an abstract <code>Shape</code> with <code>area()</code>, or make the shapes immutable so there are no setters to break. Throwing from <code>Square::set_width</code> when the sides differ is not a fix: it adds a failure mode the base never had, which is also a Liskov violation.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this not compile, and what is the right fix?</p>
+<pre data-run="ch03-const-call" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Account</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">long</span> <span class="hljs-title">balance</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-built_in">audit</span>();
+        <span class="hljs-keyword">return</span> balance_;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">audit</span><span class="hljs-params">()</span> </span>{ log_.<span class="hljs-built_in">push_back</span>(balance_); }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">long</span> balance_ = <span class="hljs-number">0</span>;
+    std::vector&lt;<span class="hljs-type">long</span>&gt; log_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> Account acct;
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(acct.<span class="hljs-built_in">balance</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>balance()</code> is <code>const</code>, so <code>this</code> is <code>const Account*</code>, and it calls the non-const member <code>audit()</code>. Calling a non-const member function on a const object is an error ("passing const Account as this argument discards qualifiers").</p>
+    <p><b>Why.</b> The fix depends on whether the audit log is part of the account's observable value. It is not: reading a balance should not count as changing the account. So declare <code>mutable std::vector&lt;long&gt; log_;</code> and make <code>audit()</code> <code>const</code>, and add a <code>mutable std::mutex</code> if the class may be read from several threads, because const member functions are expected to be safe to call concurrently. The wrong fixes are removing <code>const</code> from <code>balance()</code> (then no const reference can read the balance) and <code>const_cast&lt;Account*&gt;(this)-&gt;audit()</code> (undefined behaviour here, because <code>acct</code> was defined const).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Construct on first use. What does this print?</p>
+<pre data-run="ch03-local-static"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Logger</span> {
+    <span class="hljs-built_in">Logger</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;Logger ready\n&quot;</span>; }
+    ~<span class="hljs-built_in">Logger</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;Logger gone\n&quot;</span>; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">log</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* msg)</span> </span>{ std::cout &lt;&lt; msg &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> Logger&amp; <span class="hljs-title">logger</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">static</span> Logger instance;
+    <span class="hljs-keyword">return</span> instance;
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">App</span> {
+    <span class="hljs-built_in">App</span>() { <span class="hljs-built_in">logger</span>().<span class="hljs-built_in">log</span>(<span class="hljs-string">&quot;App starting&quot;</span>); }
+    ~<span class="hljs-built_in">App</span>() { std::cout &lt;&lt; <span class="hljs-string">&quot;App gone\n&quot;</span>; }
+};
+
+<span class="hljs-type">static</span> App app;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::cout &lt;&lt; <span class="hljs-string">&quot;main\n&quot;</span>;
+    <span class="hljs-built_in">logger</span>().<span class="hljs-built_in">log</span>(<span class="hljs-string">&quot;hello&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch03-local-static">Logger ready
+App starting
+main
+hello
+App gone
+Logger gone</pre>
+    <p><b>Why.</b> The global <code>app</code> is dynamically initialised before <code>main</code> (all mainstream implementations do this at start-up). Its constructor calls <code>logger()</code>, which constructs the function-local static on first use, so the logger exists before <code>App</code> needs it, whichever file either lives in. At exit, statics are destroyed in reverse order of <i>completed</i> construction: the logger finished constructing first (inside <code>App</code>'s constructor), so <code>app</code> is destroyed first and the logger last. That is exactly the order that keeps <code>~App</code> safe if it logs. If <code>logger</code> were a plain global in another file, <code>App()</code> could run before it was constructed: the fiasco.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A member <code>operator&lt;&lt;</code>. What does this print, and why does <code>std::cout &lt;&lt; t</code> not compile?</p>
+<pre data-run="ch03-member-shift"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Temp</span> {
+    <span class="hljs-type">double</span> celsius;
+    std::ostream&amp; <span class="hljs-keyword">operator</span>&lt;&lt;(std::ostream&amp; os) <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> os &lt;&lt; celsius &lt;&lt; <span class="hljs-string">&#x27;C&#x27;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Temp t{<span class="hljs-number">21.5</span>};
+    t &lt;&lt; std::cout;  <span class="hljs-comment">// the object is the left operand</span>
+    std::cout &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-comment">// std::cout &lt;&lt; t;  // error: no operator&lt;&lt; for (ostream, Temp)</span>
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch03-member-shift">21.5C</pre>
+    <p><b>Why.</b> A member binary operator always takes the object as its left operand, so this <code>operator&lt;&lt;</code> means <code>t.operator&lt;&lt;(std::cout)</code>, written <code>t &lt;&lt; std::cout</code>. For <code>std::cout &lt;&lt; t</code> the compiler looks for a member of <code>std::ostream</code> or a non-member taking <code>(std::ostream&amp;, const Temp&amp;)</code>, and finds neither. The fix is the canonical hidden friend: <code>friend std::ostream&amp; operator&lt;&lt;(std::ostream&amp; os, const Temp&amp; t)</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The fragile base class. The counter should report 4 insertion attempts. What does it print, and what is the robust fix?</p>
+<pre data-run="ch03-fragile-base"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;set&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">IntSet</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">IntSet</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">bool</span> <span class="hljs-title">insert</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> </span>{ <span class="hljs-keyword">return</span> items_.<span class="hljs-built_in">insert</span>(x).second; }
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">void</span> <span class="hljs-title">insert_all</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">int</span>&gt;&amp; xs)</span> </span>{ <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> x : xs) <span class="hljs-built_in">insert</span>(x); }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> items_.<span class="hljs-built_in">size</span>(); }
+<span class="hljs-keyword">private</span>:
+    std::set&lt;<span class="hljs-type">int</span>&gt; items_;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">CountingSet</span> : <span class="hljs-keyword">public</span> IntSet {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">insert</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> <span class="hljs-keyword">override</span> </span>{ ++attempts; <span class="hljs-keyword">return</span> IntSet::<span class="hljs-built_in">insert</span>(x); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">insert_all</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">int</span>&gt;&amp; xs)</span> <span class="hljs-keyword">override</span> </span>{
+        attempts += xs.<span class="hljs-built_in">size</span>();
+        IntSet::<span class="hljs-built_in">insert_all</span>(xs);
+    }
+    std::<span class="hljs-type">size_t</span> attempts = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    CountingSet s;
+    s.<span class="hljs-built_in">insert_all</span>({<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>});
+    s.<span class="hljs-built_in">insert</span>(<span class="hljs-number">3</span>);
+    std::cout &lt;&lt; s.attempts &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; s.<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch03-fragile-base">7 3</pre>
+    <p><b>Answer.</b> <code>IntSet::insert_all</code> calls the virtual <code>insert</code> for each element, which dispatches to <code>CountingSet::insert</code>, so the three elements are counted twice: 3 + 3 + 1 = 7.</p>
+    <p><b>Why.</b> The derived class depends on an undocumented implementation detail of the base (whether <code>insert_all</code> calls <code>insert</code>). Removing the override of <code>insert_all</code> gives the right answer today, but breaks again if the base author later optimises <code>insert_all</code> to bypass <code>insert</code>. The robust fix is composition: a <code>CountingSet</code> that <i>holds</i> an <code>IntSet</code> and forwards to it, counting in its own functions, depends only on the public behaviour. This is Effective Java item 18 ("favour composition over inheritance") and applies unchanged to C++.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A copy-paste error in a CRTP hierarchy. What is wrong? (Output is not compared: the behaviour is undefined.)</p>
+<pre data-run="ch03-crtp-wrong" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Shape</span> {
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">const</span> D*&gt;(<span class="hljs-keyword">this</span>)-&gt;<span class="hljs-built_in">area_impl</span>(); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Square</span> : Shape&lt;Square&gt; {
+    <span class="hljs-type">double</span> side = <span class="hljs-number">2</span>;
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area_impl</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> side * side; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Circle</span> : Shape&lt;Square&gt; {  <span class="hljs-comment">// should be Shape&lt;Circle&gt;</span>
+    <span class="hljs-type">double</span> radius = <span class="hljs-number">1</span>;
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area_impl</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">3.14159</span> * radius * radius; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Circle c;
+    std::cout &lt;&lt; c.<span class="hljs-built_in">area</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>Circle</code> derives from <code>Shape&lt;Square&gt;</code>, so <code>area()</code> casts a <code>Circle</code> to <code>Square</code> and calls <code>Square::area_impl</code> on it. That is undefined behaviour; in practice it reads <code>radius</code> as if it were <code>side</code> and prints <code>1</code> instead of about 3.14.</p>
+    <p><b>Why.</b> <code>static_cast</code> down a hierarchy is unchecked, and both are valid-looking types, so nothing complains. The guard is to make the base's constructor private and befriend the template parameter; then <code>Circle</code> cannot construct a <code>Shape&lt;Square&gt;</code> and the mistake becomes a compile error:</p>
+<pre data-run="ch03-crtp-guard" data-mode="error"><code class="language-cpp hljs"><span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Shape</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">const</span> D*&gt;(<span class="hljs-keyword">this</span>)-&gt;<span class="hljs-built_in">area_impl</span>(); }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-built_in">Shape</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-keyword">friend</span> D;  <span class="hljs-comment">// only D may construct Shape&lt;D&gt;</span>
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Square</span> : Shape&lt;Square&gt; {
+    <span class="hljs-type">double</span> side = <span class="hljs-number">2</span>;
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area_impl</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> side * side; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Circle</span> : Shape&lt;Square&gt; {
+    <span class="hljs-type">double</span> radius = <span class="hljs-number">1</span>;
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">area_impl</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">3.14159</span> * radius * radius; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Circle c;  <span class="hljs-comment">// error: Shape&lt;Square&gt;::Shape() is private within this context</span>
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">int</span>&gt;(c.<span class="hljs-built_in">area</span>());
+}</code></pre>
+  </div></details>
+</div>
+</section>
+
+<section id="ch03-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>A <code>Fraction</code> value type. Store a numerator and denominator in <code>std::int64_t</code>, always normalised (lowest terms, positive denominator). Provide <code>+ - * /</code> and their compound forms, unary minus, <code>==</code>, a correct <code>&lt;=&gt;</code>, <code>operator&lt;&lt;</code> (print <code>3</code> rather than <code>3/1</code>) and an explicit conversion to <code>double</code>. Integers must mix freely on either side (<code>1 + f</code>). A zero denominator, including division by zero, throws <code>std::domain_error</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Normalise in the constructor so every object is canonical; then equality is member-wise and can be defaulted. Compound assignments do the work and build a new normalised fraction; the binary operators are hidden friends that take the left operand by value. A non-explicit constructor from <code>int64_t</code> plus non-member operators gives mixed arithmetic on both sides. Ordering cross-multiplies, which is correct because both denominators are positive.</p>
+<pre data-run="ch03-fraction"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;compare&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;numeric&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Fraction</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Fraction</span>(std::<span class="hljs-type">int64_t</span> num = <span class="hljs-number">0</span>, std::<span class="hljs-type">int64_t</span> den = <span class="hljs-number">1</span>) : <span class="hljs-built_in">num_</span>(num), <span class="hljs-built_in">den_</span>(den) {
+        <span class="hljs-keyword">if</span> (den_ == <span class="hljs-number">0</span>) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">domain_error</span>(<span class="hljs-string">&quot;zero denominator&quot;</span>);
+        <span class="hljs-keyword">if</span> (den_ &lt; <span class="hljs-number">0</span>) { num_ = -num_; den_ = -den_; }
+        std::<span class="hljs-type">int64_t</span> g = std::<span class="hljs-built_in">gcd</span>(num_, den_);  <span class="hljs-comment">// gcd(0, d) == d, so 0/d becomes 0/1</span>
+        num_ /= g;
+        den_ /= g;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">int64_t</span> <span class="hljs-title">num</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> num_; }
+    <span class="hljs-function">std::<span class="hljs-type">int64_t</span> <span class="hljs-title">den</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> den_; }
+
+    Fraction&amp; <span class="hljs-keyword">operator</span>+=(<span class="hljs-type">const</span> Fraction&amp; r) { <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span> = <span class="hljs-built_in">Fraction</span>(num_ * r.den_ + r.num_ * den_, den_ * r.den_); }
+    Fraction&amp; <span class="hljs-keyword">operator</span>-=(<span class="hljs-type">const</span> Fraction&amp; r) { <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span> += -r; }
+    Fraction&amp; <span class="hljs-keyword">operator</span>*=(<span class="hljs-type">const</span> Fraction&amp; r) { <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span> = <span class="hljs-built_in">Fraction</span>(num_ * r.num_, den_ * r.den_); }
+    Fraction&amp; <span class="hljs-keyword">operator</span>/=(<span class="hljs-type">const</span> Fraction&amp; r) { <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span> = <span class="hljs-built_in">Fraction</span>(num_ * r.den_, den_ * r.num_); }  <span class="hljs-comment">// throws if r == 0</span>
+    Fraction <span class="hljs-keyword">operator</span>-() <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> <span class="hljs-built_in">Fraction</span>(-num_, den_); }
+
+    <span class="hljs-keyword">friend</span> Fraction <span class="hljs-keyword">operator</span>+(Fraction a, <span class="hljs-type">const</span> Fraction&amp; b) { <span class="hljs-keyword">return</span> a += b; }
+    <span class="hljs-keyword">friend</span> Fraction <span class="hljs-keyword">operator</span>-(Fraction a, <span class="hljs-type">const</span> Fraction&amp; b) { <span class="hljs-keyword">return</span> a -= b; }
+    <span class="hljs-keyword">friend</span> Fraction <span class="hljs-keyword">operator</span>*(Fraction a, <span class="hljs-type">const</span> Fraction&amp; b) { <span class="hljs-keyword">return</span> a *= b; }
+    <span class="hljs-keyword">friend</span> Fraction <span class="hljs-keyword">operator</span>/(Fraction a, <span class="hljs-type">const</span> Fraction&amp; b) { <span class="hljs-keyword">return</span> a /= b; }
+
+    <span class="hljs-keyword">friend</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> Fraction&amp;, <span class="hljs-type">const</span> Fraction&amp;) = <span class="hljs-keyword">default</span>;  <span class="hljs-comment">// valid: always normalised</span>
+    <span class="hljs-keyword">friend</span> std::strong_ordering <span class="hljs-built_in">operator</span>&lt;=&gt;(<span class="hljs-type">const</span> Fraction&amp; a, <span class="hljs-type">const</span> Fraction&amp; b) {
+        <span class="hljs-keyword">return</span> a.num_ * b.den_ &lt;=&gt; b.num_ * a.den_;  <span class="hljs-comment">// denominators are positive</span>
+    }
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">double</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">double</span>&gt;(num_) / <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">double</span>&gt;(den_); }
+
+    <span class="hljs-keyword">friend</span> std::ostream&amp; <span class="hljs-keyword">operator</span>&lt;&lt;(std::ostream&amp; os, <span class="hljs-type">const</span> Fraction&amp; f) {
+        os &lt;&lt; f.num_;
+        <span class="hljs-keyword">if</span> (f.den_ != <span class="hljs-number">1</span>) os &lt;&lt; <span class="hljs-string">&#x27;/&#x27;</span> &lt;&lt; f.den_;
+        <span class="hljs-keyword">return</span> os;
+    }
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">int64_t</span> num_, den_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Fraction <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-number">1</span>, <span class="hljs-number">2</span>)</span>, <span class="hljs-title">b</span><span class="hljs-params">(<span class="hljs-number">-3</span>, <span class="hljs-number">4</span>)</span></span>;
+    std::cout &lt;&lt; a + b &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; a - b &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; a * b &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; a / b &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-built_in">Fraction</span>(<span class="hljs-number">6</span>, <span class="hljs-number">-8</span>) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; <span class="hljs-built_in">Fraction</span>(<span class="hljs-number">0</span>, <span class="hljs-number">5</span>) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; <span class="hljs-number">1</span> + a &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; a * <span class="hljs-number">4</span> &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; (a &gt; b) &lt;&lt; (<span class="hljs-built_in">Fraction</span>(<span class="hljs-number">2</span>, <span class="hljs-number">4</span>) == a) &lt;&lt; (a != <span class="hljs-number">1</span>) &lt;&lt; (<span class="hljs-built_in">Fraction</span>(<span class="hljs-number">1</span>, <span class="hljs-number">3</span>) &lt; a) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">double</span>&gt;(b) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-keyword">try</span> {
+        (<span class="hljs-type">void</span>)(a / <span class="hljs-built_in">Fraction</span>(<span class="hljs-number">0</span>));
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::domain_error&amp; e) {
+        std::cout &lt;&lt; e.<span class="hljs-built_in">what</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+}</code></pre>
+<pre class="out" data-out="ch03-fraction">-1/4 5/4 -3/8 -2/3
+-3/4 0 3/2 2
+1111
+-0.75
+zero denominator</pre>
+    <p><b>Complexity and pitfalls.</b> Each operation is O(log n) for the gcd. Pitfalls: the products overflow <code>int64_t</code> for large terms (reduce by the gcd of cross terms first, or use <code>__int128</code> for the intermediate products and comparison); defaulting <code>==</code> is only correct because of the normalisation invariant, so a constructor that skipped it would make <code>1/2 != 2/4</code>; and <code>return a += b;</code> returns an lvalue reference expression, so the result is copied out of the parameter; the two-statement form <code>a += b; return a;</code> moves instead (a by-value parameter is never eligible for NRVO, but returning it by name is an implicit move). For two <code>int64_t</code> fields the difference is nil; for a big type it matters.</p>
+    <p class="rating">Estimated rating: ~1400 · straightforward, but tests every canonical signature and the invariant that makes defaulted equality valid</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>A dense <code>Matrix</code> of <code>double</code>. Requirements: construction from a size or from nested braces (<code>Matrix{{1, 2}, {3, 4}}</code>), element access with <code>m(r, c)</code> that works on const and non-const matrices, <code>+=</code>, <code>+</code>, <code>*</code>, <code>==</code>, a static <code>identity(n)</code>, and <code>operator&lt;&lt;</code>. Shape mismatches throw <code>std::invalid_argument</code>. Store the elements contiguously.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> One <code>std::vector&lt;double&gt;</code> in row-major order plus the two dimensions, so the class follows the rule of zero (<a href="#ch01">Ch 1</a>). <code>operator()</code> is overloaded on const: a reference for writing, a value for reading. Multiplication uses the i-k-j loop order so the inner loop walks both <code>b</code> and the result contiguously, which matters for cache behaviour (<a href="#ch17">Ch 17</a>). Defaulted <code>==</code> compares dimensions and data.</p>
+<pre data-run="ch03-matrix"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;initializer_list&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Matrix</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Matrix</span>(std::<span class="hljs-type">size_t</span> rows, std::<span class="hljs-type">size_t</span> cols, <span class="hljs-type">double</span> fill = <span class="hljs-number">0.0</span>)
+        : <span class="hljs-built_in">rows_</span>(rows), <span class="hljs-built_in">cols_</span>(cols), <span class="hljs-built_in">data_</span>(rows * cols, fill) {}
+    <span class="hljs-built_in">Matrix</span>(std::initializer_list&lt;std::initializer_list&lt;<span class="hljs-type">double</span>&gt;&gt; init)
+        : <span class="hljs-built_in">rows_</span>(init.<span class="hljs-built_in">size</span>()), <span class="hljs-built_in">cols_</span>(init.<span class="hljs-built_in">size</span>() ? init.<span class="hljs-built_in">begin</span>()-&gt;<span class="hljs-built_in">size</span>() : <span class="hljs-number">0</span>) {
+        data_.<span class="hljs-built_in">reserve</span>(rows_ * cols_);
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; row : init) {
+            <span class="hljs-keyword">if</span> (row.<span class="hljs-built_in">size</span>() != cols_) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">invalid_argument</span>(<span class="hljs-string">&quot;ragged rows&quot;</span>);
+            data_.<span class="hljs-built_in">insert</span>(data_.<span class="hljs-built_in">end</span>(), row.<span class="hljs-built_in">begin</span>(), row.<span class="hljs-built_in">end</span>());
+        }
+    }
+    <span class="hljs-function"><span class="hljs-type">static</span> Matrix <span class="hljs-title">identity</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-function">Matrix <span class="hljs-title">m</span><span class="hljs-params">(n, n)</span></span>;
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) <span class="hljs-built_in">m</span>(i, i) = <span class="hljs-number">1.0</span>;
+        <span class="hljs-keyword">return</span> m;
+    }
+
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">rows</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> rows_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">cols</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> cols_; }
+    <span class="hljs-function"><span class="hljs-type">double</span>&amp; <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> r, std::<span class="hljs-type">size_t</span> c)</span> </span>{ <span class="hljs-keyword">return</span> data_[r * cols_ + c]; }
+    <span class="hljs-function"><span class="hljs-type">double</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> r, std::<span class="hljs-type">size_t</span> c)</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> data_[r * cols_ + c]; }
+
+    Matrix&amp; <span class="hljs-keyword">operator</span>+=(<span class="hljs-type">const</span> Matrix&amp; o) {
+        <span class="hljs-keyword">if</span> (rows_ != o.rows_ || cols_ != o.cols_) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">invalid_argument</span>(<span class="hljs-string">&quot;shape mismatch&quot;</span>);
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; data_.<span class="hljs-built_in">size</span>(); ++i) data_[i] += o.data_[i];
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    <span class="hljs-keyword">friend</span> Matrix <span class="hljs-keyword">operator</span>+(Matrix a, <span class="hljs-type">const</span> Matrix&amp; b) { a += b; <span class="hljs-keyword">return</span> a; }
+    <span class="hljs-keyword">friend</span> Matrix <span class="hljs-keyword">operator</span>*(<span class="hljs-type">const</span> Matrix&amp; a, <span class="hljs-type">const</span> Matrix&amp; b) {
+        <span class="hljs-keyword">if</span> (a.cols_ != b.rows_) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">invalid_argument</span>(<span class="hljs-string">&quot;shape mismatch&quot;</span>);
+        <span class="hljs-function">Matrix <span class="hljs-title">m</span><span class="hljs-params">(a.rows_, b.cols_)</span></span>;
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; a.rows_; ++i)
+            <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> k = <span class="hljs-number">0</span>; k &lt; a.cols_; ++k) {
+                <span class="hljs-type">const</span> <span class="hljs-type">double</span> aik = <span class="hljs-built_in">a</span>(i, k);
+                <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> j = <span class="hljs-number">0</span>; j &lt; b.cols_; ++j) <span class="hljs-built_in">m</span>(i, j) += aik * <span class="hljs-built_in">b</span>(k, j);
+            }
+        <span class="hljs-keyword">return</span> m;
+    }
+    <span class="hljs-keyword">friend</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> Matrix&amp;, <span class="hljs-type">const</span> Matrix&amp;) = <span class="hljs-keyword">default</span>;
+    <span class="hljs-keyword">friend</span> std::ostream&amp; <span class="hljs-keyword">operator</span>&lt;&lt;(std::ostream&amp; os, <span class="hljs-type">const</span> Matrix&amp; m) {
+        <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> r = <span class="hljs-number">0</span>; r &lt; m.rows_; ++r) {
+            <span class="hljs-keyword">if</span> (r) os &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+            os &lt;&lt; <span class="hljs-string">&#x27;[&#x27;</span>;
+            <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> c = <span class="hljs-number">0</span>; c &lt; m.cols_; ++c) os &lt;&lt; (c ? <span class="hljs-string">&quot; &quot;</span> : <span class="hljs-string">&quot;&quot;</span>) &lt;&lt; <span class="hljs-built_in">m</span>(r, c);
+            os &lt;&lt; <span class="hljs-string">&#x27;]&#x27;</span>;
+        }
+        <span class="hljs-keyword">return</span> os;
+    }
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">size_t</span> rows_, cols_;
+    std::vector&lt;<span class="hljs-type">double</span>&gt; data_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Matrix a{{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>}, {<span class="hljs-number">3</span>, <span class="hljs-number">4</span>}};
+    Matrix b{{<span class="hljs-number">0</span>, <span class="hljs-number">1</span>}, {<span class="hljs-number">1</span>, <span class="hljs-number">0</span>}};
+    <span class="hljs-type">const</span> Matrix&amp; ca = a;
+    std::cout &lt;&lt; a * b &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; (a * Matrix::<span class="hljs-built_in">identity</span>(<span class="hljs-number">2</span>) == a) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; <span class="hljs-built_in">ca</span>(<span class="hljs-number">1</span>, <span class="hljs-number">0</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; a + a &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-keyword">try</span> {
+        (<span class="hljs-type">void</span>)(<span class="hljs-built_in">Matrix</span>(<span class="hljs-number">2</span>, <span class="hljs-number">3</span>) * <span class="hljs-built_in">Matrix</span>(<span class="hljs-number">2</span>, <span class="hljs-number">3</span>));
+    } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::invalid_argument&amp; e) {
+        std::cout &lt;&lt; e.<span class="hljs-built_in">what</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+}</code></pre>
+<pre class="out" data-out="ch03-matrix">[2 1]
+[4 3]
+1 3
+[2 4]
+[6 8]
+shape mismatch</pre>
+    <p><b>Complexity and pitfalls.</b> Multiplication is O(n·m·p); addition is O(n·m). Pitfalls: the const <code>operator()</code> must return by value or <code>const double&amp;</code>, never <code>double&amp;</code>; <code>Matrix{2, 3}</code> with braces picks the initialiser-list constructor and is easy to misuse, so size construction uses parentheses; and exact <code>==</code> on floating point is only meaningful for exactly representable values like these (real code compares with a tolerance). C++23 allows <code>m[r, c]</code> with a multi-argument <code>operator[]</code>.</p>
+    <p class="rating">Estimated rating: ~1300 · routine class design; the cache-friendly loop order and the const overload are the discussion points</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>PIMPL with value semantics. Write a <code>Phonebook</code> whose header exposes only <code>add(name, number)</code>, <code>find(name)</code> returning <code>std::optional&lt;std::string&gt;</code>, and <code>size()</code>, with all data hidden in an <code>Impl</code>. It must be copyable (deep copy) and cheaply movable, and <code>sizeof(Phonebook)</code> must equal one pointer. Put the "header" and "source" parts in one file, marked with comments.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Hold <code>std::unique_ptr&lt;Impl&gt;</code>. Declare all five special members in the header and define them in the source after <code>Impl</code> is complete, which avoids the incomplete-type error. Copy construction clones the <code>Impl</code>; copy assignment uses copy-and-swap for the strong guarantee; the move operations are defaulted (in the source file) and leave the source with a null pointer.</p>
+<pre data-run="ch03-pimpl" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;optional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-comment">// ---- phonebook.h: what clients include ----</span>
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Phonebook</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Phonebook</span>();
+    ~<span class="hljs-built_in">Phonebook</span>();
+    <span class="hljs-built_in">Phonebook</span>(<span class="hljs-type">const</span> Phonebook&amp; other);
+    Phonebook&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Phonebook&amp; other);
+    <span class="hljs-built_in">Phonebook</span>(Phonebook&amp;&amp; other) <span class="hljs-keyword">noexcept</span>;
+    Phonebook&amp; <span class="hljs-keyword">operator</span>=(Phonebook&amp;&amp; other) <span class="hljs-keyword">noexcept</span>;
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">add</span><span class="hljs-params">(std::string name, std::string number)</span></span>;
+    <span class="hljs-function">std::optional&lt;std::string&gt; <span class="hljs-title">find</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; name)</span> <span class="hljs-type">const</span></span>;
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span></span>;
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Impl</span>;
+    std::unique_ptr&lt;Impl&gt; p_;  <span class="hljs-comment">// a moved-from Phonebook holds null: assign or destroy only</span>
+};
+
+<span class="hljs-comment">// ---- phonebook.cpp: the only file that sees Impl ----</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Phonebook</span>::Impl {
+    std::map&lt;std::string, std::string&gt; entries;
+};
+
+Phonebook::<span class="hljs-built_in">Phonebook</span>() : <span class="hljs-built_in">p_</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Impl&gt;()) {}
+Phonebook::~<span class="hljs-built_in">Phonebook</span>() = <span class="hljs-keyword">default</span>;
+Phonebook::<span class="hljs-built_in">Phonebook</span>(<span class="hljs-type">const</span> Phonebook&amp; other)
+    : <span class="hljs-built_in">p_</span>(other.p_ ? std::<span class="hljs-built_in">make_unique</span>&lt;Impl&gt;(*other.p_) : <span class="hljs-literal">nullptr</span>) {}
+Phonebook&amp; Phonebook::<span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Phonebook&amp; other) {
+    Phonebook <span class="hljs-built_in">tmp</span>(other);  <span class="hljs-comment">// may throw; *this is untouched if it does</span>
+    p_.<span class="hljs-built_in">swap</span>(tmp.p_);
+    <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+}
+Phonebook::<span class="hljs-built_in">Phonebook</span>(Phonebook&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+Phonebook&amp; Phonebook::<span class="hljs-keyword">operator</span>=(Phonebook&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">Phonebook::add</span><span class="hljs-params">(std::string name, std::string number)</span> </span>{
+    p_-&gt;entries[std::<span class="hljs-built_in">move</span>(name)] = std::<span class="hljs-built_in">move</span>(number);
+}
+<span class="hljs-function">std::optional&lt;std::string&gt; <span class="hljs-title">Phonebook::find</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; name)</span> <span class="hljs-type">const</span> </span>{
+    <span class="hljs-keyword">auto</span> it = p_-&gt;entries.<span class="hljs-built_in">find</span>(name);
+    <span class="hljs-keyword">if</span> (it == p_-&gt;entries.<span class="hljs-built_in">end</span>()) <span class="hljs-keyword">return</span> std::<span class="hljs-literal">nullopt</span>;
+    <span class="hljs-keyword">return</span> it-&gt;second;
+}
+<span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">Phonebook::size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> p_-&gt;entries.<span class="hljs-built_in">size</span>(); }
+
+<span class="hljs-comment">// ---- main.cpp ----</span>
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Phonebook a;
+    a.<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;alice&quot;</span>, <span class="hljs-string">&quot;555-0100&quot;</span>);
+    a.<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;bob&quot;</span>, <span class="hljs-string">&quot;555-0199&quot;</span>);
+    Phonebook b = a;  <span class="hljs-comment">// deep copy</span>
+    b.<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;carol&quot;</span>, <span class="hljs-string">&quot;555-0123&quot;</span>);
+    Phonebook c = std::<span class="hljs-built_in">move</span>(b);
+    std::cout &lt;&lt; a.<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; c.<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    a = c;            <span class="hljs-comment">// copy assignment</span>
+    std::cout &lt;&lt; a.<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; a.<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;carol&quot;</span>).<span class="hljs-built_in">value_or</span>(<span class="hljs-string">&quot;?&quot;</span>) &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span>
+              &lt;&lt; c.<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;dave&quot;</span>).<span class="hljs-built_in">value_or</span>(<span class="hljs-string">&quot;none&quot;</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;one pointer: &quot;</span> &lt;&lt; (<span class="hljs-built_in">sizeof</span>(Phonebook) == <span class="hljs-built_in">sizeof</span>(<span class="hljs-type">void</span>*)) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-pimpl">2 3
+3 555-0123 none
+one pointer: 1</pre>
+    <p><b>Complexity and pitfalls.</b> Every operation costs one extra pointer dereference, construction costs a heap allocation, and nothing in <code>Impl</code> can be inlined into callers. Pitfalls: defining the destructor or move operations in the header (or leaving them implicit) brings back the incomplete-type error; in a const member function <code>p_-&gt;entries.clear()</code> would compile, because constness does not propagate through the pointer; and the copy constructor must handle a moved-from source, or copying such an object dereferences null.</p>
+    <p class="rating">Estimated rating: ~1500 · the code is short; knowing exactly which special members must be out of line, and why, is the test</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>CRTP mixins. Write two mixins: <code>Printable&lt;T&gt;</code>, which gives any <code>T</code> with a <code>print(std::ostream&amp;) const</code> member an <code>operator&lt;&lt;</code>, and <code>Counted&lt;T&gt;</code>, which keeps a live-instance count <i>per type</i>, correct under copying. Apply both to two unrelated classes. The mixins must add no size to the classes and must not be usable on their own.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>Printable&lt;T&gt;</code> defines a hidden friend <code>operator&lt;&lt;(std::ostream&amp;, const T&amp;)</code>; ADL finds it because <code>Printable&lt;T&gt;</code> is a base class of <code>T</code>, and base classes are associated classes. <code>Counted&lt;T&gt;</code> holds an <code>inline static</code> counter, so each <code>T</code> gets its own, and increments in every constructor including the copy constructor. Both have protected constructors and destructors (not usable alone, no virtual destructor needed) and no data, so the empty base optimisation makes them free.</p>
+<pre data-run="ch03-mixins"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Printable</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">friend</span> std::ostream&amp; <span class="hljs-keyword">operator</span>&lt;&lt;(std::ostream&amp; os, <span class="hljs-type">const</span> T&amp; x) {
+        x.<span class="hljs-built_in">print</span>(os);
+        <span class="hljs-keyword">return</span> os;
+    }
+<span class="hljs-keyword">protected</span>:
+    <span class="hljs-built_in">Printable</span>() = <span class="hljs-keyword">default</span>;
+    ~<span class="hljs-built_in">Printable</span>() = <span class="hljs-keyword">default</span>;
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Counted</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">alive</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> alive_; }
+<span class="hljs-keyword">protected</span>:
+    <span class="hljs-built_in">Counted</span>() { ++alive_; }
+    <span class="hljs-built_in">Counted</span>(<span class="hljs-type">const</span> Counted&amp;) { ++alive_; }  <span class="hljs-comment">// copies are new objects too</span>
+    Counted&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> Counted&amp;) = <span class="hljs-keyword">default</span>;
+    ~<span class="hljs-built_in">Counted</span>() { --alive_; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">inline</span> <span class="hljs-type">static</span> <span class="hljs-type">int</span> alive_ = <span class="hljs-number">0</span>;          <span class="hljs-comment">// one counter per T</span>
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Point</span> : <span class="hljs-keyword">public</span> Printable&lt;Point&gt;, <span class="hljs-keyword">public</span> Counted&lt;Point&gt; {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Point</span>(<span class="hljs-type">int</span> x, <span class="hljs-type">int</span> y) : <span class="hljs-built_in">x_</span>(x), <span class="hljs-built_in">y_</span>(y) {}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">print</span><span class="hljs-params">(std::ostream&amp; os)</span> <span class="hljs-type">const</span> </span>{ os &lt;&lt; <span class="hljs-string">&#x27;(&#x27;</span> &lt;&lt; x_ &lt;&lt; <span class="hljs-string">&quot;, &quot;</span> &lt;&lt; y_ &lt;&lt; <span class="hljs-string">&#x27;)&#x27;</span>; }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">int</span> x_, y_;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Order</span> : <span class="hljs-keyword">public</span> Printable&lt;Order&gt;, <span class="hljs-keyword">public</span> Counted&lt;Order&gt; {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">Order</span>(std::string id, <span class="hljs-type">int</span> qty) : <span class="hljs-built_in">id_</span>(std::<span class="hljs-built_in">move</span>(id)), <span class="hljs-built_in">qty_</span>(qty) {}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">print</span><span class="hljs-params">(std::ostream&amp; os)</span> <span class="hljs-type">const</span> </span>{ os &lt;&lt; <span class="hljs-string">&quot;order &quot;</span> &lt;&lt; id_ &lt;&lt; <span class="hljs-string">&quot; x&quot;</span> &lt;&lt; qty_; }
+<span class="hljs-keyword">private</span>:
+    std::string id_;
+    <span class="hljs-type">int</span> qty_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Point <span class="hljs-title">p</span><span class="hljs-params">(<span class="hljs-number">1</span>, <span class="hljs-number">2</span>)</span></span>;
+    {
+        Point q = p;
+        <span class="hljs-function">Order <span class="hljs-title">o</span><span class="hljs-params">(<span class="hljs-string">&quot;A1&quot;</span>, <span class="hljs-number">5</span>)</span></span>;
+        std::cout &lt;&lt; p &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; q &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; o &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+        std::cout &lt;&lt; Point::<span class="hljs-built_in">alive</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; Order::<span class="hljs-built_in">alive</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    }
+    std::cout &lt;&lt; Point::<span class="hljs-built_in">alive</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; Order::<span class="hljs-built_in">alive</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; <span class="hljs-string">&quot;sizeof(Point) = &quot;</span> &lt;&lt; <span class="hljs-built_in">sizeof</span>(Point) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-mixins">(1, 2) (1, 2) order A1 x5
+2 1
+1 0
+sizeof(Point) = 8</pre>
+    <p><b>Complexity and pitfalls.</b> Everything is resolved at compile time; there is no run-time cost beyond the counter update. Pitfalls: forgetting the counting copy constructor gives negative counts (the <code>Counted</code> drill in <a href="#ch01">Ch 1</a>); the counter is not thread-safe (use <code>std::atomic&lt;int&gt;</code> if objects are created on several threads); and two empty bases of the <i>same</i> type cannot share an address, so <code>Counted&lt;Base&gt;</code> inherited twice would add a byte. Before C++20, CRTP mixins were also the way to derive <code>!=</code>, <code>&gt;</code> and friends from <code>==</code> and <code>&lt;</code> (Boost.Operators); defaulted comparisons replace that use.</p>
+    <p class="rating">Estimated rating: ~1500 · needs ADL through base classes, per-instantiation statics and EBO, all small but easy to get wrong</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>A testable rate limiter. Implement a token bucket: capacity <code>burst</code> tokens, refilled continuously at <code>rate</code> tokens per second, with <code>bool try_acquire()</code> that takes one token if available. The class must not call the system clock directly: inject a <code>Clock</code> interface so a unit test can drive time with a fake clock. Avoid floating-point drift.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Dependency inversion: <code>TokenBucket</code> depends on an abstract <code>Clock</code> returning microseconds, with a real implementation on <code>std::chrono::steady_clock</code> and a fake for tests. Refill lazily on each call from the elapsed time. Store the level in micro-tokens (tokens × 10⁶): then elapsed microseconds × tokens per second is exactly the number of micro-tokens earned, so all arithmetic is integer and exact.</p>
+<pre data-run="ch03-token-bucket"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;chrono&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Clock</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Clock</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> std::<span class="hljs-type">int64_t</span> <span class="hljs-title">now_us</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">SteadyClock</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Clock {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::<span class="hljs-type">int64_t</span> <span class="hljs-title">now_us</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{
+        <span class="hljs-keyword">using</span> <span class="hljs-keyword">namespace</span> std::chrono;
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">duration_cast</span>&lt;microseconds&gt;(steady_clock::<span class="hljs-built_in">now</span>().<span class="hljs-built_in">time_since_epoch</span>()).<span class="hljs-built_in">count</span>();
+    }
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">FakeClock</span> <span class="hljs-keyword">final</span> : <span class="hljs-keyword">public</span> Clock {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function">std::<span class="hljs-type">int64_t</span> <span class="hljs-title">now_us</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> t_; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">advance_us</span><span class="hljs-params">(std::<span class="hljs-type">int64_t</span> us)</span> </span>{ t_ += us; }
+<span class="hljs-keyword">private</span>:
+    std::<span class="hljs-type">int64_t</span> t_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">TokenBucket</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">TokenBucket</span>(<span class="hljs-type">const</span> Clock&amp; clock, std::<span class="hljs-type">int64_t</span> rate_per_sec, std::<span class="hljs-type">int64_t</span> burst)
+        : <span class="hljs-built_in">clock_</span>(clock), <span class="hljs-built_in">rate_</span>(rate_per_sec), <span class="hljs-built_in">cap_</span>(burst * kScale), <span class="hljs-built_in">level_</span>(cap_), <span class="hljs-built_in">last_</span>(clock.<span class="hljs-built_in">now_us</span>()) {}
+
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">try_acquire</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-built_in">refill</span>();
+        <span class="hljs-keyword">if</span> (level_ &lt; kScale) <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;
+        level_ -= kScale;
+        <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">int64_t</span> kScale = <span class="hljs-number">1&#x27;000&#x27;000</span>;  <span class="hljs-comment">// micro-tokens per token</span>
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">refill</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-type">const</span> std::<span class="hljs-type">int64_t</span> now = clock_.<span class="hljs-built_in">now_us</span>();
+        <span class="hljs-type">const</span> std::<span class="hljs-type">int64_t</span> elapsed = std::<span class="hljs-built_in">min</span>&lt;std::<span class="hljs-type">int64_t</span>&gt;(now - last_, <span class="hljs-number">3&#x27;600&#x27;000&#x27;000</span>);  <span class="hljs-comment">// cap at 1 h: no overflow</span>
+        level_ = std::<span class="hljs-built_in">min</span>(cap_, level_ + elapsed * rate_);
+        last_ = now;
+    }
+    <span class="hljs-type">const</span> Clock&amp; clock_;
+    std::<span class="hljs-type">int64_t</span> rate_, cap_, level_, last_;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::string <span class="hljs-title">attempts</span><span class="hljs-params">(TokenBucket&amp; tb, <span class="hljs-type">int</span> n)</span> </span>{
+    std::string s;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) s += tb.<span class="hljs-built_in">try_acquire</span>() ? <span class="hljs-string">&#x27;1&#x27;</span> : <span class="hljs-string">&#x27;0&#x27;</span>;
+    <span class="hljs-keyword">return</span> s;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    FakeClock clock;
+    <span class="hljs-function">TokenBucket <span class="hljs-title">tb</span><span class="hljs-params">(clock, <span class="hljs-number">10</span>, <span class="hljs-number">3</span>)</span></span>;    <span class="hljs-comment">// 10 per second, burst of 3</span>
+    std::cout &lt;&lt; <span class="hljs-built_in">attempts</span>(tb, <span class="hljs-number">4</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    clock.<span class="hljs-built_in">advance_us</span>(<span class="hljs-number">100&#x27;000</span>);       <span class="hljs-comment">// 0.1 s earns exactly one token</span>
+    std::cout &lt;&lt; <span class="hljs-built_in">attempts</span>(tb, <span class="hljs-number">2</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    clock.<span class="hljs-built_in">advance_us</span>(<span class="hljs-number">5&#x27;000&#x27;000</span>);     <span class="hljs-comment">// long idle: capped at the burst size</span>
+    std::cout &lt;&lt; <span class="hljs-built_in">attempts</span>(tb, <span class="hljs-number">4</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+
+    SteadyClock real;
+    <span class="hljs-function">TokenBucket <span class="hljs-title">live</span><span class="hljs-params">(real, <span class="hljs-number">1000</span>, <span class="hljs-number">5</span>)</span></span>;
+    std::cout &lt;&lt; live.<span class="hljs-built_in">try_acquire</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-token-bucket">1110
+10
+1110
+1</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per call, no background thread. Pitfalls: using <code>double</code> tokens makes "exactly one token after 0.1 s" fail by one ulp, which produces flaky tests; using <code>system_clock</code> breaks when the wall clock jumps (NTP, daylight saving), so rate limiters use a monotonic clock; storing the <code>Clock</code> by reference requires it to outlive the bucket; and the class is not thread-safe (add a mutex, or a CAS loop on a packed state word for a lock-free version, <a href="../os/#ch02">OS guide ch 2</a>).</p>
+    <p class="rating">Estimated rating: ~1500 · simple algorithm; the interview is about injecting time and getting exact integer arithmetic</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Iterators for a fixed-capacity ring buffer. Implement <code>RingBuffer&lt;T, N&gt;</code> where <code>push</code> overwrites the oldest element when full, with <code>iterator</code> and <code>const_iterator</code> that visit elements oldest first. They must satisfy <code>std::forward_iterator</code> (check with <code>static_assert</code>), support prefix and postfix <code>++</code>, <code>*</code>, <code>-&gt;</code> and <code>==</code>, and an <code>iterator</code> must convert to a <code>const_iterator</code>. Range-for and standard algorithms must work.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Store <code>std::array&lt;T, N&gt;</code>, the index of the oldest element and the size. An iterator holds the buffer pointer and a logical index from 0 to <code>size</code>; dereferencing maps it to <code>(head + i) % N</code>, so <code>end()</code> is simply index <code>size</code>. One template <code>Iter&lt;bool Const&gt;</code> produces both iterator types, with the conversion constrained to the non-const one. The member types (<code>value_type</code>, <code>difference_type</code>, <code>iterator_concept</code>) plus a default constructor and defaulted <code>==</code> are what the C++20 concept checks.</p>
+<pre data-run="ch03-ring-iter"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iterator&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;numeric&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, std::<span class="hljs-type">size_t</span> N&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">RingBuffer</span> {
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-type">bool</span> Const&gt;
+    <span class="hljs-keyword">class</span> <span class="hljs-title class_">Iter</span> {
+        <span class="hljs-keyword">using</span> Buf = std::<span class="hljs-type">conditional_t</span>&lt;Const, <span class="hljs-type">const</span> RingBuffer, RingBuffer&gt;;
+    <span class="hljs-keyword">public</span>:
+        <span class="hljs-keyword">using</span> iterator_concept = std::forward_iterator_tag;
+        <span class="hljs-keyword">using</span> iterator_category = std::forward_iterator_tag;
+        <span class="hljs-keyword">using</span> value_type = T;
+        <span class="hljs-keyword">using</span> difference_type = std::<span class="hljs-type">ptrdiff_t</span>;
+        <span class="hljs-keyword">using</span> reference = std::<span class="hljs-type">conditional_t</span>&lt;Const, <span class="hljs-type">const</span> T&amp;, T&amp;&gt;;
+
+        <span class="hljs-built_in">Iter</span>() = <span class="hljs-keyword">default</span>;
+        <span class="hljs-built_in">Iter</span>(Buf* buf, std::<span class="hljs-type">size_t</span> i) : <span class="hljs-built_in">buf_</span>(buf), <span class="hljs-built_in">i_</span>(i) {}
+        <span class="hljs-keyword">operator</span> <span class="hljs-built_in">Iter</span>&lt;<span class="hljs-literal">true</span>&gt;() <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-title">requires</span><span class="hljs-params">(!Const)</span> </span>{ <span class="hljs-keyword">return</span> {buf_, i_}; }
+
+        reference <span class="hljs-keyword">operator</span>*() <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> buf_-&gt;data_[(buf_-&gt;head_ + i_) % N]; }
+        <span class="hljs-keyword">auto</span> <span class="hljs-keyword">operator</span>-&gt;() <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> &amp;**<span class="hljs-keyword">this</span>; }
+        Iter&amp; <span class="hljs-keyword">operator</span>++() { ++i_; <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+        Iter <span class="hljs-keyword">operator</span>++(<span class="hljs-type">int</span>) { Iter old = *<span class="hljs-keyword">this</span>; ++*<span class="hljs-keyword">this</span>; <span class="hljs-keyword">return</span> old; }
+        <span class="hljs-keyword">friend</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> Iter&amp;, <span class="hljs-type">const</span> Iter&amp;) = <span class="hljs-keyword">default</span>;
+    <span class="hljs-keyword">private</span>:
+        Buf* buf_ = <span class="hljs-literal">nullptr</span>;
+        std::<span class="hljs-type">size_t</span> i_ = <span class="hljs-number">0</span>;
+    };
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">using</span> iterator = Iter&lt;<span class="hljs-literal">false</span>&gt;;
+    <span class="hljs-keyword">using</span> const_iterator = Iter&lt;<span class="hljs-literal">true</span>&gt;;
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push</span><span class="hljs-params">(<span class="hljs-type">const</span> T&amp; v)</span> </span>{
+        data_[(head_ + size_) % N] = v;
+        <span class="hljs-keyword">if</span> (size_ &lt; N) ++size_;
+        <span class="hljs-keyword">else</span> head_ = (head_ + <span class="hljs-number">1</span>) % N;  <span class="hljs-comment">// full: the oldest element was overwritten</span>
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+    <span class="hljs-function">iterator <span class="hljs-title">begin</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> {<span class="hljs-keyword">this</span>, <span class="hljs-number">0</span>}; }
+    <span class="hljs-function">iterator <span class="hljs-title">end</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> {<span class="hljs-keyword">this</span>, size_}; }
+    <span class="hljs-function">const_iterator <span class="hljs-title">begin</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> {<span class="hljs-keyword">this</span>, <span class="hljs-number">0</span>}; }
+    <span class="hljs-function">const_iterator <span class="hljs-title">end</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> {<span class="hljs-keyword">this</span>, size_}; }
+<span class="hljs-keyword">private</span>:
+    std::array&lt;T, N&gt; data_{};
+    std::<span class="hljs-type">size_t</span> head_ = <span class="hljs-number">0</span>, size_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-built_in">static_assert</span>(std::forward_iterator&lt;RingBuffer&lt;<span class="hljs-type">int</span>, <span class="hljs-number">4</span>&gt;::iterator&gt;);
+<span class="hljs-built_in">static_assert</span>(std::forward_iterator&lt;RingBuffer&lt;<span class="hljs-type">int</span>, <span class="hljs-number">4</span>&gt;::const_iterator&gt;);
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">Range</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">print</span><span class="hljs-params">(<span class="hljs-type">const</span> Range&amp; r)</span> </span>{
+    <span class="hljs-type">bool</span> first = <span class="hljs-literal">true</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; x : r) { std::cout &lt;&lt; (first ? <span class="hljs-string">&quot;&quot;</span> : <span class="hljs-string">&quot; &quot;</span>) &lt;&lt; x; first = <span class="hljs-literal">false</span>; }
+    std::cout &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    RingBuffer&lt;<span class="hljs-type">int</span>, <span class="hljs-number">4</span>&gt; rb;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">1</span>; i &lt;= <span class="hljs-number">6</span>; ++i) rb.<span class="hljs-built_in">push</span>(i);  <span class="hljs-comment">// keeps the last four</span>
+    <span class="hljs-built_in">print</span>(rb);
+    std::cout &lt;&lt; <span class="hljs-string">&quot;sum &quot;</span> &lt;&lt; std::<span class="hljs-built_in">accumulate</span>(rb.<span class="hljs-built_in">begin</span>(), rb.<span class="hljs-built_in">end</span>(), <span class="hljs-number">0</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span>&amp; x : rb) x *= <span class="hljs-number">10</span>;
+    <span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; crb = rb;
+    <span class="hljs-built_in">print</span>(crb);
+    <span class="hljs-keyword">auto</span> it = rb.<span class="hljs-built_in">begin</span>();
+    <span class="hljs-keyword">auto</span> old = it++;
+    std::cout &lt;&lt; *old &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; *it &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    RingBuffer&lt;<span class="hljs-type">int</span>, <span class="hljs-number">4</span>&gt;::const_iterator cit = it;  <span class="hljs-comment">// iterator converts to const_iterator</span>
+    <span class="hljs-keyword">auto</span> found = std::<span class="hljs-built_in">find</span>(crb.<span class="hljs-built_in">begin</span>(), crb.<span class="hljs-built_in">end</span>(), <span class="hljs-number">50</span>);
+    std::cout &lt;&lt; <span class="hljs-string">&quot;found &quot;</span> &lt;&lt; *found &lt;&lt; <span class="hljs-string">&quot; at &quot;</span> &lt;&lt; std::<span class="hljs-built_in">distance</span>(crb.<span class="hljs-built_in">begin</span>(), found)
+              &lt;&lt; <span class="hljs-string">&quot;, cit==it &quot;</span> &lt;&lt; (cit == crb.<span class="hljs-built_in">begin</span>()) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    RingBuffer&lt;std::string, <span class="hljs-number">2</span>&gt; names;
+    names.<span class="hljs-built_in">push</span>(<span class="hljs-string">&quot;ab&quot;</span>);
+    names.<span class="hljs-built_in">push</span>(<span class="hljs-string">&quot;cde&quot;</span>);
+    std::cout &lt;&lt; names.<span class="hljs-built_in">begin</span>()-&gt;<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch03-ring-iter">3 4 5 6
+sum 18
+30 40 50 60
+30 40
+found 50 at 2, cit==it 0
+2</pre>
+    <p><b>Complexity and pitfalls.</b> Every operation is O(1); <code>std::distance</code> is O(n) because the iterator is only forward (adding <code>+=</code>, <code>-</code> and <code>&lt;=&gt;</code> would make it random access). Pitfalls: storing a physical index makes <code>end()</code> equal <code>begin()</code> when the buffer is full, which is why the reference uses a logical index; postfix must return the old iterator by value; omitting the default constructor or <code>difference_type</code> makes <code>std::forward_iterator</code> fail with a long concept error; and pushing invalidates the meaning of existing iterators, which the class should document. The last comparison prints 0 because <code>cit</code> was taken after one increment, so it is not <code>begin()</code>.</p>
+    <p class="rating">Estimated rating: ~1600 · the ring arithmetic is easy; the C++20 iterator requirements and the const/non-const pair are where candidates get stuck</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch03-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>Abstraction</b> picks the operations; <b>encapsulation</b> hides the representation so only the class can break its invariant. Access control is per class, not per object.</li>
+<li><b>Interfaces</b> are classes with only pure virtual functions, no data, a public virtual or protected destructor, and protected copy operations. Use concepts or CRTP instead when the type is known at compile time.</li>
+<li><b>Operators:</b> <code>= () [] -&gt;</code> and conversions must be members; compound assignment and <code>++</code> are members by convention; symmetric binary operators and <code>&lt;&lt;</code> are non-members, ideally hidden friends. Build <code>+</code> from <code>+=</code>, take the left side by value, return a plain value. Postfix <code>++</code> takes a dummy <code>int</code> and returns the old value by copy.</li>
+<li><b>C++20 comparisons:</b> <code>==</code> also provides <code>!=</code> and reversed operands; <code>&lt;=&gt;</code> provides the four relational operators. A defaulted <code>&lt;=&gt;</code> declares a defaulted <code>==</code>, a user-written one does not. Members compare in declaration order. <code>double</code> gives <code>partial_ordering</code>.</li>
+<li><b>Statics:</b> <code>inline static</code> members need no out-of-class definition (C++17). Cross-TU dynamic initialisation order is unspecified: use <code>constinit</code>/<code>constexpr</code> or a function-local static (thread-safe since C++11). Destruction runs in reverse order of completed construction.</li>
+<li><b>const:</b> a const member function makes <code>this</code> a <code>const T*</code>; constness is shallow through pointers. Use <code>mutable</code> for caches and mutexes and synchronise it. Provide const and non-const overloads of accessors, or one C++23 deducing-this template.</li>
+<li><b>Design:</b> SOLID; Liskov is about behavioural promises (mutable square/rectangle fails, immutable passes); prefer composition, because inheriting implementation creates the fragile base class problem. Mark classes not designed for inheritance <code>final</code>.</li>
+<li><b>PIMPL</b> needs the destructor and move operations defined in the <code>.cpp</code>; write the deep copy yourself; remember constness does not propagate. <b>CRTP</b> gives inlinable static dispatch but no heterogeneous containers; guard it with a private base constructor and <code>friend Derived;</code>.</li>
+</ul>
+</section>

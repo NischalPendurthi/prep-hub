@@ -1,0 +1,1285 @@
+---
+title: Races, locks and mutex internals
+part: Part A · Threads and synchronisation
+lede: Two threads that touch the same memory without coordination give you lost updates at best and undefined behaviour at worst. This chapter builds mutual exclusion from the ground up: why `counter++` breaks, the classic software solutions and why they fail on real CPUs, the atomic instructions hardware gives you, and how a real mutex uses a futex to stay in user space when nobody is waiting. Interviewers at systems and low-latency firms ask about this because it separates people who use locks from people who understand them.
+desc: Critical sections, Peterson, TAS and CAS, spinlock vs mutex, futex
+hours: 5
+prereqs: [Ch 1](#ch01) (threads), basic C++
+---
+<section id="ch02-races" data-roles="th"><div class="sec-head"><h2>Race conditions and data races</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Two terms get mixed up in interviews, and the difference matters. Keep them apart from the first minute.</p>
+
+<h3 id="ch02-race-condition">Race condition: a logic bug about timing</h3>
+<p>A <b>race condition</b> is any bug where the result depends on the relative timing of threads. The classic shape is <i>check-then-act</i>: a thread checks a condition, and by the time it acts on the answer, another thread has changed the world. Two ATM withdrawals both see a balance of 100, both decide 80 is affordable, and the account goes to minus 60. A race condition is a property of your program's logic. It can exist even when every single memory access is perfectly atomic.</p>
+
+<h3 id="ch02-data-race">Data race: undefined behaviour in the C++ memory model</h3>
+<p>A <b>data race</b> is a precise term from the C++ standard ([intro.races]). Two expressions <i>conflict</i> if they access the same memory location and at least one of them writes. A program has a data race if two conflicting actions happen in different threads, at least one of them is not atomic, and neither <i>happens before</i> the other. <b>A data race is undefined behaviour.</b> The whole program has no meaning, not just the racing variable.</p>
+<p>Why so harsh? Because the compiler optimises each thread as if it ran alone. If a variable is not atomic and nothing synchronises, the compiler may keep it in a register, merge two stores into one, hoist a load out of a loop, or invent a temporary store. The hardware also reorders. Making races UB is what allows all of those optimisations in ordinary single-threaded code.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-type">bool</span> stop = <span class="hljs-literal">false</span>;            <span class="hljs-comment">// plain bool, shared between threads</span>
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">worker</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">while</span> (!stop) { <span class="hljs-comment">/* work */</span> }  <span class="hljs-comment">// compiler may load stop once: infinite loop</span>
+}
+<span class="hljs-comment">// Fix: std::atomic&lt;bool&gt; stop{false};</span></code></pre>
+
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Race condition</th><th>Data race</th></tr></thead>
+<tbody>
+<tr><td>Defined by</td><td>Your program's intent</td><td>The C++ memory model, [intro.races]</td></tr>
+<tr><td>Consequence</td><td>Wrong answer for some interleavings</td><td>Undefined behaviour for the whole program</td></tr>
+<tr><td>Possible with only atomics?</td><td>Yes (check-then-act on an atomic)</td><td>No, by definition</td></tr>
+<tr><td>Found by ThreadSanitizer?</td><td>No, it is a logic error</td><td>Yes, when the racy interleaving runs under test</td></tr>
+<tr><td>Fix</td><td>Make the check and the act one atomic step (lock or CAS)</td><td>Atomics or a lock that orders the accesses</td></tr>
+</tbody></table></div>
+
+<h3 id="ch02-tsan">Finding data races with ThreadSanitizer</h3>
+<p>ThreadSanitizer (<code>-fsanitize=thread</code>, in both GCC and Clang) instruments every memory access and tracks happens-before through mutexes, atomics, thread creation and join. It reports two accesses that conflict and are not ordered, even if they did not overlap in time on this run. It cannot find race conditions that involve only atomics, and it only sees code paths your test actually executes. Every correct multithreaded program in this guide is run clean under TSan, and every race drill is proven by a TSan report.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"The race is benign, it only reads a flag" is not an argument in C++. A racy read of a plain <code>bool</code> is UB even if the hardware load is a single instruction. Use <code>std::atomic&lt;bool&gt;</code> (with <code>memory_order_relaxed</code> if you truly need no ordering). It costs nothing extra on x86 or ARM for a plain load or store.</p></div>
+</section>
+
+<section id="ch02-counter" data-roles="th"><div class="sec-head"><h2>Why counter++ is not atomic</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The mental model: <code>++counter</code> is three steps, a <b>read</b>, a <b>modify</b> and a <b>write</b>. Any thread can be interrupted or run in parallel between those steps, so two increments can read the same old value and both write back old + 1.</p>
+
+<h3 id="ch02-counter-asm">What the CPU executes</h3>
+<p>Without optimisation, GCC on x86-64 emits a load into a register, an add, and a store. With optimisation it may emit a single <code>add DWORD PTR counter[rip], 1</code>, which looks atomic but is not: inside the core it is still a load micro-op, an add and a store, and another core can grab the cache line in between. Only the <code>lock</code> prefix (<code>lock add</code>, <code>lock xadd</code>) makes the read-modify-write indivisible across cores. On ARM the plain version is <code>ldr</code>, <code>add</code>, <code>str</code>; the atomic one is an <code>ldxr/stxr</code> retry loop or an ARMv8.1 <code>ldadd</code>.</p>
+<pre><code class="language-text hljs">; ++counter on x86-64, no lock prefix     ; counter.fetch_add(1)
+mov  eax, DWORD PTR counter[rip]          lock xadd DWORD PTR counter[rip], eax
+add  eax, 1
+mov  DWORD PTR counter[rip], eax</code></pre>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 340" role="img" aria-label="Two threads interleave load, add and store, and one increment is lost">
+<defs><marker id="ch02-c05a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="210" y="32" text-anchor="middle" font-size="13" class="t-bold">Thread A (register rA)</text>
+<text x="430" y="32" text-anchor="middle" font-size="13" class="t-bold">Thread B (register rB)</text>
+<text x="625" y="32" text-anchor="middle" font-size="13" class="t-bold">counter in memory</text>
+<line x1="50" y1="50" x2="50" y2="292" class="d-line" marker-end="url(#ch05-c05a)"/>
+<text x="40" y="170" text-anchor="middle" font-size="12" class="t-muted" transform="rotate(-90 40 170)">time</text>
+<rect x="110" y="50" width="200" height="30" rx="5" class="d-box"/><text x="210" y="70" text-anchor="middle" font-size="12" class="t-mono">load rA ← counter (0)</text>
+<rect x="330" y="92" width="200" height="30" rx="5" class="d-box"/><text x="430" y="112" text-anchor="middle" font-size="12" class="t-mono">load rB ← counter (0)</text>
+<rect x="110" y="134" width="200" height="30" rx="5" class="d-soft"/><text x="210" y="154" text-anchor="middle" font-size="12" class="t-mono">add rA, 1 → rA = 1</text>
+<rect x="330" y="176" width="200" height="30" rx="5" class="d-soft"/><text x="430" y="196" text-anchor="middle" font-size="12" class="t-mono">add rB, 1 → rB = 1</text>
+<rect x="110" y="218" width="200" height="30" rx="5" class="d-acc"/><text x="210" y="238" text-anchor="middle" font-size="12" class="t-mono">store counter ← rA</text>
+<rect x="330" y="260" width="200" height="30" rx="5" class="d-trap"/><text x="430" y="280" text-anchor="middle" font-size="12" class="t-mono">store counter ← rB</text>
+<rect x="580" y="50" width="90" height="30" rx="5" class="d-box"/><text x="625" y="70" text-anchor="middle" font-size="12" class="t-mono">0</text>
+<rect x="580" y="92" width="90" height="30" rx="5" class="d-box"/><text x="625" y="112" text-anchor="middle" font-size="12" class="t-mono">0</text>
+<rect x="580" y="134" width="90" height="30" rx="5" class="d-box"/><text x="625" y="154" text-anchor="middle" font-size="12" class="t-mono">0</text>
+<rect x="580" y="176" width="90" height="30" rx="5" class="d-box"/><text x="625" y="196" text-anchor="middle" font-size="12" class="t-mono">0</text>
+<rect x="580" y="218" width="90" height="30" rx="5" class="d-acc"/><text x="625" y="238" text-anchor="middle" font-size="12" class="t-mono">1</text>
+<rect x="580" y="260" width="90" height="30" rx="5" class="d-trap"/><text x="625" y="280" text-anchor="middle" font-size="12" class="t-mono t-trap">1 (not 2)</text>
+<text x="360" y="320" text-anchor="middle" font-size="12" class="t-muted">Both threads read 0 before either wrote back, so two increments leave the counter at 1.</text>
+</svg></div><figcaption><b>A lost update needs only one bad interleaving.</b> Each increment is a load, an add and a store. If thread B loads before thread A stores, B's store overwrites A's work. In C++ this is also a data race, so the program is undefined, not just wrong.</figcaption></figure>
+
+<h3 id="ch02-counter-fixes">Three correct fixes</h3>
+<ul>
+<li><b>An atomic read-modify-write:</b> <code>std::atomic&lt;int&gt;</code> and <code>fetch_add</code> (or <code>++</code> on the atomic, which is the same operation). Best for one independent counter.</li>
+<li><b>A mutex</b> around the increment. Needed when the counter must change together with other data (an invariant spanning several variables).</li>
+<li><b>No sharing:</b> give each thread its own counter and sum at the end. Fastest, and the only option that scales with core count (see the sharded counter drill and <a href="../cpp/#ch17">C++ guide ch 17</a> on false sharing).</li>
+</ul>
+<pre data-run="ch05-atomic-counter" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">int</span>&gt; counter{<span class="hljs-number">0</span>};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) counter.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter.<span class="hljs-built_in">load</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch05-atomic-counter">200000</pre>
+<p><code>memory_order_relaxed</code> is enough here: the increments are still indivisible, and <code>join()</code> gives the main thread a happens-before edge, so the final load sees every increment. Relaxed only drops ordering with respect to <i>other</i> variables.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p><code>hits = hits + 1</code> on a <code>std::atomic&lt;int&gt;</code> is an atomic load followed by an atomic store. Each half is atomic, the pair is not, so updates are lost exactly as in the figure. There is no data race, so TSan stays silent. Only <code>++hits</code>, <code>hits += 1</code> or <code>fetch_add</code> are single RMW operations.</p></div>
+</section>
+
+<section id="ch02-critical" data-roles="th"><div class="sec-head"><h2>The critical section problem</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A <b>critical section</b> is the code that touches shared state. The classic OS formulation (Dijkstra 1965, the version in every textbook) asks for an <i>entry protocol</i> and an <i>exit protocol</i> around it, making no assumptions about the relative speed of threads or the number of CPUs.</p>
+
+<h3 id="ch02-cs-requirements">The three requirements</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Requirement</th><th>Meaning</th><th>Broken by</th></tr></thead>
+<tbody>
+<tr><td><b>Mutual exclusion</b></td><td>At most one thread is inside the critical section at any time.</td><td>"Wait while locked, then set locked" with two separate steps</td></tr>
+<tr><td><b>Progress</b></td><td>If nobody is inside and some threads want in, one of them gets in in finite time. Threads that are not trying cannot block the decision.</td><td>Strict alternation; "set my flag, wait for yours" (both wait forever)</td></tr>
+<tr><td><b>Bounded waiting</b></td><td>After a thread asks to enter, there is a limit on how many times others can enter before it does. No starvation.</td><td>A plain test-and-set spinlock (an unlucky thread can lose every race)</td></tr>
+</tbody></table></div>
+<p>Deadlock freedom is part of progress; starvation freedom is bounded waiting. Real locks add practical goals the textbook omits: low uncontended cost, no wasted CPU while waiting, and fairness that does not destroy throughput.</p>
+
+<h3 id="ch02-cs-attempts">Failed software attempts (two threads)</h3>
+<pre><code class="language-cpp hljs"><span class="hljs-comment">// Attempt 1: strict alternation. Mutual exclusion holds, progress does not:</span>
+<span class="hljs-comment">// if thread 0 never wants in again, thread 1 waits forever after one turn.</span>
+<span class="hljs-type">int</span> turn = <span class="hljs-number">0</span>;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span>   </span>{ <span class="hljs-keyword">while</span> (turn != me) {} }
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{ turn = <span class="hljs-number">1</span> - me; }
+
+<span class="hljs-comment">// Attempt 2: intent flags. Mutual exclusion holds, but if both set</span>
+<span class="hljs-comment">// their flag at the same moment, both spin forever (deadlock).</span>
+<span class="hljs-type">bool</span> want[<span class="hljs-number">2</span>];
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span>   </span>{ want[me] = <span class="hljs-literal">true</span>; <span class="hljs-keyword">while</span> (want[<span class="hljs-number">1</span> - me]) {} }
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{ want[me] = <span class="hljs-literal">false</span>; }</code></pre>
+<p>(These are pseudo-code in the textbook sense: written with plain variables they also contain data races. Peterson combines both ideas, as the next section shows.)</p>
+
+<h3 id="ch02-cs-interrupts">Disabling interrupts</h3>
+<p>On a single CPU, a thread loses the processor only through an interrupt (timer, device) or by blocking. So the kernel can make a sequence atomic by disabling interrupts (<code>cli</code>/<code>sti</code> on x86) around it. This fails as a general solution:</p>
+<ul>
+<li><b>It is privileged.</b> User code cannot execute <code>cli</code>; a user process that could would own the machine.</li>
+<li><b>It does nothing on a multiprocessor.</b> Disabling interrupts on CPU 0 does not stop CPU 1 from running the same code at the same time.</li>
+<li><b>It hurts latency.</b> While interrupts are off, timer ticks and device events wait. A long or buggy critical section freezes the system.</li>
+</ul>
+<p>Linux still uses it, combined with spinlocks: <code>spin_lock_irqsave()</code> takes a spinlock (excludes other CPUs) and disables local interrupts (so an interrupt handler on this CPU that takes the same lock cannot deadlock against the code it interrupted).</p>
+</section>
+
+<section id="ch02-peterson" data-roles="th"><div class="sec-head"><h2>Peterson's algorithm and why it breaks on modern CPUs</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Peterson's algorithm (1981) solves the two-thread critical section problem with only loads and stores. It is a favourite interview question because it is short, provably correct on paper, and wrong on every modern CPU unless you add fences.</p>
+
+<h3 id="ch02-peterson-algo">The algorithm</h3>
+<pre><code class="language-cpp hljs"><span class="hljs-comment">// Textbook form (shared: bool flag[2]; int turn;)</span>
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{
+    <span class="hljs-type">int</span> other = <span class="hljs-number">1</span> - me;
+    flag[me] = <span class="hljs-literal">true</span>;    <span class="hljs-comment">// I want to enter</span>
+    turn = other;       <span class="hljs-comment">// but you go first if you also want to</span>
+    <span class="hljs-keyword">while</span> (flag[other] &amp;&amp; turn == other) { }  <span class="hljs-comment">// wait</span>
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{ flag[me] = <span class="hljs-literal">false</span>; }</code></pre>
+<p><b>Why it works (sequentially consistent memory).</b> If both threads are in the loop, <code>turn</code> holds one value, so exactly one of them sees <code>turn == other</code> false and enters: mutual exclusion and progress. When the thread inside leaves and tries again, it sets <code>turn</code> to the other thread, so the waiting thread enters next: bounded waiting with a bound of one.</p>
+
+<h3 id="ch02-peterson-breaks">Where it breaks</h3>
+<p>The proof assumes each thread's write to <code>flag[me]</code> is visible to the other thread before its own read of <code>flag[other]</code>. Two layers violate that:</p>
+<ol>
+<li><b>The compiler.</b> With plain variables, the loop condition reads data nobody in this thread writes, so the compiler may load it once and spin forever, or reorder the stores. And it is a data race, so the program is UB anyway. <code>volatile</code> stops the compiler from caching the loads, but does nothing about the CPU and does not remove the data race.</li>
+<li><b>The CPU's store buffer.</b> Even x86, the most strongly ordered mainstream architecture (x86-TSO), lets a later load complete before an earlier store to a different address becomes globally visible. The store sits in the core's store buffer while the load reads memory. Both threads write their flag into their own buffer, both read the other flag from memory as <code>false</code>, and both enter.</li>
+</ol>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="Store buffers let both cores read the other flag as false, so both enter">
+<defs><marker id="ch02-c05b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="30" y="30" width="270" height="120" rx="8" class="d-box"/>
+<text x="165" y="54" text-anchor="middle" font-size="13" class="t-bold">Core 0 runs lock(0)</text>
+<text x="50" y="80" font-size="12" class="t-mono">1. flag[0] = true</text>
+<text x="50" y="102" font-size="12" class="t-mono">2. turn = 1</text>
+<text x="50" y="124" font-size="12" class="t-mono t-trap">3. load flag[1] → false</text>
+<rect x="50" y="168" width="230" height="36" rx="6" class="d-trap"/>
+<text x="165" y="191" text-anchor="middle" font-size="12" class="t-mono">store buffer: flag[0]=1, turn=1</text>
+<rect x="420" y="30" width="270" height="120" rx="8" class="d-box"/>
+<text x="555" y="54" text-anchor="middle" font-size="13" class="t-bold">Core 1 runs lock(1)</text>
+<text x="440" y="80" font-size="12" class="t-mono">1. flag[1] = true</text>
+<text x="440" y="102" font-size="12" class="t-mono">2. turn = 0</text>
+<text x="440" y="124" font-size="12" class="t-mono t-trap">3. load flag[0] → false</text>
+<rect x="440" y="168" width="230" height="36" rx="6" class="d-trap"/>
+<text x="555" y="191" text-anchor="middle" font-size="12" class="t-mono">store buffer: flag[1]=1, turn=0</text>
+<rect x="160" y="244" width="400" height="40" rx="6" class="d-soft"/>
+<text x="360" y="269" text-anchor="middle" font-size="12" class="t-mono">memory: flag[0]=0  flag[1]=0  (buffers not drained yet)</text>
+<line x1="165" y1="204" x2="230" y2="242" class="d-line d-dash" marker-end="url(#ch05-c05b)"/>
+<line x1="555" y1="204" x2="490" y2="242" class="d-line d-dash" marker-end="url(#ch05-c05b)"/>
+<line x1="330" y1="244" x2="302" y2="128" class="d-line-trap" marker-end="url(#ch05-c05b)"/>
+<line x1="390" y1="244" x2="418" y2="128" class="d-line-trap" marker-end="url(#ch05-c05b)"/>
+<text x="360" y="64" text-anchor="middle" font-size="11" class="t-muted">both loads</text>
+<text x="360" y="80" text-anchor="middle" font-size="11" class="t-muted">read memory,</text>
+<text x="360" y="96" text-anchor="middle" font-size="11" class="t-muted">not the other</text>
+<text x="360" y="112" text-anchor="middle" font-size="11" class="t-muted">core's buffer</text>
+<text x="200" y="232" text-anchor="middle" font-size="11" class="t-muted">drains later</text>
+<text x="520" y="232" text-anchor="middle" font-size="11" class="t-muted">drains later</text>
+</svg></div><figcaption><b>Store to load reordering breaks Peterson even on x86.</b> Each core's store to its own flag waits in its store buffer while its next load reads the other flag from memory. Both read <code>false</code>, both skip the wait loop, and both enter the critical section. A full fence (<code>mfence</code>, or a <code>lock</code>ed instruction) between the stores and the load forces the buffer to drain first.</figcaption></figure>
+
+<h3 id="ch02-peterson-fix">The fix in C++</h3>
+<p>Make the shared variables <code>std::atomic</code> and use the default <code>memory_order_seq_cst</code>. Sequential consistency guarantees a single total order over all seq_cst operations that agrees with each thread's program order, which is exactly the assumption in the proof. On x86 the compiler emits <code>xchg</code> (or <code>mov</code> + <code>mfence</code>) for the seq_cst stores; on ARMv8 it emits <code>stlr</code> and <code>ldar</code>, which are defined not to reorder with each other.</p>
+<pre data-run="ch05-peterson-atomic" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">PetersonLock</span> {
+    std::atomic&lt;<span class="hljs-type">bool</span>&gt; flag_[<span class="hljs-number">2</span>] = {<span class="hljs-literal">false</span>, <span class="hljs-literal">false</span>};
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; turn_{<span class="hljs-number">0</span>};
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{
+        <span class="hljs-type">int</span> other = <span class="hljs-number">1</span> - me;
+        flag_[me].<span class="hljs-built_in">store</span>(<span class="hljs-literal">true</span>);   <span class="hljs-comment">// seq_cst by default</span>
+        turn_.<span class="hljs-built_in">store</span>(other);
+        <span class="hljs-keyword">while</span> (flag_[other].<span class="hljs-built_in">load</span>() &amp;&amp; turn_.<span class="hljs-built_in">load</span>() == other) { }
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{ flag_[me].<span class="hljs-built_in">store</span>(<span class="hljs-literal">false</span>); }
+};
+
+<span class="hljs-type">static</span> PetersonLock lk;
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> counter = <span class="hljs-number">0</span>;  <span class="hljs-comment">// guarded by lk</span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">50000</span>; ++i) {
+        lk.<span class="hljs-built_in">lock</span>(me);
+        ++counter;
+        lk.<span class="hljs-built_in">unlock</span>(me);
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work, <span class="hljs-number">0</span>)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work, <span class="hljs-number">1</span>)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch05-peterson-atomic">100000</pre>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>Peterson needs <b>store→load ordering</b>, the one reordering x86 permits. Acquire loads and release stores are not enough, because release/acquire never orders an earlier store before a later load. That is the textbook example of why <code>seq_cst</code> exists. In practice nobody uses Peterson: it needs one slot per thread, generalises poorly (Lamport's bakery handles N threads), and a hardware RMW does the job in one instruction.</p></div>
+</section>
+
+<section id="ch02-hardware" data-roles="th"><div class="sec-head"><h2>Hardware primitives: TAS, CAS and fetch-add</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Mutual exclusion with only loads and stores is possible (Peterson, bakery) but slow and fragile. Every real lock instead uses an <b>atomic read-modify-write (RMW)</b> instruction: the CPU reads a location, computes, and writes back with a guarantee that no other core can write the location in between. Under the hood the core takes the cache line in the exclusive (Modified) state of the coherence protocol (MESI and its variants) and holds it for the duration of the operation.</p>
+
+<h3 id="ch02-hw-table">Key facts: the primitives</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Primitive</th><th>Semantics (all one indivisible step)</th><th>x86-64</th><th>ARMv8</th><th>C++</th><th>Consensus number</th></tr></thead>
+<tbody>
+<tr><td>Test-and-set (TAS)</td><td>set to 1, return the old value</td><td><code>xchg</code>, <code>lock bts</code></td><td><code>swpal</code> (v8.1 LSE) or an LL/SC loop</td><td><code>atomic_flag::test_and_set</code></td><td>2</td></tr>
+<tr><td>Exchange (swap)</td><td><code>old = *p; *p = v; return old</code></td><td><code>xchg</code> (implicitly locked)</td><td><code>swpal</code> or LL/SC</td><td><code>exchange</code></td><td>2</td></tr>
+<tr><td>Fetch-and-add</td><td><code>old = *p; *p = old + v; return old</code></td><td><code>lock xadd</code></td><td><code>ldaddal</code> or LL/SC</td><td><code>fetch_add</code>, <code>++</code>, <code>+=</code></td><td>2</td></tr>
+<tr><td>Compare-and-swap (CAS)</td><td>if <code>*p == expected</code> then <code>*p = desired</code>; report success and the value seen</td><td><code>lock cmpxchg</code> (16-byte: <code>cmpxchg16b</code>)</td><td><code>casal</code> or LL/SC</td><td><code>compare_exchange_strong/weak</code></td><td>∞</td></tr>
+<tr><td>Load-linked / store-conditional</td><td>load and watch the line; the store fails if anyone wrote it since</td><td>none</td><td><code>ldaxr</code> / <code>stlxr</code></td><td>not exposed; it is why <code>_weak</code> exists</td><td>∞</td></tr>
+</tbody></table></div>
+<p>The <b>consensus number</b> (Herlihy, 1991) is the largest number of threads for which the primitive can solve wait-free consensus. Plain loads and stores have consensus number 1, TAS, swap and fetch-add have 2, and CAS and LL/SC are universal: any concurrent object can be built lock-free from them. That is why CAS is the workhorse of lock-free programming.</p>
+
+<h3 id="ch02-hw-cas">The CAS loop</h3>
+<p>CAS lets you build any atomic update out of "read, compute, publish if nobody interfered". The pattern:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-comment">// Atomically value = max(value, x)</span>
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">fetch_max</span><span class="hljs-params">(std::atomic&lt;<span class="hljs-type">int</span>&gt;&amp; value, <span class="hljs-type">int</span> x)</span> </span>{
+    <span class="hljs-type">int</span> cur = value.<span class="hljs-built_in">load</span>(std::memory_order_relaxed);
+    <span class="hljs-keyword">while</span> (cur &lt; x &amp;&amp; !value.<span class="hljs-built_in">compare_exchange_weak</span>(cur, x, std::memory_order_relaxed)) {
+        <span class="hljs-comment">// on failure, cur now holds the value another thread wrote: recompute and retry</span>
+    }
+}</code></pre>
+<p>Three facts make this loop correct. On failure <code>compare_exchange</code> writes the current value into <code>expected</code> (here <code>cur</code>), so you never reload by hand. The <code>_weak</code> form may fail <b>spuriously</b> even when the values are equal, because on LL/SC machines the reservation can be lost to an interrupt or a write to a nearby address in the same line; inside a loop that costs nothing and avoids a nested retry loop. The <code>_strong</code> form never fails spuriously; use it when a failure would make you do expensive work or when there is no loop.</p>
+
+<h3 id="ch02-hw-aba">The ABA problem</h3>
+<p>CAS compares values, not histories. Thread 1 reads head pointer <code>A</code>, gets preempted; thread 2 pops <code>A</code>, pops <code>B</code>, frees both, and pushes a new node that the allocator happens to place at address <code>A</code>. Thread 1 wakes, its CAS sees <code>A</code> and succeeds, installing a stale <code>next</code> pointer. Fixes: a version counter packed next to the pointer (double-width CAS), hazard pointers, epoch-based reclamation, or a design that never reuses memory while readers may hold it (the push-and-drain stack in the coding drills avoids ABA by taking the whole list with one <code>exchange</code>).</p>
+</section>
+
+<section id="ch02-spinlock" data-roles="th"><div class="sec-head"><h2>Spinlocks</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A spinlock is the simplest lock built on an RMW: try to flip a flag from free to taken, and if it was already taken, loop. Waiting threads stay on the CPU, which is ideal when the holder will release within a few hundred nanoseconds and terrible when it will not.</p>
+
+<h3 id="ch02-spin-flag">A spinlock with std::atomic_flag</h3>
+<p><code>std::atomic_flag</code> is the only type the standard has always guaranteed to be lock-free (C++20 adds the aliases <code>std::atomic_signed_lock_free</code> and <code>std::atomic_unsigned_lock_free</code>, which are too). Since C++20 it is default-initialised to clear (before C++20 you needed <code>ATOMIC_FLAG_INIT</code>) and it gained <code>test()</code>, a plain read, plus <code>wait</code>/<code>notify</code>. Providing <code>lock()</code> and <code>unlock()</code> makes the class <i>BasicLockable</i>, so <code>std::lock_guard</code> works with it.</p>
+<pre data-run="ch05-flag-spin" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Spinlock</span> {
+    std::atomic_flag f_;  <span class="hljs-comment">// clear since C++20</span>
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">while</span> (f_.<span class="hljs-built_in">test_and_set</span>(std::memory_order_acquire)) {
+            <span class="hljs-keyword">while</span> (f_.<span class="hljs-built_in">test</span>(std::memory_order_relaxed)) { }  <span class="hljs-comment">// spin on a read</span>
+        }
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">()</span> </span>{ f_.<span class="hljs-built_in">clear</span>(std::memory_order_release); }
+};
+
+<span class="hljs-type">static</span> Spinlock sl;
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> counter = <span class="hljs-number">0</span>;  <span class="hljs-comment">// guarded by sl</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> work = [] {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) {
+            std::lock_guard&lt;Spinlock&gt; <span class="hljs-built_in">g</span>(sl);
+            ++counter;
+        }
+    };
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch05-flag-spin">200000</pre>
+<p><b>Acquire on lock, release on unlock.</b> The successful <code>test_and_set</code> is an acquire operation and <code>clear</code> is a release, so everything written inside the previous critical section is visible inside the next one. The inner loop is the <b>test-and-test-and-set</b> (TTAS) idea, explained next.</p>
+
+<h3 id="ch02-spin-ttas">Why spinning on a read is faster</h3>
+<p>Every <code>test_and_set</code> is a write, even when it fails. With four cores spinning on TAS, the cache line holding the flag bounces between their caches in the Modified state on every attempt, flooding the interconnect and slowing down the holder, which needs that same line to release. Spinning on a plain load keeps a Shared copy in each waiter's cache, so waiting generates no traffic. When the holder releases, the line is invalidated, all waiters see "free" and race with one RMW each. Two refinements:</p>
+<ul>
+<li><b>A pause hint</b> in the spin loop (<code>_mm_pause</code> / <code>pause</code> on x86, <code>yield</code> or <code>isb</code> on ARM) saves power, gives the sibling hyperthread the core, and avoids a memory-order pipeline flush when the loop exits.</li>
+<li><b>Exponential backoff</b>: wait longer after each failed attempt, so fewer threads stampede when the lock frees up. Eventually call <code>std::this_thread::yield()</code> or fall back to sleeping.</li>
+</ul>
+
+<h3 id="ch02-spin-fair">Fairness: ticket locks and queue locks</h3>
+<p>A TAS spinlock has no bounded waiting: whichever core sees the release first wins, and a core that is far away on the interconnect may lose for a long time. A <b>ticket lock</b> fixes that with two counters: <code>fetch_add</code> on <code>next</code> takes a ticket, and you wait until <code>serving</code> equals it. It is FIFO, but every waiter still spins on the same line. <b>MCS</b> and similar queue locks give each waiter its own node to spin on, so a handoff touches only one other cache. The Linux kernel used ticket spinlocks from 2.6.25 and moved to MCS-based queued spinlocks (qspinlock) in 4.2.</p>
+
+<h3 id="ch02-spin-vs-mutex">Spinlock vs mutex</h3>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Spinlock</th><th>Mutex (futex-based)</th></tr></thead>
+<tbody>
+<tr><td>Uncontended lock + unlock</td><td>one RMW + one release store</td><td>one RMW + one RMW (unlock must read the state to learn whether anyone sleeps), all in user space</td></tr>
+<tr><td>While waiting</td><td>burns a CPU</td><td>sleeps in the kernel, CPU free for other work</td></tr>
+<tr><td>Handoff latency</td><td>a cache-line transfer, tens of ns</td><td>a wake-up syscall plus scheduling, usually microseconds</td></tr>
+<tr><td>Holder preempted or blocked</td><td>waiters spin for a whole time slice</td><td>waiters sleep, no waste</td></tr>
+<tr><td>Single core</td><td>pathological: the waiter spins until its slice ends, because the holder cannot run</td><td>fine</td></tr>
+<tr><td>Typical use</td><td>kernel code with preemption off, interrupt handlers, latency-critical user code on pinned, isolated cores</td><td>default for user space</td></tr>
+</tbody></table></div>
+<div class="callout tip"><p class="callout-title">Tip</p><p>Spin only if the critical section is shorter than the cost of sleeping and waking (a few microseconds) <b>and</b> the holder cannot be preempted. In ordinary user space you cannot promise the second part, which is why <code>std::mutex</code> is the default and why good mutexes are already fast when uncontended. Linus Torvalds' well-known advice is that user-space spinlocks are almost always a mistake unless you control the scheduling.</p></div>
+</section>
+
+<section id="ch02-mutex" data-roles="th"><div class="sec-head"><h2>How a mutex is implemented</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The mental model: a mutex is a spinlock that knows how to sleep. The uncontended case must cost one atomic instruction and no system call, and only threads that actually have to wait should enter the kernel. On Linux the bridge between the two worlds is the <b>futex</b>.</p>
+
+<h3 id="ch02-mutex-std">std::mutex in one minute</h3>
+<p><code>std::mutex</code> has <code>lock()</code>, <code>try_lock()</code> and <code>unlock()</code>. It is neither copyable nor movable, and its default constructor is <code>constexpr</code>, so a namespace-scope <code>std::mutex</code> is constant-initialised and immune to the static initialisation order problem. libstdc++ and libc++ wrap <code>pthread_mutex_t</code> on POSIX systems. The rules that interviewers probe:</p>
+<ul>
+<li>Locking a <code>std::mutex</code> the calling thread already owns is undefined behaviour (in practice a self-deadlock). Use <code>std::recursive_mutex</code> if you truly need that, see <a href="#ch03">Ch 3</a>.</li>
+<li>Unlocking a mutex you do not own, or destroying a mutex that is still locked, is undefined behaviour.</li>
+<li><code>try_lock()</code> may fail spuriously even if no thread holds the mutex ([thread.mutex.requirements.mutex]). Never use it to test whether a mutex is free.</li>
+<li>Call <code>lock()</code> and <code>unlock()</code> directly only in lock implementations. Everywhere else use an RAII wrapper (<code>std::lock_guard</code>, <code>std::scoped_lock</code>, <code>std::unique_lock</code>), covered in <a href="#ch03">Ch 3</a>, so an exception cannot leave the mutex locked.</li>
+</ul>
+<pre data-run="ch05-mutex-counter" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::mutex m;
+<span class="hljs-type">static</span> <span class="hljs-type">long</span> counter = <span class="hljs-number">0</span>;  <span class="hljs-comment">// guarded by m</span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) {
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">lock</span><span class="hljs-params">(m)</span></span>;
+        ++counter;
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch05-mutex-counter">200000</pre>
+
+<h3 id="ch02-mutex-futex">What a futex is</h3>
+<p>A futex ("fast user-space mutex", Linux 2.6) is not a lock. It is a 32-bit integer in ordinary user memory plus two system calls that let the kernel park and wake threads keyed by that integer's address:</p>
+<ul>
+<li><code>futex(&amp;word, FUTEX_WAIT, val)</code>: <b>atomically</b> check that <code>word == val</code> and, if so, put the caller to sleep on a kernel wait queue for that address. If the value differs, return <code>EAGAIN</code> at once.</li>
+<li><code>futex(&amp;word, FUTEX_WAKE, n)</code>: wake up to <code>n</code> threads sleeping on that address.</li>
+</ul>
+<p>The atomic check inside <code>FUTEX_WAIT</code> is the whole trick. Between "I saw the lock taken" in user space and "I am asleep" in the kernel, the holder might unlock and call wake. If the kernel simply slept, that wake-up would be lost and the waiter would sleep forever. Because the kernel re-checks the value under its wait-queue lock, a waiter whose value is stale returns immediately and retries. The kernel keeps no state for a futex nobody waits on, so an uncontended mutex costs the kernel nothing.</p>
+
+<h3 id="ch02-mutex-three-state">The three-state mutex</h3>
+<p>The standard design, from Ulrich Drepper's paper "Futexes Are Tricky", uses three values: <code>0</code> unlocked, <code>1</code> locked with no waiters, <code>2</code> locked and possibly with waiters. The third state lets <code>unlock()</code> skip the system call when nobody is sleeping.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 360" role="img" aria-label="Mutex fast path stays in user space; slow path sleeps and wakes through futex system calls">
+<defs><marker id="ch02-c05c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="16" y="22" font-size="12" class="t-muted t-bold">USER SPACE</text>
+<text x="16" y="258" font-size="12" class="t-muted t-bold">KERNEL</text>
+<line x1="10" y1="236" x2="730" y2="236" class="d-grid d-dash"/>
+<rect x="20" y="36" width="200" height="44" rx="6" class="d-box"/>
+<text x="120" y="55" text-anchor="middle" font-size="12" class="t-mono">lock(): CAS 0 → 1</text>
+<text x="120" y="71" text-anchor="middle" font-size="11" class="t-muted">one lock cmpxchg</text>
+<rect x="250" y="36" width="190" height="44" rx="6" class="d-key"/>
+<text x="345" y="55" text-anchor="middle" font-size="12" class="t-bold">owned: fast path</text>
+<text x="345" y="71" text-anchor="middle" font-size="11">no system call</text>
+<line x1="220" y1="58" x2="248" y2="58" class="d-line-key" marker-end="url(#ch05-c05c)"/>
+<rect x="20" y="132" width="200" height="44" rx="6" class="d-soft"/>
+<text x="120" y="151" text-anchor="middle" font-size="12" class="t-mono">old = exchange(2)</text>
+<text x="120" y="167" text-anchor="middle" font-size="11" class="t-muted">mark "has waiters"</text>
+<line x1="70" y1="80" x2="70" y2="130" class="d-line" marker-end="url(#ch05-c05c)"/>
+<text x="78" y="110" font-size="11" class="t-muted">CAS failed</text>
+<line x1="220" y1="150" x2="345" y2="82" class="d-line" marker-end="url(#ch05-c05c)"/>
+<text x="290" y="132" font-size="11" class="t-muted">old = 0: owned</text>
+<rect x="20" y="268" width="210" height="56" rx="6" class="d-trap"/>
+<text x="125" y="290" text-anchor="middle" font-size="12" class="t-mono">futex(WAIT, &amp;state, 2)</text>
+<text x="125" y="307" text-anchor="middle" font-size="11">sleep only if state is still 2</text>
+<line x1="60" y1="176" x2="60" y2="266" class="d-line-trap" marker-end="url(#ch05-c05c)"/>
+<text x="66" y="214" font-size="11" class="t-trap">old ≠ 0</text>
+<line x1="180" y1="266" x2="180" y2="178" class="d-line" marker-end="url(#ch05-c05c)"/>
+<text x="186" y="214" font-size="11" class="t-muted">woken: retry</text>
+<rect x="480" y="36" width="240" height="44" rx="6" class="d-box"/>
+<text x="600" y="55" text-anchor="middle" font-size="12" class="t-mono">unlock(): old = exchange(0)</text>
+<text x="600" y="71" text-anchor="middle" font-size="11" class="t-muted">release the lock first</text>
+<rect x="480" y="132" width="130" height="44" rx="6" class="d-key"/>
+<text x="545" y="151" text-anchor="middle" font-size="12" class="t-bold">old = 1</text>
+<text x="545" y="167" text-anchor="middle" font-size="11">done, no syscall</text>
+<line x1="530" y1="80" x2="530" y2="130" class="d-line-key" marker-end="url(#ch05-c05c)"/>
+<rect x="480" y="268" width="240" height="56" rx="6" class="d-acc"/>
+<text x="600" y="290" text-anchor="middle" font-size="12" class="t-mono">futex(WAKE, &amp;state, 1)</text>
+<text x="600" y="307" text-anchor="middle" font-size="11">wake one sleeper</text>
+<line x1="670" y1="80" x2="670" y2="266" class="d-line-acc" marker-end="url(#ch05-c05c)"/>
+<text x="676" y="180" font-size="11" class="t-acc">old = 2</text>
+<line x1="478" y1="296" x2="232" y2="296" class="d-line-acc d-dash" marker-end="url(#ch05-c05c)"/>
+<text x="355" y="288" text-anchor="middle" font-size="11" class="t-muted">wakes</text>
+<text x="370" y="350" text-anchor="middle" font-size="12" class="t-muted">Green: fast path, user space only. Red and blue: slow path, one system call each side.</text>
+</svg></div><figcaption><b>Only contention reaches the kernel.</b> An uncontended lock is one CAS and an uncontended unlock is one exchange. A thread that loses the CAS marks the word as 2 and sleeps in <code>FUTEX_WAIT</code>; the kernel re-checks the value, so a wake that raced ahead cannot be lost. Unlock pays for <code>FUTEX_WAKE</code> only when it sees 2.</figcaption></figure>
+<p>A woken waiter sets the state to 2 (not 1) when it takes the lock, because it cannot know whether other waiters are still asleep. That costs at most one unnecessary wake call later, which is the price of never losing one. In Linux code, the slow path looks like this (a fragment for Linux only; the portable version is a coding drill below, using C++20 <code>std::atomic::wait</code>, which libstdc++ implements with futexes on Linux):</p>
+<pre><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;linux/futex.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/syscall.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unistd.h&gt;</span></span>
+
+<span class="hljs-comment">// Relies on std::atomic&lt;int&gt; having the size and layout of int, true on Linux.</span>
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">futex_wait</span><span class="hljs-params">(std::atomic&lt;<span class="hljs-type">int</span>&gt;* w, <span class="hljs-type">int</span> val)</span> </span>{
+    <span class="hljs-built_in">syscall</span>(SYS_futex, <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">int</span>*&gt;(w), FUTEX_WAIT_PRIVATE, val, <span class="hljs-literal">nullptr</span>, <span class="hljs-literal">nullptr</span>, <span class="hljs-number">0</span>);
+}
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">futex_wake_one</span><span class="hljs-params">(std::atomic&lt;<span class="hljs-type">int</span>&gt;* w)</span> </span>{
+    <span class="hljs-built_in">syscall</span>(SYS_futex, <span class="hljs-built_in">reinterpret_cast</span>&lt;<span class="hljs-type">int</span>*&gt;(w), FUTEX_WAKE_PRIVATE, <span class="hljs-number">1</span>, <span class="hljs-literal">nullptr</span>, <span class="hljs-literal">nullptr</span>, <span class="hljs-number">0</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">(std::atomic&lt;<span class="hljs-type">int</span>&gt;&amp; state)</span> </span>{
+    <span class="hljs-type">int</span> c = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">if</span> (state.<span class="hljs-built_in">compare_exchange_strong</span>(c, <span class="hljs-number">1</span>, std::memory_order_acquire)) <span class="hljs-keyword">return</span>;
+    <span class="hljs-keyword">if</span> (c != <span class="hljs-number">2</span>) c = state.<span class="hljs-built_in">exchange</span>(<span class="hljs-number">2</span>, std::memory_order_acquire);
+    <span class="hljs-keyword">while</span> (c != <span class="hljs-number">0</span>) {
+        <span class="hljs-built_in">futex_wait</span>(&amp;state, <span class="hljs-number">2</span>);
+        c = state.<span class="hljs-built_in">exchange</span>(<span class="hljs-number">2</span>, std::memory_order_acquire);
+    }
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">(std::atomic&lt;<span class="hljs-type">int</span>&gt;&amp; state)</span> </span>{
+    <span class="hljs-keyword">if</span> (state.<span class="hljs-built_in">exchange</span>(<span class="hljs-number">0</span>, std::memory_order_release) == <span class="hljs-number">2</span>) <span class="hljs-built_in">futex_wake_one</span>(&amp;state);
+}</code></pre>
+
+<h3 id="ch02-mutex-real">What production mutexes add</h3>
+<ul>
+<li><b>Adaptive spinning.</b> Spin briefly before sleeping, betting that the holder is running on another core and will release soon. glibc offers it as <code>PTHREAD_MUTEX_ADAPTIVE_NP</code>; its default mutex type goes straight to the futex.</li>
+<li><b>Lock types.</b> Error-checking and recursive pthread mutexes store the owner thread id in the mutex.</li>
+<li><b>Priority inheritance</b> (<code>PTHREAD_PRIO_INHERIT</code>, <code>FUTEX_LOCK_PI</code>): the kernel boosts the owner's priority while a higher-priority thread waits. See priority inversion in <a href="#ch03">Ch 3</a>.</li>
+<li><b>Other systems:</b> Windows has <code>WaitOnAddress</code> and SRW locks, macOS has <code>os_unfair_lock</code> and the private <code>ulock</code> wait calls. The idea is the same everywhere: an atomic word in user space, a kernel queue only for waiters.</li>
+</ul>
+</section>
+
+<section id="ch02-ordering" data-roles="th"><div class="sec-head"><h2>What a lock guarantees about memory</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A lock does two jobs. Mutual exclusion is the obvious one. The second is <b>visibility</b>: data written by one critical section must be seen by the next, even though compilers and CPUs reorder memory operations freely.</p>
+
+<h3 id="ch02-ord-acq-rel">Acquire and release, intuitively</h3>
+<ul>
+<li><b>Release</b> (unlocking): every read and write before it in program order is completed before the release becomes visible. Think "publish everything I did".</li>
+<li><b>Acquire</b> (locking): every read and write after it in program order happens after it. Think "subscribe to what was published".</li>
+<li>An unlock of mutex <code>m</code> <i>synchronises with</i> the next lock of <code>m</code>, so it creates a happens-before edge: the writer's critical section happens before the reader's. That edge is exactly what turns two conflicting accesses into a non-race.</li>
+</ul>
+<p>The <b>roach motel</b> rule follows: operations may move <i>into</i> a critical section (a load after unlock may be performed before it), but never <i>out of</i> it. Compilers and CPUs exploit that freedom, which is why locks are cheap.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-comment">// Publishing with an atomic flag needs the same pairing</span>
+<span class="hljs-type">int</span> payload;                          <span class="hljs-comment">// plain data</span>
+std::atomic&lt;<span class="hljs-type">bool</span>&gt; ready{<span class="hljs-literal">false</span>};
+<span class="hljs-comment">// producer                           // consumer</span>
+payload = <span class="hljs-number">42</span>;                         <span class="hljs-comment">// while (!ready.load(std::memory_order_acquire)) {}</span>
+ready.<span class="hljs-built_in">store</span>(<span class="hljs-literal">true</span>, std::memory_order_release);   <span class="hljs-comment">// use(payload);  sees 42</span></code></pre>
+<p>With <code>memory_order_relaxed</code> on both sides there is no happens-before edge and reading <code>payload</code> is a data race (see the reading drills). Locks, <code>seq_cst</code> atomics and acquire/release pairs all create the edge; relaxed atomics do not.</p>
+
+<h3 id="ch02-ord-atomics-vs-locks">Atomics or a lock?</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Use an atomic when</th><th>Use a lock when</th></tr></thead>
+<tbody>
+<tr><td>The shared state is one word: a counter, a flag, a pointer</td><td>An invariant spans several variables (size and buffer, balance and history)</td></tr>
+<tr><td>The update is a single RMW or a short CAS loop</td><td>The update needs a check and an act that must not be split</td></tr>
+<tr><td>You need progress even if a thread is descheduled (lock-free)</td><td>Simplicity and reviewability matter more than the last 20 ns</td></tr>
+<tr><td>Readers are frequent and must never block</td><td>Waiters should sleep rather than spin</td></tr>
+</tbody></table></div>
+<p>"Lock-free" is not "fast". A contended atomic counter still bounces one cache line between cores and may be slower than per-thread counters merged at the end. <code>std::atomic&lt;T&gt;</code> for large <code>T</code> is not lock-free at all: the library hides a lock (check <code>is_always_lock_free</code>, and note that GCC may need <code>-latomic</code>).</p>
+
+<h3 id="ch02-ord-costs">Key facts: rough costs on a modern x86 server</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Operation</th><th>Order of magnitude</th></tr></thead>
+<tbody>
+<tr><td>Uncontended atomic RMW on a line in your own cache</td><td>about 5 to 20 ns (tens of cycles)</td></tr>
+<tr><td>Uncontended <code>std::mutex</code> lock + unlock</td><td>about 15 to 30 ns (two atomics, no syscall)</td></tr>
+<tr><td>Moving a contended cache line to another core</td><td>about 50 to 150 ns, more across sockets</td></tr>
+<tr><td>Futex wait and wake round trip, thread context switch</td><td>about 1 to 10 µs</td></tr>
+</tbody></table></div>
+<p>These are order-of-magnitude figures; measure on your hardware. The shape is what matters in interviews: uncontended locking is cheap, contention is expensive, and sleeping is the most expensive of all.</p>
+
+<h3 id="ch02-ord-false-sharing">False sharing in one paragraph</h3>
+<p>Coherence works on whole cache lines (64 bytes on x86 and most ARM servers, 128 bytes on Apple M-series). Two threads updating <i>different</i> variables that share a line still bounce the line, so per-thread counters packed into one array can be as slow as one shared atomic. Pad or align hot per-thread data to the line size (<code>alignas(64)</code> or <code>std::hardware_destructive_interference_size</code>). The full treatment, with measurements, is in <a href="../cpp/#ch17">C++ guide ch 17</a>.</p>
+</section>
+
+<section id="ch02-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What exactly is a data race in C++, and what is the consequence?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Two conflicting accesses to the same memory location (at least one a write), in different threads, at least one not atomic, with neither happening before the other. The consequence is undefined behaviour for the entire program.</p>
+    <p><b>Why.</b> The rule is [intro.races]. Making races UB lets the compiler optimise every non-atomic access as if the thread were alone: keep values in registers, merge or split stores, hoist loads out of loops. The common wrong answer is "you might read a stale or torn value". That describes one possible outcome, but the standard promises nothing at all, and real compilers produce infinite loops and impossible values from racy code. The fix is to order the accesses with a lock, an atomic, or thread start and join.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Give an example of a race condition that has no data race, and explain why ThreadSanitizer will not report it.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Check-then-act on a "thread-safe" container whose every member function locks an internal mutex: <code>if (!q.empty()) { int v = q.front(); q.pop(); }</code>. Two consumers can both see one item, both read the same front, and the second <code>pop()</code> runs on an empty queue.</p>
+    <p><b>Why.</b> Every access to the queue's data happens under its mutex, so there is no data race and TSan, which looks for unordered conflicting accesses where at least one is non-atomic, has nothing to report. The bug is in the interface: the check and the act are separate critical sections, and another thread can run between them. Fix it by making the combined operation one call that holds the lock throughout (<code>std::optional&lt;int&gt; try_pop()</code>), so a concurrent queue must not copy the split <code>front()</code>/<code>pop()</code> interface that <code>std::queue</code> uses for exception safety. The same pattern on a single atomic (load the balance, then <code>fetch_sub</code>) appears as a find-the-bug drill below. Interviewers use this to test whether you think "every call is locked" means "correct".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A colleague says a plain <code>bool</code> stop flag is fine on x86 because aligned byte loads and stores are atomic in hardware. Is it?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. It is a data race, so it is UB, and in practice the compiler may read the flag once and turn <code>while (!stop)</code> into an infinite loop.</p>
+    <p><b>Why.</b> Hardware atomicity is irrelevant: the C++ abstract machine decides what the compiler may do, and a non-atomic variable that this thread never writes inside the loop is assumed not to change. GCC and Clang at <code>-O2</code> really do hoist such loads. <code>std::atomic&lt;bool&gt;</code> costs the same plain <code>mov</code> on x86 for a relaxed or acquire load, so there is no performance argument for the plain <code>bool</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does declaring a shared counter <code>volatile int</code> make <code>counter++</code> safe across threads?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. <code>volatile</code> gives neither atomicity nor inter-thread ordering, and the accesses still form a data race.</p>
+    <p><b>Why.</b> <code>volatile</code> only tells the compiler that each access is an observable side effect it must perform (for memory-mapped I/O and, with <code>sig_atomic_t</code>, signal handlers). <code>counter++</code> is still a separate load, add and store, the CPU may still reorder around it, and the standard does not exempt volatile from [intro.races]. C++20 even deprecates <code>++</code> and compound assignment on volatile variables because people kept misreading them as atomic. Java's <code>volatile</code> is a different thing (closer to a seq_cst atomic), which is where much of the confusion comes from.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>With optimisation, GCC compiles <code>++counter</code> to the single instruction <code>add DWORD PTR counter[rip], 1</code>. Is that atomic on a multicore x86? On a single-core machine?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> On multicore: no, it needs the <code>lock</code> prefix. On a single core the single instruction happens to be atomic with respect to interrupts, but the C++ program is still a data race and the compiler is free to emit three instructions instead.</p>
+    <p><b>Why.</b> A memory-destination <code>add</code> is decoded into load, add and store micro-ops. Without <code>lock</code>, another core can take the cache line between the load and the store. Interrupts are only taken at instruction boundaries, so on one core no other thread can run in the middle, which is why old uniprocessor kernels got away with it. Relying on the instruction choice is relying on codegen, which is not a contract. <code>fetch_add</code> guarantees <code>lock xadd</code> or <code>lock add</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>State the three requirements for a solution to the critical section problem, and say which one strict alternation (<code>while (turn != me) {}</code>, then <code>turn = other</code> on exit) violates.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Mutual exclusion, progress and bounded waiting. Strict alternation violates progress.</p>
+    <p><b>Why.</b> Mutual exclusion holds because only the thread whose turn it is can enter. But if thread 0 finishes and never wants the lock again, thread 1 can enter once and then waits forever for a turn that thread 0 will never hand over, even though the critical section is empty. Progress says a thread outside the critical section and not trying to enter must not block the others. People often answer "bounded waiting", but strict alternation actually has perfect bounded waiting (a bound of one); the failure is progress.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why can't a user-space program implement a lock by disabling interrupts, and why would it not work on a multiprocessor even in the kernel?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Disabling interrupts is a privileged instruction (<code>cli</code> faults in ring 3), and it only affects the current CPU, so other CPUs keep running and can enter the same critical section.</p>
+    <p><b>Why.</b> On a uniprocessor, preemption arrives only through interrupts, so masking them makes a code sequence atomic. On SMP, two CPUs execute in parallel and interrupts are irrelevant to that. Kernels therefore combine both: a spinlock excludes other CPUs and <code>local_irq_save</code> stops an interrupt handler on this CPU from trying to take the same spinlock and deadlocking against the code it interrupted (<code>spin_lock_irqsave</code>). Long sections with interrupts off also hurt latency because timer and device interrupts are delayed.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>x86 is "strongly ordered". Does Peterson's algorithm with plain variables (or with release stores and acquire loads) work on x86?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. x86-TSO allows a later load to complete before an earlier store to a different address is visible, and Peterson needs exactly that store-then-load order. Release/acquire does not forbid that reordering either. You need seq_cst operations or a full fence (<code>mfence</code>) between the stores and the loop's loads.</p>
+    <p><b>Why.</b> Each core puts <code>flag[me] = true</code> in its store buffer, then reads <code>flag[other]</code> from cache, where the other core's store has not arrived yet. Both read <code>false</code> and both enter (see the store buffer figure). x86 forbids load-load, store-store and load-store reordering, which is why people believe it is "sequentially consistent", but store-load is the one it permits. Release only orders <i>earlier</i> operations before the release store; acquire only orders <i>later</i> operations after the acquire load; neither orders a store before a later load.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Compare test-and-set, fetch-and-add and compare-and-swap. Which would you pick to build a fair (FIFO) spinlock, and which to build a lock-free stack?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> TAS sets a flag and returns the old value; fetch-and-add adds and returns the old value; CAS writes only if the current value equals the expected one. A FIFO ticket lock uses fetch-and-add to hand out tickets; a lock-free stack needs CAS to swing the head pointer.</p>
+    <p><b>Why.</b> Fetch-and-add always succeeds, so each arriving thread gets a unique ticket in arrival order, which gives fairness for free. A stack push must say "set head to my node only if head is still what I linked to", which is a conditional update: only CAS (or LL/SC) expresses it. Herlihy's consensus hierarchy makes it formal: TAS, swap and fetch-add have consensus number 2, CAS is universal. TAS is the cheapest option for a simple unfair spinlock.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why does <code>compare_exchange_weak</code> exist, if it can fail even when the value matches? When should you use <code>_strong</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> On LL/SC architectures (classic ARM, POWER, RISC-V) one LL/SC pair can fail spuriously, for example after an interrupt or a write elsewhere in the same cache line. <code>_weak</code> maps to a single attempt; <code>_strong</code> must hide spurious failures with an internal retry loop. Use <code>_weak</code> inside your own retry loop and <code>_strong</code> for one-shot attempts.</p>
+    <p><b>Why.</b> If you are already looping, a nested loop inside <code>_strong</code> is wasted code. If there is no loop (for example "try to claim this slot once"), a spurious failure would be a logic error, so you need <code>_strong</code>. On x86 both compile to <code>lock cmpxchg</code>, which never fails spuriously, so the difference only shows up on other targets. In both forms, a failure stores the observed value into <code>expected</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When is a spinlock better than a mutex, and why is a spinlock a bad idea on a single-core machine?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Spin when the critical section is shorter than a sleep and wake-up (a few microseconds) and the holder is guaranteed to be running, for example in the kernel with preemption disabled or on pinned, isolated cores in a low-latency system. On one core the holder cannot run while the waiter spins, so the waiter wastes its whole time slice every time.</p>
+    <p><b>Why.</b> A mutex costs about the same as a spinlock when uncontended (one atomic operation each way, all in user space). Under contention the mutex puts waiters to sleep, which costs a system call and a context switch but frees the CPU. A spinlock hands over in tens of nanoseconds when the holder runs on another core, but if the holder is preempted the waiters burn CPU until the scheduler brings it back. Uniprocessor kernels compile spinlocks down to "disable preemption" for this reason.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does <code>std::mutex::lock()</code> make a system call every time?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. On Linux an uncontended lock is a single CAS in user space and an uncontended unlock is a single atomic exchange or decrement. Only a thread that must wait calls <code>futex(FUTEX_WAIT)</code>, and unlock calls <code>futex(FUTEX_WAKE)</code> only if the state word says there may be waiters.</p>
+    <p><b>Why.</b> That is the whole point of the futex design (Linux 2.6): the kernel keeps no state for an uncontended lock. The wrong answer "a mutex is slow because it enters the kernel" is twenty years out of date. A mutex becomes slow when it is contended, and then the cost is the cache-line transfers plus sleeping and waking, not the uncontended path.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is <code>std::atomic&lt;T&gt;</code> always lock-free? What about <code>std::atomic&lt;Big&gt;</code> where <code>Big</code> is a 24-byte struct?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. Only <code>std::atomic_flag</code> (and, since C++20, the <code>std::atomic_signed_lock_free</code> and <code>std::atomic_unsigned_lock_free</code> aliases) is guaranteed lock-free. <code>std::atomic&lt;Big&gt;</code> compiles for any trivially copyable type, but for sizes the hardware cannot handle in one instruction the library protects it with an internal lock (a hashed table of locks), so <code>is_lock_free()</code> is false.</p>
+    <p><b>Why.</b> <code>std::atomic&lt;T&gt;::is_always_lock_free</code> (C++17) tells you at compile time. On x86-64, sizes 1, 2, 4 and 8 are lock-free; 16 bytes depends on <code>cmpxchg16b</code> and the library. With GCC, non-lock-free atomics call into <code>libatomic</code>, so you may need <code>-latomic</code> to link. A lock-based atomic is not safe in a signal handler and can be much slower, which surprises people who chose atomics "to avoid locks".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>May <code>m.try_lock()</code> return <code>false</code> when no thread holds <code>m</code>? Thread A sets <code>x = 1</code> and locks <code>m</code>; thread B sees <code>m.try_lock()</code> fail and concludes that it may now read <code>x</code>. Is that safe?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes, <code>try_lock()</code> may fail spuriously ([thread.mutex.requirements.mutex]), and no, B's reasoning is broken: a failed <code>try_lock</code> tells you nothing and creates no happens-before edge, so reading <code>x</code> is a data race.</p>
+    <p><b>Why.</b> If a failed <code>try_lock</code> were a reliable sign that someone holds the lock, programs could use it as a signal, and then <code>lock()</code> would have to order the earlier write of <code>x</code> before itself, which costs a full fence on every acquisition. Hans Boehm's analysis of this for the C++11 memory model is why the standard allows spurious failure: it keeps <code>lock()</code> a plain acquire. Only a <b>successful</b> lock synchronises with the previous unlock. The practical rule is to use <code>try_lock</code> only to attempt, never to ask "is it free?" or "is it taken?". The common wrong answer is "spurious failure only exists for LL/SC hardware"; a mutex's <code>try_lock</code> can be built with a strong CAS and the standard still permits it to fail. (Relocking a <code>std::mutex</code> you already own is covered in <a href="#ch03">Ch 3</a>.)</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What do "lock-free" and "wait-free" mean? Is a CAS retry loop wait-free, and is a lock-free counter always faster than a mutex-protected one?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <b>Lock-free</b>: some thread always completes its operation in a finite number of steps, even if other threads are suspended at any point. <b>Wait-free</b>: every thread completes in a bounded number of its own steps. A CAS loop is lock-free but not wait-free, because one unlucky thread can keep losing the CAS while others succeed. And no, lock-free is not automatically faster.</p>
+    <p><b>Why.</b> A thread that fails a CAS failed because another thread's CAS succeeded, so the system as a whole progresses, but nothing bounds how often a given thread loses (starvation is possible). A hardware <code>fetch_add</code> (<code>lock xadd</code>, <code>ldadd</code>) completes in one instruction for every caller, so a counter built on it is wait-free. Below lock-free sits <b>obstruction-free</b> (a thread finishes if it runs alone), and anything using a mutex is <b>blocking</b>: a holder descheduled inside the critical section stops everyone. The speed question is separate: under contention a lock-free counter still bounces one cache line between cores, and a mutex with short critical sections can match it; per-thread counters beat both. People say "lock-free means no locks so it is faster"; the real benefit is progress when threads are preempted, killed or running in a signal handler, not raw speed.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Besides mutual exclusion, what guarantee does a mutex give about memory? Can the compiler move a load from after <code>unlock()</code> to before it?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Visibility and ordering: <code>unlock()</code> is a release and <code>lock()</code> is an acquire, so an unlock synchronises with the next lock of the same mutex and everything done in the earlier critical section happens before the later one. Yes, the compiler or CPU may move a later load into the critical section, but nothing may move out of it.</p>
+    <p><b>Why.</b> This is the "roach motel" rule: accesses can check in but not check out. Moving work into a critical section never breaks correctness, only increases the hold time slightly, so the memory model allows it; moving work out would expose it to other threads unprotected. Without the release/acquire pairing, a reader could take the lock and still see stale data, which is the bug in the "relaxed publish" reading drill.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>What is the ABA problem, and why does a CAS-based lock-free stack <code>pop</code> suffer from it while <code>push</code> does not?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> CAS succeeds if the value equals what you read earlier, even if it changed to something else and back in between. In <code>pop</code> you read <code>head = A</code> and <code>next = A-&gt;next</code>; if A is popped, freed and reallocated as a new node pushed back on top, your CAS from A to the stale <code>next</code> succeeds and corrupts the stack.</p>
+    <p><b>Why.</b> <code>pop</code> dereferences a node that another thread may free, and its CAS decision depends on that dereferenced value. <code>push</code> only links a node it owns to the current head and swings head; if head changed, the CAS fails and the loop retries with the fresh head, so A to B to A is harmless. Fixes for pop: tagged pointers with a version counter (double-width CAS), hazard pointers, epoch-based reclamation, or garbage collection. A garbage collector removes the "freed and reused" step entirely, which is why ABA is mainly a C and C++ problem.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why does a test-and-test-and-set spinlock scale better than a plain test-and-set spinlock?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Plain TAS writes the lock's cache line on every attempt, so the line ping-pongs between waiting cores in the Modified state. TTAS spins on an ordinary load, which each core can serve from its own Shared copy, and only attempts the RMW after it sees the lock free.</p>
+    <p><b>Why.</b> Under MESI, a write needs exclusive ownership, which invalidates every other copy. With N waiters doing TAS, every attempt is an invalidation broadcast, and the holder's own release has to fight for the line. With TTAS, the line stays shared while the lock is held and there is one burst of traffic per release. Backoff and a <code>pause</code> instruction reduce that burst further; queue locks (MCS) remove it by giving each waiter its own line.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch02-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print? Watch which operations return the old value and which return the new one.</p>
+<pre data-run="ch05-fetch-add-old"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; a{<span class="hljs-number">5</span>};
+    <span class="hljs-type">int</span> r1 = a.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">3</span>);
+    <span class="hljs-type">int</span> r2 = ++a;
+    <span class="hljs-type">int</span> r3 = a++;
+    <span class="hljs-type">int</span> r4 = a.<span class="hljs-built_in">exchange</span>(<span class="hljs-number">100</span>);
+    std::cout &lt;&lt; r1 &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; r2 &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; r3 &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; r4 &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; a.<span class="hljs-built_in">load</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch05-fetch-add-old">5 9 9 10 100</pre>
+    <p><b>Answer.</b> <code>5 9 9 10 100</code>.</p>
+    <p><b>Why.</b> <code>fetch_add(3)</code> returns the old value 5 and leaves 8. Pre-increment on an atomic returns the <i>new</i> value, 9. Post-increment returns the old value 9 and leaves 10. <code>exchange(100)</code> returns the previous value 10. All of these are single RMW operations, and they return a value rather than a reference: <code>++a</code> on a <code>std::atomic</code> yields <code>T</code>, not <code>atomic&amp;</code>, because a reference would invite a second, racy read. People who expect <code>fetch_add</code> to return the new value (like <code>__sync_add_and_fetch</code>) answer 8 first.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Two threads each add 100000. What can this print, and what is wrong?</p>
+<pre data-run="ch05-race-counter" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> counter = <span class="hljs-number">0</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) ++counter;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;  <span class="hljs-comment">// often less than 200000</span>
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A data race on <code>counter</code>, so the behaviour is undefined. In practice it prints anything from about 100000 to 200000, and it may print exactly 200000 every time on one compiler. ThreadSanitizer reports the race. Fix: <code>std::atomic&lt;int&gt;</code> with <code>fetch_add</code>, or a mutex.</p>
+    <p><b>Why.</b> Each <code>++counter</code> is load, add, store, and interleavings lose updates (see the counter figure). The surprise is the 200000: at <code>-O1</code> Clang may turn the whole loop into <code>counter += 100000</code>, one load and one store, so the window for losing an update shrinks to almost nothing, and the first thread often finishes before the second starts. That is the danger of UB: the program "passes" on your machine and fails elsewhere. Output is deliberately not compared here.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print? <code>bool</code> prints as 0 or 1.</p>
+<pre data-run="ch05-cas-expected"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; x{<span class="hljs-number">10</span>};
+    <span class="hljs-type">int</span> expected = <span class="hljs-number">7</span>;
+    <span class="hljs-type">bool</span> ok1 = x.<span class="hljs-built_in">compare_exchange_strong</span>(expected, <span class="hljs-number">20</span>);
+    std::cout &lt;&lt; ok1 &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; expected &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    <span class="hljs-type">bool</span> ok2 = x.<span class="hljs-built_in">compare_exchange_strong</span>(expected, <span class="hljs-number">20</span>);
+    std::cout &lt;&lt; ok2 &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; expected &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; x &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch05-cas-expected">0 10 10
+1 10 20</pre>
+    <p><b>Answer.</b> First line <code>0 10 10</code>, second line <code>1 10 20</code>.</p>
+    <p><b>Why.</b> The first CAS compares 10 with the expected 7 and fails. On failure it <b>writes the current value into <code>expected</code></b>, so <code>expected</code> becomes 10 and <code>x</code> is unchanged. The second CAS now expects 10, which matches, so it stores 20 and returns true; on success <code>expected</code> is left alone. This write-back is what makes CAS loops tidy: the next iteration already has the fresh value. The usual wrong answer is <code>0 7 10</code>, from treating <code>expected</code> as an input only.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This home-made lock uses an atomic, so it should be safe. Why does the counter come out wrong?</p>
+<pre data-run="ch05-broken-spin" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">bool</span>&gt; locked{<span class="hljs-literal">false</span>};
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> counter = <span class="hljs-number">0</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">while</span> (locked.<span class="hljs-built_in">load</span>()) { }  <span class="hljs-comment">// wait until free</span>
+    locked.<span class="hljs-built_in">store</span>(<span class="hljs-literal">true</span>);        <span class="hljs-comment">// then take it</span>
+}
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">()</span> </span>{ locked.<span class="hljs-built_in">store</span>(<span class="hljs-literal">false</span>); }
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) {
+        <span class="hljs-built_in">lock</span>();
+        ++counter;
+        <span class="hljs-built_in">unlock</span>();
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The check (<code>load</code>) and the claim (<code>store(true)</code>) are two separate atomic operations. Both threads can see <code>false</code>, both store <code>true</code>, and both enter. Mutual exclusion fails, so <code>counter</code> has a data race, which TSan reports. Fix: claim with one RMW, <code>while (locked.exchange(true, std::memory_order_acquire)) {}</code>, and unlock with a release store.</p>
+    <p><b>Why.</b> Atomic operations are indivisible individually, not in combination. This is the same check-then-act race condition as the bank account, here breaking the lock itself. The other weakness, the default seq_cst on every access, only costs speed. A correct test-and-test-and-set lock keeps the read loop but follows it with <code>exchange</code> and retries if the exchange returns <code>true</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print (C++20)?</p>
+<pre data-run="ch05-tas-seq"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::atomic_flag f;  <span class="hljs-comment">// starts clear (C++20)</span>
+    std::cout &lt;&lt; f.<span class="hljs-built_in">test_and_set</span>() &lt;&lt; f.<span class="hljs-built_in">test_and_set</span>() &lt;&lt; f.<span class="hljs-built_in">test</span>() &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span>;
+    f.<span class="hljs-built_in">clear</span>();
+    std::cout &lt;&lt; f.<span class="hljs-built_in">test</span>() &lt;&lt; f.<span class="hljs-built_in">test_and_set</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch05-tas-seq">011 00</pre>
+    <p><b>Answer.</b> <code>011 00</code>.</p>
+    <p><b>Why.</b> Since C++20 a default-constructed <code>atomic_flag</code> is clear (P0883; before C++20 its state was unspecified unless you used <code>ATOMIC_FLAG_INIT</code>). The first <code>test_and_set</code> returns the old value <code>false</code>, the second returns <code>true</code>, and <code>test()</code> (new in C++20) reads <code>true</code> without modifying it. After <code>clear()</code>, <code>test()</code> is <code>false</code> and <code>test_and_set</code> returns <code>false</code> again while setting the flag. The left-to-right evaluation of the <code>&lt;&lt;</code> chain is guaranteed since C++17, so the order of the three calls is well defined.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span><code>hits</code> is atomic and ThreadSanitizer runs clean, yet the result is usually below 200000. Why?</p>
+<pre data-run="ch05-atomic-not-rmw" data-mode="ub" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">int</span>&gt; hits{<span class="hljs-number">0</span>};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) hits = hits + <span class="hljs-number">1</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; hits &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;  <span class="hljs-comment">// usually less than 200000</span>
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>hits = hits + 1</code> is an atomic load, then an addition on a plain <code>int</code>, then an atomic store. Another thread can update <code>hits</code> between the load and the store, and that update is overwritten. Use <code>++hits</code>, <code>hits += 1</code> or <code>hits.fetch_add(1)</code>.</p>
+    <p><b>Why.</b> <code>std::atomic</code> overloads <code>operator=</code>, <code>operator++</code> and <code>operator+=</code> as single atomic operations, but <code>hits + 1</code> goes through the implicit conversion <code>operator T()</code>, a separate load. There is no data race (every access is atomic), so TSan is right to stay quiet: this is a pure race condition. The output depends on timing and is not compared.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Two threads each double <code>value</code> ten times using a CAS loop. Is the output deterministic? What is it?</p>
+<pre data-run="ch05-cas-multiply" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">long</span>&gt; value{<span class="hljs-number">1</span>};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">times</span><span class="hljs-params">(<span class="hljs-type">long</span> k)</span> </span>{
+    <span class="hljs-type">long</span> old = value.<span class="hljs-built_in">load</span>();
+    <span class="hljs-keyword">while</span> (!value.<span class="hljs-built_in">compare_exchange_weak</span>(old, old * k)) { }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> work = [] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">10</span>; ++i) <span class="hljs-built_in">times</span>(<span class="hljs-number">2</span>); };
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; value &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch05-cas-multiply">1048576</pre>
+    <p><b>Answer.</b> Yes: always <code>1048576</code>, which is 2 to the power 20.</p>
+    <p><b>Why.</b> Every multiplication is applied exactly once: if another thread changes <code>value</code> between the load and the CAS, the CAS fails, refreshes <code>old</code> and recomputes from the new value. Twenty doublings in any order give the same product because multiplication commutes. The interleaving still varies from run to run; only the final value is fixed. Using <code>_weak</code> is correct because a spurious failure just causes one more iteration.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Peterson's algorithm, with <code>volatile</code> added so the compiler cannot cache the flags. Is it correct now?</p>
+<pre data-run="ch05-peterson-plain" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-keyword">volatile</span> <span class="hljs-type">bool</span> flag[<span class="hljs-number">2</span>] = {<span class="hljs-literal">false</span>, <span class="hljs-literal">false</span>};
+<span class="hljs-type">static</span> <span class="hljs-keyword">volatile</span> <span class="hljs-type">int</span> turn = <span class="hljs-number">0</span>;
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> counter = <span class="hljs-number">0</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{
+    <span class="hljs-type">int</span> other = <span class="hljs-number">1</span> - me;
+    flag[me] = <span class="hljs-literal">true</span>;
+    turn = other;
+    <span class="hljs-keyword">while</span> (flag[other] &amp;&amp; turn == other) { }
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{ flag[me] = <span class="hljs-literal">false</span>; }
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">work</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">50000</span>; ++i) {
+        <span class="hljs-built_in">lock</span>(me);
+        ++counter;
+        <span class="hljs-built_in">unlock</span>(me);
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work, <span class="hljs-number">0</span>)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work, <span class="hljs-number">1</span>)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. <code>volatile</code> stops the compiler from hoisting the loads, but every access is still a data race (TSan reports it), and the CPU's store buffer can let both threads read the other flag as <code>false</code>, so both enter and increments are lost. Fix: <code>std::atomic&lt;bool&gt;</code> and <code>std::atomic&lt;int&gt;</code> with seq_cst, as in the theory section and the coding drill.</p>
+    <p><b>Why.</b> Peterson's proof assumes sequential consistency: the store to <code>flag[me]</code> is visible before the load of <code>flag[other]</code>. Both x86 (store buffer) and ARM (much weaker ordering) break that without a full fence. <code>volatile</code> emits no fence. On Apple silicon or a multicore x86, runs of this program typically end short of 100000.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The consumer waits for <code>ready</code>, then reads <code>payload</code>. It prints 42 on every run you try. Why is it still broken?</p>
+<pre data-run="ch05-relaxed-publish" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">int</span> payload = <span class="hljs-number">0</span>;
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">bool</span>&gt; ready{<span class="hljs-literal">false</span>};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">producer</span><span class="hljs-params">([] {
+        payload = <span class="hljs-number">42</span>;
+        ready.store(<span class="hljs-literal">true</span>, std::memory_order_relaxed);
+    })</span></span>;
+    <span class="hljs-function">std::thread <span class="hljs-title">consumer</span><span class="hljs-params">([] {
+        <span class="hljs-keyword">while</span> (!ready.load(std::memory_order_relaxed)) { }
+        std::cout &lt;&lt; payload &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    })</span></span>;
+    producer.<span class="hljs-built_in">join</span>();
+    consumer.<span class="hljs-built_in">join</span>();
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Relaxed operations create no happens-before edge, so the write of <code>payload</code> and the read in the consumer are unordered conflicting accesses: a data race. TSan reports it. Fix: <code>store(true, std::memory_order_release)</code> and <code>load(std::memory_order_acquire)</code> (or the seq_cst default).</p>
+    <p><b>Why.</b> Relaxed guarantees only atomicity of <code>ready</code> itself. The compiler may sink <code>payload = 42</code> below the flag store, and ARM or POWER may make the flag visible first. x86 happens not to reorder these two stores, which is why it "works" in testing, and why such bugs appear when code moves to ARM servers or Apple silicon. Release/acquire is the minimum that makes the publish correct, and it is free on x86 (plain <code>mov</code>s).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The writer locks the mutex. The reader only reads, so it skips the lock "for speed". What is wrong?</p>
+<pre data-run="ch05-writer-only-lock" data-mode="ub" data-flags="tsan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::mutex m;
+<span class="hljs-type">static</span> <span class="hljs-type">long</span> total = <span class="hljs-number">0</span>;
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">writer</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) {
+        <span class="hljs-function">std::lock_guard&lt;std::mutex&gt; <span class="hljs-title">g</span><span class="hljs-params">(m)</span></span>;
+        ++total;
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">reader</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">long</span> seen = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) seen = total;  <span class="hljs-comment">// &quot;reads are harmless&quot;</span>
+    std::cout &lt;&lt; (seen &gt;= <span class="hljs-number">0</span>) &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">w</span><span class="hljs-params">(writer)</span>, <span class="hljs-title">r</span><span class="hljs-params">(reader)</span></span>;
+    w.<span class="hljs-built_in">join</span>();
+    r.<span class="hljs-built_in">join</span>();
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A lock protects data only if <b>every</b> access, reads included, goes through it. The unlocked read of <code>total</code> conflicts with the locked write, nothing orders them, so it is a data race (UB), which TSan reports. Fix: lock in the reader too, or make <code>total</code> a <code>std::atomic&lt;long&gt;</code> if it is a standalone value.</p>
+    <p><b>Why.</b> Happens-before through a mutex needs both sides to take it: the writer's unlock synchronises with a later lock, and the reader never locks. "Reads are harmless" is wrong twice: the read may be torn on a platform where <code>long</code> is not written in one instruction, and the compiler may hoist the load out of the loop entirely (here it would read <code>total</code> once). For many readers and few writers use <code>std::shared_mutex</code> (<a href="#ch03">Ch 3</a>), not no lock at all.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Two threads try to withdraw 80 from a balance of 100. Every access is atomic. What can the final balance be?</p>
+<pre data-run="ch05-check-then-act" data-mode="ub" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">int</span>&gt; balance{<span class="hljs-number">100</span>};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">withdraw</span><span class="hljs-params">(<span class="hljs-type">int</span> amount)</span> </span>{
+    <span class="hljs-keyword">if</span> (balance.<span class="hljs-built_in">load</span>() &gt;= amount) {   <span class="hljs-comment">// check</span>
+        balance.<span class="hljs-built_in">fetch_sub</span>(amount);    <span class="hljs-comment">// act</span>
+    }
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(withdraw, <span class="hljs-number">80</span>)</span>, <span class="hljs-title">b</span><span class="hljs-params">(withdraw, <span class="hljs-number">80</span>)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; balance &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;  <span class="hljs-comment">// 20 or -60, depending on the interleaving</span>
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Either 20 (one withdrawal succeeds) or minus 60 (both pass the check before either subtracts). It is a race condition without a data race, so TSan runs clean. Fix with a CAS loop that checks and subtracts in one step:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">bool</span> <span class="hljs-title">withdraw</span><span class="hljs-params">(<span class="hljs-type">int</span> amount)</span> </span>{
+    <span class="hljs-type">int</span> cur = balance.<span class="hljs-built_in">load</span>();
+    <span class="hljs-keyword">while</span> (cur &gt;= amount) {
+        <span class="hljs-keyword">if</span> (balance.<span class="hljs-built_in">compare_exchange_weak</span>(cur, cur - amount)) <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>;
+    }
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">false</span>;  <span class="hljs-comment">// insufficient funds, decided on the value we failed to change</span>
+}</code></pre>
+    <p><b>Why.</b> The check and the act are two atomic operations with a window between them. The CAS version makes the decision and the update a single step on the same observed value: if anyone changed the balance, the CAS fails and the condition is re-evaluated on the fresh value. Thread start-up latency makes either outcome common, which is why output is not compared here.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print on a 64-bit desktop or server platform (x86-64 or ARM64)?</p>
+<pre data-run="ch05-lock-free-query"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Big</span> { <span class="hljs-type">long</span> a, b, c; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::cout &lt;&lt; std::atomic&lt;<span class="hljs-type">int</span>&gt;::is_always_lock_free
+              &lt;&lt; std::atomic&lt;<span class="hljs-type">long</span> <span class="hljs-type">long</span>&gt;::is_always_lock_free
+              &lt;&lt; std::atomic&lt;Big&gt;::is_always_lock_free &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::atomic&lt;Big&gt; big{Big{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>}};
+    Big copy = big.<span class="hljs-built_in">load</span>();
+    std::cout &lt;&lt; copy.a + copy.b + copy.c &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch05-lock-free-query">110
+6</pre>
+    <p><b>Answer.</b> <code>110</code>, then <code>6</code>.</p>
+    <p><b>Why.</b> 4-byte and 8-byte atomics map onto native instructions, so they are always lock-free. A 24-byte struct has no native atomic instruction on these targets, so <code>std::atomic&lt;Big&gt;</code> is implemented with a lock hidden inside the library (GCC's <code>libatomic</code> or libc++'s lock table); it still works, as the second line shows, but it is a lock under the hood. The exact answer is implementation-specific, which is why the standard offers <code>is_always_lock_free</code> and <code>is_lock_free()</code>. On some Linux toolchains, GCC needs <code>-latomic</code> to link the third case.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch02-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a test-and-test-and-set spinlock with exponential backoff. It must satisfy <i>Lockable</i> (<code>lock()</code>, <code>try_lock()</code>, <code>unlock()</code>) so that <code>std::lock_guard</code> works, use the weakest correct memory orders, and stop hammering the cache line while the lock is held. Test it with four threads incrementing a shared counter.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Acquire with one <code>exchange(true, acquire)</code>; if it returns <code>true</code> the lock was taken, so spin on a relaxed load (which hits the local cache) until it looks free, pausing between checks with a growing backoff, then retry the exchange. <code>try_lock</code> checks with a cheap load first so a failing <code>try_lock</code> does not steal the line. Unlock is a release store.</p>
+<pre data-run="ch05-code-ttas" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">TTASLock</span> {
+    std::atomic&lt;<span class="hljs-type">bool</span>&gt; locked_{<span class="hljs-literal">false</span>};
+
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">pause</span><span class="hljs-params">()</span> </span>{
+<span class="hljs-meta">#<span class="hljs-keyword">if</span> defined(__x86_64__) || defined(__i386__)</span>
+        __builtin_ia32_pause();
+<span class="hljs-meta">#<span class="hljs-keyword">elif</span> defined(__aarch64__)</span>
+        <span class="hljs-function"><span class="hljs-keyword">asm</span> <span class="hljs-title">volatile</span><span class="hljs-params">(<span class="hljs-string">&quot;yield&quot;</span>)</span></span>;
+<span class="hljs-meta">#<span class="hljs-keyword">endif</span></span>
+    }
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-type">int</span> backoff = <span class="hljs-number">1</span>;
+        <span class="hljs-keyword">for</span> (;;) {
+            <span class="hljs-keyword">if</span> (!locked_.<span class="hljs-built_in">exchange</span>(<span class="hljs-literal">true</span>, std::memory_order_acquire)) <span class="hljs-keyword">return</span>;
+            <span class="hljs-keyword">while</span> (locked_.<span class="hljs-built_in">load</span>(std::memory_order_relaxed)) {
+                <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; backoff; ++i) <span class="hljs-built_in">pause</span>();
+                <span class="hljs-keyword">if</span> (backoff &lt; <span class="hljs-number">1024</span>) backoff *= <span class="hljs-number">2</span>;
+                <span class="hljs-keyword">else</span> std::this_thread::<span class="hljs-built_in">yield</span>();
+            }
+        }
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">try_lock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">return</span> !locked_.<span class="hljs-built_in">load</span>(std::memory_order_relaxed) &amp;&amp;
+               !locked_.<span class="hljs-built_in">exchange</span>(<span class="hljs-literal">true</span>, std::memory_order_acquire);
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">()</span> </span>{ locked_.<span class="hljs-built_in">store</span>(<span class="hljs-literal">false</span>, std::memory_order_release); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    TTASLock lk;
+    <span class="hljs-type">long</span> counter = <span class="hljs-number">0</span>;  <span class="hljs-comment">// guarded by lk</span>
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; <span class="hljs-number">4</span>; ++t)
+        ts.<span class="hljs-built_in">emplace_back</span>([&amp;] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">50000</span>; ++i) {
+                std::lock_guard&lt;TTASLock&gt; <span class="hljs-built_in">g</span>(lk);
+                ++counter;
+            }
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; lk.<span class="hljs-built_in">try_lock</span>() &lt;&lt; lk.<span class="hljs-built_in">try_lock</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    lk.<span class="hljs-built_in">unlock</span>();
+}</code></pre>
+<pre class="out" data-out="ch05-code-ttas">200000
+10</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) uncontended: one RMW to lock, one store to unlock. Pitfalls: spinning on <code>exchange</code> instead of a load (cache-line ping-pong); using seq_cst everywhere (correct but slower on ARM); unbounded spinning when the holder may be preempted, which is why the loop eventually yields; forgetting that this lock is unfair, so a thread can starve. The <code>pause</code>/<code>yield</code> hint is guarded by architecture macros so the code stays portable.</p>
+    <p class="rating">Estimated rating: ~1400 · short code, but needs the TTAS insight and correct acquire/release placement</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a FIFO <b>ticket lock</b> with two counters, so threads acquire the lock in the order they arrived (bounded waiting). Provide <code>lock()</code>, <code>unlock()</code> and a non-blocking <code>try_lock()</code>, and test it with four threads.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>next_</code> hands out tickets with <code>fetch_add</code>, which always succeeds and orders arrivals. Each thread waits until <code>serving_</code> equals its ticket, with an acquire load. Only the owner changes <code>serving_</code>, so unlock is a relaxed load plus a release store of the next number, not an RMW. <code>try_lock</code> takes a ticket only if it would be served at once: read <code>serving_</code> as <code>s</code>, then CAS <code>next_</code> from <code>s</code> to <code>s + 1</code>. If the CAS succeeds, nobody else held or was queued for the lock, and since <code>serving_</code> never passes <code>next_</code>, it still equals <code>s</code>.</p>
+<pre data-run="ch05-code-ticket" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">TicketLock</span> {
+    std::atomic&lt;<span class="hljs-type">unsigned</span>&gt; next_{<span class="hljs-number">0</span>};     <span class="hljs-comment">// next ticket to hand out</span>
+    std::atomic&lt;<span class="hljs-type">unsigned</span>&gt; serving_{<span class="hljs-number">0</span>};  <span class="hljs-comment">// ticket allowed in</span>
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-type">unsigned</span> my = next_.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+        <span class="hljs-keyword">while</span> (serving_.<span class="hljs-built_in">load</span>(std::memory_order_acquire) != my) std::this_thread::<span class="hljs-built_in">yield</span>();
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">try_lock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-type">unsigned</span> s = serving_.<span class="hljs-built_in">load</span>(std::memory_order_acquire);
+        <span class="hljs-comment">// succeed only if the next ticket is the one being served: no holder, no queue</span>
+        <span class="hljs-keyword">return</span> next_.<span class="hljs-built_in">compare_exchange_strong</span>(s, s + <span class="hljs-number">1</span>, std::memory_order_acquire,
+                                             std::memory_order_relaxed);
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-comment">// only the owner writes serving_, so a plain load plus store is enough</span>
+        <span class="hljs-type">unsigned</span> s = serving_.<span class="hljs-built_in">load</span>(std::memory_order_relaxed);
+        serving_.<span class="hljs-built_in">store</span>(s + <span class="hljs-number">1</span>, std::memory_order_release);
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    TicketLock lk;
+    <span class="hljs-type">long</span> counter = <span class="hljs-number">0</span>;        <span class="hljs-comment">// guarded by lk</span>
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; <span class="hljs-number">4</span>; ++t)
+        ts.<span class="hljs-built_in">emplace_back</span>([&amp;] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">20000</span>; ++i) {
+                std::lock_guard&lt;TicketLock&gt; <span class="hljs-built_in">g</span>(lk);
+                ++counter;
+            }
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; lk.<span class="hljs-built_in">try_lock</span>() &lt;&lt; lk.<span class="hljs-built_in">try_lock</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    lk.<span class="hljs-built_in">unlock</span>();
+}</code></pre>
+<pre class="out" data-out="ch05-code-ticket">80000
+10</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per operation, strict FIFO. Unsigned wrap-around is harmless because only equality is compared. Pitfalls: all waiters spin on <code>serving_</code>, so every release invalidates every waiter's cache line (MCS or Linux's qspinlock fix this); and strict FIFO hurts badly if the thread whose turn it is gets preempted, since everyone behind it waits (a "convoy"). That is why the demo yields in the spin loop. A common mistake in <code>try_lock</code> is to take a ticket with <code>fetch_add</code> and give up if it is not served yet: the ticket cannot be handed back, so every later thread waits forever. The CAS only takes a ticket that is already being served.</p>
+    <p class="rating">Estimated rating: ~1600 · needs fetch_add ordering and the single-writer unlock argument</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement Peterson's lock for two threads in portable C++ so that it is correct on x86 and ARM. Prove mutual exclusion in your test by tracking the maximum number of threads inside the critical section at once.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Use <code>std::atomic</code> for both flags and the victim variable, with <code>seq_cst</code> on the two stores and the loads in the wait loop: the algorithm needs the store-then-load order that only sequential consistency (or a full fence) provides. Writing "victim = me" is equivalent to the textbook "turn = other". The unlock can be a release store. A side atomic counts how many threads are inside.</p>
+<pre data-run="ch05-code-peterson" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Peterson</span> {
+    std::atomic&lt;<span class="hljs-type">bool</span>&gt; interested_[<span class="hljs-number">2</span>] = {<span class="hljs-literal">false</span>, <span class="hljs-literal">false</span>};
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; victim_{<span class="hljs-number">0</span>};
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{
+        <span class="hljs-type">const</span> <span class="hljs-type">int</span> other = <span class="hljs-number">1</span> - me;
+        interested_[me].<span class="hljs-built_in">store</span>(<span class="hljs-literal">true</span>, std::memory_order_seq_cst);
+        victim_.<span class="hljs-built_in">store</span>(me, std::memory_order_seq_cst);  <span class="hljs-comment">// &quot;after you&quot;</span>
+        <span class="hljs-keyword">while</span> (interested_[other].<span class="hljs-built_in">load</span>(std::memory_order_seq_cst) &amp;&amp;
+               victim_.<span class="hljs-built_in">load</span>(std::memory_order_seq_cst) == me) {
+            std::this_thread::<span class="hljs-built_in">yield</span>();
+        }
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">(<span class="hljs-type">int</span> me)</span> </span>{ interested_[me].<span class="hljs-built_in">store</span>(<span class="hljs-literal">false</span>, std::memory_order_release); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Peterson p;
+    <span class="hljs-type">int</span> counter = <span class="hljs-number">0</span>;      <span class="hljs-comment">// guarded by p</span>
+    <span class="hljs-type">int</span> max_inside = <span class="hljs-number">0</span>;   <span class="hljs-comment">// guarded by p</span>
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; inside{<span class="hljs-number">0</span>};
+    <span class="hljs-keyword">auto</span> work = [&amp;](<span class="hljs-type">int</span> me) {
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">50000</span>; ++i) {
+            p.<span class="hljs-built_in">lock</span>(me);
+            <span class="hljs-type">int</span> now = inside.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>) + <span class="hljs-number">1</span>;
+            <span class="hljs-keyword">if</span> (now &gt; max_inside) max_inside = now;
+            ++counter;
+            inside.<span class="hljs-built_in">fetch_sub</span>(<span class="hljs-number">1</span>);
+            p.<span class="hljs-built_in">unlock</span>(me);
+        }
+    };
+    <span class="hljs-function">std::thread <span class="hljs-title">a</span><span class="hljs-params">(work, <span class="hljs-number">0</span>)</span>, <span class="hljs-title">b</span><span class="hljs-params">(work, <span class="hljs-number">1</span>)</span></span>;
+    a.<span class="hljs-built_in">join</span>();
+    b.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; max_inside &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch05-code-peterson">100000 1</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) per acquisition without contention, with a bound of one bypass under contention. Pitfalls: weakening the stores to release or the loads to acquire (store-load reordering returns and the lock breaks); using <code>volatile</code>; extending it to N threads naively (use Lamport's bakery or a filter lock). It is a teaching algorithm: a single <code>exchange</code> does the same job for any number of threads.</p>
+    <p class="rating">Estimated rating: ~1700 · easy to type, hard to justify the memory orders correctly</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a lock-free multi-producer stack of <code>int</code> that supports concurrent <code>push</code> and a <code>drain_sum()</code> that atomically takes all current elements and returns their sum. It must not suffer from ABA and must not leak memory.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>push</code> is the classic Treiber CAS loop: point the new node at the current head, then CAS the head from that value to the new node; on failure CAS refreshes <code>n-&gt;next</code> with the head it saw. Instead of a single-node <code>pop</code> (which has the ABA and reclamation problems), <code>drain_sum</code> takes the entire list with one <code>exchange(nullptr)</code>, after which the detached nodes belong to one thread and can be freed safely.</p>
+<pre data-run="ch05-code-treiber" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">PushStack</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> { <span class="hljs-type">int</span> value; Node* next; };
+    std::atomic&lt;Node*&gt; head_{<span class="hljs-literal">nullptr</span>};
+<span class="hljs-keyword">public</span>:
+    ~<span class="hljs-built_in">PushStack</span>() { <span class="hljs-built_in">free_list</span>(head_.<span class="hljs-built_in">load</span>()); }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> </span>{
+        Node* n = <span class="hljs-keyword">new</span> Node{v, head_.<span class="hljs-built_in">load</span>(std::memory_order_relaxed)};
+        <span class="hljs-comment">// on failure, n-&gt;next is refreshed with the current head</span>
+        <span class="hljs-keyword">while</span> (!head_.<span class="hljs-built_in">compare_exchange_weak</span>(n-&gt;next, n, std::memory_order_release,
+                                            std::memory_order_relaxed)) { }
+    }
+
+    <span class="hljs-comment">// Detach the whole list in one atomic step: no ABA, no use after free.</span>
+    <span class="hljs-function"><span class="hljs-type">long</span> <span class="hljs-title">drain_sum</span><span class="hljs-params">()</span> </span>{
+        Node* n = head_.<span class="hljs-built_in">exchange</span>(<span class="hljs-literal">nullptr</span>, std::memory_order_acquire);
+        <span class="hljs-type">long</span> sum = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (Node* p = n; p; p = p-&gt;next) sum += p-&gt;value;
+        <span class="hljs-built_in">free_list</span>(n);
+        <span class="hljs-keyword">return</span> sum;
+    }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">free_list</span><span class="hljs-params">(Node* n)</span> </span>{
+        <span class="hljs-keyword">while</span> (n) { Node* next = n-&gt;next; <span class="hljs-keyword">delete</span> n; n = next; }
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    PushStack s;
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; <span class="hljs-number">4</span>; ++t)
+        ts.<span class="hljs-built_in">emplace_back</span>([&amp;s, t] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">1</span>; i &lt;= <span class="hljs-number">1000</span>; ++i) s.<span class="hljs-built_in">push</span>(t * <span class="hljs-number">1000</span> + i); });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; s.<span class="hljs-built_in">drain_sum</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; s.<span class="hljs-built_in">drain_sum</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch05-code-treiber">8002000
+0</pre>
+    <p><b>Complexity and pitfalls.</b> Push is lock-free (some thread always makes progress) with O(1) expected work; drain is O(n) after one atomic. The release on push pairs with the acquire on drain, so node contents are visible to the draining thread. Pitfalls: a single-node pop with <code>head.compare_exchange(old, old-&gt;next)</code> is the textbook ABA bug and also reads <code>old-&gt;next</code> after another thread may have freed <code>old</code>; and every lock-free container needs a reclamation plan (hazard pointers, epochs, or a design like this one). This "push many, take all" shape is used in real systems, for example for deferred work queues.</p>
+    <p class="rating">Estimated rating: ~1800 · the CAS loop is standard; seeing that exchange sidesteps ABA is the insight</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement a futex-style mutex with the three-state algorithm (0 free, 1 locked, 2 locked with possible waiters). Waiters must sleep rather than spin, the uncontended path must not touch the kernel, and unlock must wake a sleeper only when one may exist. Use C++20 <code>std::atomic::wait</code> and <code>notify_one</code> so it is portable. Test with eight threads.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Lock tries CAS 0 → 1. If that fails, set the state to 2 with <code>exchange</code>: if the old value was 0 you now own it (pessimistically marked contended); otherwise sleep with <code>wait(2)</code>, which returns immediately if the value is no longer 2, then retry the exchange. Unlock exchanges to 0 and calls <code>notify_one</code> only if the old value was 2. <code>std::atomic::wait</code> is built on futex on Linux, <code>ulock</code> on macOS and <code>WaitOnAddress</code> on Windows.</p>
+<pre data-run="ch05-code-futex-mutex" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-comment">// 0 = unlocked, 1 = locked with no waiters, 2 = locked and maybe waiters</span>
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">FutexMutex</span> {
+    std::atomic&lt;<span class="hljs-type">int</span>&gt; state_{<span class="hljs-number">0</span>};
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">lock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-type">int</span> c = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">if</span> (state_.<span class="hljs-built_in">compare_exchange_strong</span>(c, <span class="hljs-number">1</span>, std::memory_order_acquire)) <span class="hljs-keyword">return</span>;  <span class="hljs-comment">// fast path</span>
+        <span class="hljs-keyword">if</span> (c != <span class="hljs-number">2</span>) c = state_.<span class="hljs-built_in">exchange</span>(<span class="hljs-number">2</span>, std::memory_order_acquire);
+        <span class="hljs-keyword">while</span> (c != <span class="hljs-number">0</span>) {
+            state_.<span class="hljs-built_in">wait</span>(<span class="hljs-number">2</span>, std::memory_order_relaxed);  <span class="hljs-comment">// sleeps only while state_ == 2</span>
+            c = state_.<span class="hljs-built_in">exchange</span>(<span class="hljs-number">2</span>, std::memory_order_acquire);
+        }
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">try_lock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-type">int</span> c = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">return</span> state_.<span class="hljs-built_in">compare_exchange_strong</span>(c, <span class="hljs-number">1</span>, std::memory_order_acquire);
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">unlock</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (state_.<span class="hljs-built_in">exchange</span>(<span class="hljs-number">0</span>, std::memory_order_release) == <span class="hljs-number">2</span>) state_.<span class="hljs-built_in">notify_one</span>();  <span class="hljs-comment">// slow path</span>
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    FutexMutex m;
+    <span class="hljs-type">long</span> counter = <span class="hljs-number">0</span>;  <span class="hljs-comment">// guarded by m</span>
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> t = <span class="hljs-number">0</span>; t &lt; <span class="hljs-number">8</span>; ++t)
+        ts.<span class="hljs-built_in">emplace_back</span>([&amp;] {
+            <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">20000</span>; ++i) {
+                std::lock_guard&lt;FutexMutex&gt; <span class="hljs-built_in">g</span>(m);
+                ++counter;
+            }
+        });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; counter &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    std::cout &lt;&lt; m.<span class="hljs-built_in">try_lock</span>() &lt;&lt; m.<span class="hljs-built_in">try_lock</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+    m.<span class="hljs-built_in">unlock</span>();
+}</code></pre>
+<pre class="out" data-out="ch05-code-futex-mutex">160000
+10</pre>
+    <p><b>Complexity and pitfalls.</b> Uncontended lock and unlock are one atomic each, no system call. Pitfalls: a two-state version (0/1) must call wake on every unlock, because it cannot tell whether anyone sleeps; setting the state to 1 instead of 2 after waking can lose a wake-up for the remaining sleepers; and checking "is it 2?" then sleeping as two steps reintroduces the lost wake-up that the atomic compare inside <code>FUTEX_WAIT</code> (and <code>atomic::wait</code>) exists to prevent. Unlock uses <code>exchange</code>, not a store, because it must learn the old state.</p>
+    <p class="rating">Estimated rating: ~2100 · subtle protocol; lost wake-ups and the reason for state 2 are the interview</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>A single <code>std::atomic&lt;long&gt;</code> hit counter is the hottest line in your service. Implement a sharded counter: <code>add(shard, v)</code> from many threads and an approximate <code>read()</code> that is exact once writers stop. Avoid false sharing.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Give each shard its own atomic, aligned to a cache line so two shards never share one, and let each thread pick a shard (its index, or a hash of its thread id). <code>add</code> is a relaxed <code>fetch_add</code> on a line that, ideally, only one core writes. <code>read</code> sums the shards with relaxed loads. Relaxed is enough because no other data is published through the counter.</p>
+<pre data-run="ch05-code-sharded" data-flags="tsan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;thread&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ShardedCounter</span> {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kLine = <span class="hljs-number">64</span>;  <span class="hljs-comment">// typical cache line size</span>
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">alignas</span>(kLine) Slot { std::atomic&lt;<span class="hljs-type">long</span>&gt; n{<span class="hljs-number">0</span>}; };
+    std::vector&lt;Slot&gt; slots_;
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ShardedCounter</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> shards)</span> : slots_(shards) {</span>}
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">add</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> shard, <span class="hljs-type">long</span> v)</span> </span>{
+        slots_[shard % slots_.<span class="hljs-built_in">size</span>()].n.<span class="hljs-built_in">fetch_add</span>(v, std::memory_order_relaxed);
+    }
+    <span class="hljs-function"><span class="hljs-type">long</span> <span class="hljs-title">read</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{  <span class="hljs-comment">// a snapshot; exact once writers have stopped</span>
+        <span class="hljs-type">long</span> sum = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Slot&amp; s : slots_) sum += s.n.<span class="hljs-built_in">load</span>(std::memory_order_relaxed);
+        <span class="hljs-keyword">return</span> sum;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">ShardedCounter <span class="hljs-title">c</span><span class="hljs-params">(<span class="hljs-number">4</span>)</span></span>;
+    std::vector&lt;std::thread&gt; ts;
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> t = <span class="hljs-number">0</span>; t &lt; <span class="hljs-number">4</span>; ++t)
+        ts.<span class="hljs-built_in">emplace_back</span>([&amp;c, t] { <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100000</span>; ++i) c.<span class="hljs-built_in">add</span>(t, <span class="hljs-number">1</span>); });
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span>&amp; t : ts) t.<span class="hljs-built_in">join</span>();
+    std::cout &lt;&lt; c.<span class="hljs-built_in">read</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+}</code></pre>
+<pre class="out" data-out="ch05-code-sharded">400000</pre>
+    <p><b>Complexity and pitfalls.</b> <code>add</code> is O(1) with no cross-core traffic when shards are thread-private; <code>read</code> is O(shards). Pitfalls: packing shards into a plain <code>std::atomic&lt;long&gt;[]</code> puts eight of them on one 64-byte line and recreates the contention (false sharing, <a href="../cpp/#ch17">C++ guide ch 17</a>); <code>read()</code> during updates is a snapshot, not a linearisable total; and before C++17, <code>std::vector</code> did not honour over-aligned element types (C++17 aligned <code>new</code> fixed that). <code>std::hardware_destructive_interference_size</code> is the standard name for the padding size, but using it in a header can change ABI between compiler flags, so many codebases hard-code 64 or 128.</p>
+    <p class="rating">Estimated rating: ~1300 · simple code; the value is knowing why one atomic does not scale</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch02-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>Data race</b> = conflicting accesses, one non-atomic, no happens-before: UB for the whole program. <b>Race condition</b> = timing-dependent logic bug, possible with atomics only. TSan finds the first, not the second.</li>
+<li><code>counter++</code> is load, add, store. Fix with <code>fetch_add</code>, a mutex, or per-thread counters. <code>x = x + 1</code> on an atomic is still two operations. <code>volatile</code> fixes nothing.</li>
+<li>Critical section: <b>mutual exclusion, progress, bounded waiting</b>. Disabling interrupts is privileged and useless on multiprocessors. Strict alternation fails progress; TAS spinlocks fail bounded waiting.</li>
+<li><b>Peterson</b> needs store→load ordering: breaks on x86 and ARM without seq_cst or a full fence. Release/acquire is not enough.</li>
+<li>Primitives: TAS, swap, fetch-add (consensus 2) and CAS, LL/SC (universal). CAS writes the observed value into <code>expected</code> on failure; <code>_weak</code> may fail spuriously, use it in loops. Watch for ABA.</li>
+<li>Spinlock: TTAS plus pause and backoff, acquire on lock, release on unlock. Spin only for very short sections with a running holder; never on one core. Ticket and MCS locks add fairness.</li>
+<li>Mutex = atomic word + futex. Fast path: one CAS, no syscall. Slow path: <code>FUTEX_WAIT</code> re-checks the value atomically, so wakes are not lost. Three states let unlock skip the wake.</li>
+<li>Unlock is a release, lock is an acquire: they create happens-before. Lock every access to guarded data, reads included. Uncontended locks are cheap; contention and false sharing (<a href="../cpp/#ch17">C++ guide ch 17</a>) are what hurt.</li>
+</ul>
+</section>

@@ -1,0 +1,1243 @@
+---
+title: Perfect forwarding
+part: Part D · Move semantics
+lede: Perfect forwarding lets a template pass its arguments on to another function exactly as the caller supplied them: lvalues stay lvalues, rvalues stay rvalues, const stays const. It is how `std::make_unique`, `emplace_back`, `std::invoke` and every logging or timing wrapper avoid extra copies. Interviewers ask about it because it combines template deduction, reference collapsing and value categories, and because the failure cases are well known.
+desc: Forwarding references, reference collapsing, std::forward, pitfalls
+hours: 4
+prereqs: [Ch 18](#ch18) (value categories, std::move), basic templates
+---
+<section id="ch19-problem" data-roles="th"><div class="sec-head"><h2>The forwarding problem</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A wrapper sits between a caller and a target. Whatever the caller passes, the target should see the same thing it would have seen without the wrapper. If the caller passes a temporary, the target should be able to move from it; if the caller passes a named object, the target must copy (or modify it, if it takes a non-const reference).</p>
+<p>Before C++11 there was no good way to write such a wrapper. Each obvious parameter type loses something:</p>
+<ul>
+<li><code>template &lt;class A&gt; void wrap(A&amp; a)</code> rejects rvalues: <code>wrap(T{})</code> does not compile.</li>
+<li><code>template &lt;class A&gt; void wrap(const A&amp; a)</code> accepts everything but adds <code>const</code>, so the target can never move from a temporary and cannot take a non-const reference.</li>
+<li>Overloading on both <code>A&amp;</code> and <code>const A&amp;</code> for each parameter needs 2<sup>n</sup> overloads for n parameters, and still cannot express "rvalue".</li>
+</ul>
+<p>C++11 solved it with two pieces: a special deduction rule for <code>T&amp;&amp;</code> in a template, and <code>std::forward</code>, which restores the original value category inside the wrapper.</p>
+<pre data-run="ch21-problem"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-built_in">T</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  copy&quot;</span>); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  move&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">target</span><span class="hljs-params">(T)</span> </span>{}
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">A</span>&gt; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">by_cref</span><span class="hljs-params">(<span class="hljs-type">const</span> A&amp; a)</span> </span>{ <span class="hljs-built_in">target</span>(a); }               <span class="hljs-comment">// always copies</span>
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">A</span>&gt; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">perfect</span><span class="hljs-params">(A&amp;&amp; a)</span> </span>{ <span class="hljs-built_in">target</span>(std::forward&lt;A&gt;(a)); }   <span class="hljs-comment">// copies or moves</span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    T t;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;by_cref(lvalue):&quot;</span>);  <span class="hljs-built_in">by_cref</span>(t);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;by_cref(rvalue):&quot;</span>);  <span class="hljs-built_in">by_cref</span>(T{});
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;perfect(lvalue):&quot;</span>);  <span class="hljs-built_in">perfect</span>(t);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;perfect(rvalue):&quot;</span>);  <span class="hljs-built_in">perfect</span>(T{});
+}</code></pre>
+<pre class="out" data-out="ch21-problem">by_cref(lvalue):
+  copy
+by_cref(rvalue):
+  copy
+perfect(lvalue):
+  copy
+perfect(rvalue):
+  move</pre>
+<p>Calling <code>target(T{})</code> directly would print nothing at all (the prvalue initialises the parameter in place, <a href="#ch21">Ch 21</a>). Perfect forwarding gets as close as a reference parameter can: the temporary has to be materialised to bind to <code>a</code>, so one move remains. That residual move is the reason <code>emplace_back</code> takes constructor arguments rather than an object (<a href="#ch20">Ch 20</a>).</p>
+</section>
+
+<section id="ch19-forwarding-refs" data-roles="th"><div class="sec-head"><h2>Forwarding references vs rvalue references</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The syntax <code>&amp;&amp;</code> means two different things. In <code>void f(Widget&amp;&amp; w)</code> it is an rvalue reference: only rvalues bind. In <code>template &lt;class T&gt; void f(T&amp;&amp; x)</code>, where <code>T</code> is deduced from this very argument, it is a <b>forwarding reference</b> (Scott Meyers' older name: "universal reference"), and it binds to everything. The standard defines it in <code>[temp.deduct.call]/3</code>: "an rvalue reference to a cv-unqualified template parameter that does not represent a template parameter of a class template (during class template argument deduction)". The parenthesised clause only matters for CTAD. A member function of a class template such as <code>V&lt;T&gt;::push(T&amp;&amp;)</code> is excluded for a simpler reason: its <code>T</code> is already fixed, so no deduction happens at the call.</p>
+<p>The conditions are strict. All of them must hold:</p>
+<ol>
+<li>the form is exactly <code>T&amp;&amp;</code>, with no <code>const</code> and no wrapping template;</li>
+<li><code>T</code> is a template parameter of the function template itself (or <code>auto</code>);</li>
+<li>deduction happens for that call.</li>
+</ol>
+<div class="table-wrap"><table>
+<thead><tr><th>Declaration</th><th>Forwarding reference?</th><th>Reason</th></tr></thead>
+<tbody>
+<tr><td><code>template &lt;class T&gt; void f(T&amp;&amp; x)</code></td><td>yes</td><td>the canonical form</td></tr>
+<tr><td><code>auto&amp;&amp; x = expr;</code></td><td>yes</td><td><code>auto</code> uses template deduction rules</td></tr>
+<tr><td><code>[](auto&amp;&amp; x) { }</code></td><td>yes</td><td>a generic lambda is a template <code>operator()</code></td></tr>
+<tr><td><code>template &lt;class... A&gt; void f(A&amp;&amp;... a)</code></td><td>yes, each one</td><td>a pack of forwarding references</td></tr>
+<tr><td><code>void f(Widget&amp;&amp; w)</code></td><td>no</td><td>no deduction</td></tr>
+<tr><td><code>template &lt;class T&gt; void f(const T&amp;&amp; x)</code></td><td>no</td><td><code>const</code> breaks the special rule: binds only rvalues</td></tr>
+<tr><td><code>template &lt;class T&gt; void f(std::vector&lt;T&gt;&amp;&amp; v)</code></td><td>no</td><td>the reference is to <code>vector&lt;T&gt;</code>, not to <code>T</code></td></tr>
+<tr><td><code>template &lt;class T&gt; struct V { void push(T&amp;&amp; x); };</code></td><td>no</td><td><code>T</code> was fixed when <code>V&lt;int&gt;</code> was instantiated</td></tr>
+<tr><td><code>template &lt;class T&gt; struct V { template &lt;class U&gt; void emplace(U&amp;&amp; x); };</code></td><td>yes</td><td><code>U</code> is deduced per call</td></tr>
+</tbody></table></div>
+<p>This is why <code>std::vector&lt;T&gt;::push_back</code> needs two overloads (<code>const T&amp;</code> and <code>T&amp;&amp;</code>, the second being a real rvalue reference), while <code>emplace_back</code> is a single variadic template with forwarding references.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"<code>template &lt;class T&gt; void f(const T&amp;&amp; x)</code> is a universal reference that accepts const objects." It is not. It is an rvalue reference to const and rejects every lvalue: <code>int i; f(i);</code> does not compile. The forwarding rule applies only to the exact form <code>T&amp;&amp;</code>.</p></div>
+</section>
+
+<section id="ch19-deduction" data-roles="th"><div class="sec-head"><h2>Deduction and reference collapsing</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>For a parameter <code>T&amp;&amp;</code> where <code>T</code> is deduced, the language adds one special rule (<code>[temp.deduct.call]/3</code>): <b>if the argument is an lvalue of type <code>U</code>, <code>T</code> is deduced as <code>U&amp;</code></b>. If the argument is an rvalue, <code>T</code> is deduced as plain <code>U</code>. The parameter type is then <code>T&amp;&amp;</code> with <code>T</code> substituted, which can produce a "reference to reference". C++ never lets you write that directly, but it can arise through templates and aliases, and the <b>reference collapsing</b> rules turn it back into a single reference.</p>
+<div class="table-wrap"><table>
+<thead><tr><th><code>T</code> is</th><th><code>T&amp;</code> becomes</th><th><code>T&amp;&amp;</code> becomes</th></tr></thead>
+<tbody>
+<tr><td><code>U</code></td><td><code>U&amp;</code></td><td><code>U&amp;&amp;</code></td></tr>
+<tr><td><code>U&amp;</code></td><td><code>U&amp;</code> (<code>&amp; &amp;</code> → <code>&amp;</code>)</td><td><code>U&amp;</code> (<code>&amp; &amp;&amp;</code> → <code>&amp;</code>)</td></tr>
+<tr><td><code>U&amp;&amp;</code></td><td><code>U&amp;</code> (<code>&amp;&amp; &amp;</code> → <code>&amp;</code>)</td><td><code>U&amp;&amp;</code> (<code>&amp;&amp; &amp;&amp;</code> → <code>&amp;&amp;</code>)</td></tr>
+</tbody></table></div>
+<p>One sentence covers it: <b>if either reference is an lvalue reference, the result is an lvalue reference; only <code>&amp;&amp; &amp;&amp;</code> gives <code>&amp;&amp;</code></b>. Collapsing applies in four places: template instantiation, <code>auto</code> deduction, <code>typedef</code>/<code>using</code> aliases and <code>decltype</code>.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 250" role="img" aria-label="An lvalue argument deduces T as int&amp; and the parameter collapses to int&amp;; an rvalue argument deduces T as int and the parameter is int&amp;&amp;">
+<defs><marker id="ch19-c21a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="360" y="24" text-anchor="middle" class="t-bold t-mono">template &lt;class T&gt; void f(T&amp;&amp; x);</text>
+<rect x="20" y="50" width="150" height="50" rx="6" class="d-box"/>
+<text x="95" y="72" text-anchor="middle" class="t-mono">f(i)</text>
+<text x="95" y="90" text-anchor="middle" class="t-small t-muted">int lvalue</text>
+<rect x="215" y="50" width="150" height="50" rx="6" class="d-key"/>
+<text x="290" y="72" text-anchor="middle" class="t-mono">T = int&amp;</text>
+<text x="290" y="90" text-anchor="middle" class="t-small t-muted">special lvalue rule</text>
+<rect x="410" y="50" width="130" height="50" rx="6" class="d-soft"/>
+<text x="475" y="80" text-anchor="middle" class="t-mono">int&amp; &amp;&amp;</text>
+<rect x="580" y="50" width="120" height="50" rx="6" class="d-acc"/>
+<text x="640" y="72" text-anchor="middle" class="t-mono t-bold">int&amp;</text>
+<text x="640" y="90" text-anchor="middle" class="t-small t-muted">x binds the lvalue</text>
+<line x1="170" y1="75" x2="212" y2="75" class="d-line" marker-end="url(#ch21-c21a)"/>
+<line x1="365" y1="75" x2="407" y2="75" class="d-line" marker-end="url(#ch21-c21a)"/>
+<line x1="540" y1="75" x2="577" y2="75" class="d-line" marker-end="url(#ch21-c21a)"/>
+<text x="560" y="44" text-anchor="middle" class="t-small t-key">collapse</text>
+<rect x="20" y="140" width="150" height="50" rx="6" class="d-box"/>
+<text x="95" y="162" text-anchor="middle" class="t-mono">f(42)</text>
+<text x="95" y="180" text-anchor="middle" class="t-small t-muted">int prvalue</text>
+<rect x="215" y="140" width="150" height="50" rx="6" class="d-key"/>
+<text x="290" y="162" text-anchor="middle" class="t-mono">T = int</text>
+<text x="290" y="180" text-anchor="middle" class="t-small t-muted">ordinary deduction</text>
+<rect x="410" y="140" width="130" height="50" rx="6" class="d-soft"/>
+<text x="475" y="170" text-anchor="middle" class="t-mono">int &amp;&amp;</text>
+<rect x="580" y="140" width="120" height="50" rx="6" class="d-acc"/>
+<text x="640" y="162" text-anchor="middle" class="t-mono t-bold">int&amp;&amp;</text>
+<text x="640" y="180" text-anchor="middle" class="t-small t-muted">x binds the temporary</text>
+<line x1="170" y1="165" x2="212" y2="165" class="d-line" marker-end="url(#ch21-c21a)"/>
+<line x1="365" y1="165" x2="407" y2="165" class="d-line" marker-end="url(#ch21-c21a)"/>
+<line x1="540" y1="165" x2="577" y2="165" class="d-line" marker-end="url(#ch21-c21a)"/>
+<text x="360" y="222" text-anchor="middle" class="t-small">T remembers the caller's value category: a reference type for lvalues, a non-reference for rvalues.</text>
+<text x="360" y="240" text-anchor="middle" class="t-small t-muted">Inside f, the expression x is an lvalue in both cases. std::forward&lt;T&gt; reads T to undo that.</text>
+</svg></div><figcaption><b>T encodes the category.</b> The deduced <code>T</code> is the only place the original value category survives; the parameter <code>x</code> itself is always a named lvalue inside the body.</figcaption></figure>
+
+<pre data-run="ch21-collapse"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+
+<span class="hljs-keyword">using</span> L = <span class="hljs-type">int</span>&amp;;
+<span class="hljs-keyword">using</span> R = <span class="hljs-type">int</span>&amp;&amp;;
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-function"><span class="hljs-keyword">constexpr</span> <span class="hljs-type">bool</span> <span class="hljs-title">param_is_lref</span><span class="hljs-params">(T&amp;&amp;)</span> </span>{ <span class="hljs-keyword">return</span> std::is_lvalue_reference_v&lt;T&amp;&amp;&gt;; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;L&amp;, <span class="hljs-type">int</span>&amp;&gt;);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;L&amp;&amp;, <span class="hljs-type">int</span>&amp;&gt;);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;R&amp;, <span class="hljs-type">int</span>&amp;&gt;);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;R&amp;&amp;, <span class="hljs-type">int</span>&amp;&amp;&gt;);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-type">const</span> L, <span class="hljs-type">int</span>&amp;&gt;);      <span class="hljs-comment">// const on a reference is ignored</span>
+    <span class="hljs-type">int</span> i = <span class="hljs-number">0</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;lvalue arg -&gt; lref param: %d\n&quot;</span>, <span class="hljs-built_in">param_is_lref</span>(i));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;rvalue arg -&gt; lref param: %d\n&quot;</span>, <span class="hljs-built_in">param_is_lref</span>(<span class="hljs-number">42</span>));
+}</code></pre>
+<pre class="out" data-out="ch21-collapse">lvalue arg -&gt; lref param: 1
+rvalue arg -&gt; lref param: 0</pre>
+<p>The line <code>const L</code> shows a related rule: <code>const</code> applied to a reference type through an alias is silently dropped (references cannot be reseated anyway), so it stays <code>int&amp;</code>, not <code>const int&amp;</code>. This matters when people write <code>const T&amp;</code> in a template where <code>T</code> may already be a reference.</p>
+<p>A <code>const</code> lvalue deduces <code>T = const U&amp;</code>, so constness is part of what is forwarded. The forwarding reference never strips <code>const</code>; it just carries it along, which is why a target can never move from a const argument.</p>
+</section>
+
+<section id="ch19-forward" data-roles="th"><div class="sec-head"><h2>std::forward and why it needs the template argument</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Inside the wrapper the parameter has a name, so it is an lvalue, whatever was passed. <code>std::forward&lt;T&gt;(x)</code> is a <b>conditional cast</b>: it casts <code>x</code> to <code>T&amp;&amp;</code>. By reference collapsing, that is <code>U&amp;</code> when <code>T = U&amp;</code> (the caller passed an lvalue) and <code>U&amp;&amp;</code> when <code>T = U</code> (the caller passed an rvalue).</p>
+<pre data-run="ch21-forward-impl"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> my {
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> T&amp;&amp; <span class="hljs-title">forward</span><span class="hljs-params">(std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp; t)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;T&amp;&amp;&gt;(t);
+}
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> T&amp;&amp; <span class="hljs-title">forward</span><span class="hljs-params">(std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp;&amp; t)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-built_in">static_assert</span>(!std::is_lvalue_reference_v&lt;T&gt;, <span class="hljs-string">&quot;cannot forward an rvalue as an lvalue&quot;</span>);
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;T&amp;&amp;&gt;(t);
+}
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">g</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp;)</span> </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;g(const string&amp;)&quot;</span>); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">g</span><span class="hljs-params">(std::string&amp;&amp;)</span> </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;g(string&amp;&amp;)&quot;</span>); }
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">wrap</span><span class="hljs-params">(T&amp;&amp; x)</span> </span>{ <span class="hljs-built_in">g</span>(my::forward&lt;T&gt;(x)); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::string s = <span class="hljs-string">&quot;abc&quot;</span>;
+    <span class="hljs-built_in">wrap</span>(s);
+    <span class="hljs-built_in">wrap</span>(std::string{<span class="hljs-string">&quot;tmp&quot;</span>});
+    <span class="hljs-built_in">wrap</span>(std::<span class="hljs-built_in">as_const</span>(s));
+    <span class="hljs-built_in">wrap</span>(std::<span class="hljs-built_in">move</span>(s));
+}</code></pre>
+<pre class="out" data-out="ch21-forward-impl">g(const string&amp;)
+g(string&amp;&amp;)
+g(const string&amp;)
+g(string&amp;&amp;)</pre>
+<p><b>Why the explicit template argument.</b> The parameter of <code>forward</code> is <code>std::remove_reference_t&lt;T&gt;&amp;</code>. A <code>T</code> that appears only inside a nested type like <code>remove_reference_t&lt;T&gt;</code> (formally, to the left of <code>::type</code>) is a <b>non-deduced context</b> (<code>[temp.deduct.type]/5</code>), so <code>std::forward(x)</code> fails to compile. That is deliberate: the argument <code>x</code> is always an lvalue, so deduction from it would always produce the "lvalue" answer and lose the information. The caller's category lives only in the wrapper's <code>T</code>, so you must pass it in by hand.</p>
+<pre data-run="ch21-no-deduce" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">wrap</span><span class="hljs-params">(T&amp;&amp; x)</span> </span>{
+    <span class="hljs-keyword">auto</span> y = std::forward(x);   <span class="hljs-comment">// error: couldn&#x27;t deduce template parameter</span>
+    (<span class="hljs-type">void</span>)y;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{ <span class="hljs-built_in">wrap</span>(<span class="hljs-number">1</span>); }</code></pre>
+<p>The second overload (taking an rvalue) exists for expressions like <code>std::forward&lt;T&gt;(get_member(x))</code> where the inner expression is an rvalue. Its <code>static_assert</code> catches the nonsense request "forward this rvalue as an lvalue reference", which would create a dangling reference.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="std::forward casts the parameter back to an lvalue reference when T is a reference type, otherwise to an rvalue reference">
+<defs><marker id="ch19-c21b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<rect x="20" y="85" width="150" height="56" rx="6" class="d-box"/>
+<text x="95" y="108" text-anchor="middle" class="t-mono">x (named)</text>
+<text x="95" y="126" text-anchor="middle" class="t-small t-muted">always an lvalue</text>
+<rect x="230" y="85" width="180" height="56" rx="6" class="d-key"/>
+<text x="320" y="108" text-anchor="middle" class="t-mono">std::forward&lt;T&gt;(x)</text>
+<text x="320" y="126" text-anchor="middle" class="t-small t-mono">static_cast&lt;T&amp;&amp;&gt;(x)</text>
+<rect x="480" y="30" width="220" height="56" rx="6" class="d-soft"/>
+<text x="590" y="52" text-anchor="middle" class="t-mono">T = U&amp;  →  U&amp;</text>
+<text x="590" y="70" text-anchor="middle" class="t-small">lvalue: target copies</text>
+<rect x="480" y="140" width="220" height="56" rx="6" class="d-acc"/>
+<text x="590" y="162" text-anchor="middle" class="t-mono">T = U  →  U&amp;&amp;</text>
+<text x="590" y="180" text-anchor="middle" class="t-small">xvalue: target may move</text>
+<line x1="170" y1="113" x2="227" y2="113" class="d-line" marker-end="url(#ch21-c21b)"/>
+<line x1="410" y1="105" x2="477" y2="62" class="d-line" marker-end="url(#ch21-c21b)"/>
+<line x1="410" y1="121" x2="477" y2="166" class="d-line-acc" marker-end="url(#ch21-c21b)"/>
+<text x="360" y="222" text-anchor="middle" class="t-small t-muted">std::move(x) would always take the lower path, even for a caller's lvalue: that is the bug in "move a forwarding reference".</text>
+</svg></div><figcaption><b>forward is a conditional move.</b> The decision is made at compile time from <code>T</code> alone. <code>std::move</code> is the unconditional version.</figcaption></figure>
+
+<h3 id="ch19-move-vs-forward">std::move vs std::forward</h3>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th><code>std::move(x)</code></th><th><code>std::forward&lt;T&gt;(x)</code></th></tr></thead>
+<tbody>
+<tr><td>Cast</td><td>always to <code>remove_reference_t&lt;T&gt;&amp;&amp;</code></td><td>to <code>T&amp;&amp;</code>: lvalue or rvalue depending on <code>T</code></td></tr>
+<tr><td>Use on</td><td>a value you own and will not use again (locals, rvalue reference parameters, members in <code>&amp;&amp;</code> functions)</td><td>forwarding references only</td></tr>
+<tr><td>Template argument</td><td>deduced</td><td>must be written</td></tr>
+<tr><td>Wrong use</td><td>on a forwarding reference: steals from the caller's lvalue</td><td>on a non-forwarding parameter: <code>forward&lt;int&gt;(x)</code> just moves, which works but misleads readers</td></tr>
+</tbody></table></div>
+<p>Rule of thumb from <i>Effective Modern C++</i> (Items 24 and 25): <code>std::move</code> on rvalue references, <code>std::forward</code> on forwarding references, each applied <b>once, at the last use</b>.</p>
+</section>
+
+<section id="ch19-variadic" data-roles="th"><div class="sec-head"><h2>Variadic forwarding: make_unique and emplace</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Forwarding references combine with parameter packs. <code>Args&amp;&amp;... args</code> declares one forwarding reference per argument, each with its own deduced type, and <code>std::forward&lt;Args&gt;(args)...</code> expands pairwise into <code>std::forward&lt;A1&gt;(a1), std::forward&lt;A2&gt;(a2), ...</code>. This is the whole implementation of <code>std::make_unique</code> for single objects:</p>
+<pre data-run="ch21-make-unique"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> my {
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... Args&gt;
+<span class="hljs-function">std::unique_ptr&lt;T&gt; <span class="hljs-title">make_unique</span><span class="hljs-params">(Args&amp;&amp;... args)</span> </span>{
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">unique_ptr</span>&lt;T&gt;(<span class="hljs-keyword">new</span> <span class="hljs-built_in">T</span>(std::forward&lt;Args&gt;(args)...));
+}
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tracer</span> {
+    <span class="hljs-built_in">Tracer</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Tracer</span>(<span class="hljs-type">const</span> Tracer&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  copy&quot;</span>); }
+    <span class="hljs-built_in">Tracer</span>(Tracer&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  move&quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Widget</span> {
+    Tracer a, b;
+    <span class="hljs-type">int</span> n;
+    <span class="hljs-built_in">Widget</span>(<span class="hljs-type">const</span> Tracer&amp; x, Tracer&amp;&amp; y, <span class="hljs-type">int</span> k) : <span class="hljs-built_in">a</span>(x), <span class="hljs-built_in">b</span>(std::<span class="hljs-built_in">move</span>(y)), <span class="hljs-built_in">n</span>(k) {}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Tracer t;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;make_unique&lt;Widget&gt;(t, Tracer{}, 3):&quot;</span>);
+    <span class="hljs-keyword">auto</span> w = my::<span class="hljs-built_in">make_unique</span>&lt;Widget&gt;(t, Tracer{}, <span class="hljs-number">3</span>);
+    <span class="hljs-keyword">auto</span> p = my::make_unique&lt;std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt;(std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">7</span>));   <span class="hljs-comment">// move-only argument</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;n=%d **p=%d\n&quot;</span>, w-&gt;n, **p);
+}</code></pre>
+<pre class="out" data-out="ch21-make-unique">make_unique&lt;Widget&gt;(t, Tracer{}, 3):
+  copy
+  move
+n=3 **p=7</pre>
+<p>Note the parentheses in <code>new T(...)</code>. Before C++20 that meant aggregates could not be created with <code>make_unique</code> (no constructor to call); C++20's parenthesised aggregate initialisation (P0960) fixed it. Another detail: the order in which a constructor's by-value <i>parameters</i> are initialised is unspecified, so tracing programs that print from several by-value parameters can differ between GCC and Clang. The <code>Widget</code> above takes references and initialises members, which always happens in declaration order.</p>
+<p>The container version is the same idea with placement construction into already allocated storage: <code>std::allocator_traits&lt;A&gt;::construct(alloc, p, std::forward&lt;Args&gt;(args)...)</code>. <a href="#ch20">Ch 20</a> traces it in detail.</p>
+<p>Two other patterns appear often. <code>sizeof...(Args)</code> gives the pack size. And forwarding into several calls means each argument is forwarded at most once: if you pass the same pack to two functions, only the last use may forward; earlier uses must pass the plain names (lvalues).</p>
+</section>
+
+<section id="ch19-failures" data-roles="th"><div class="sec-head"><h2>When perfect forwarding fails</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>"Perfect" forwarding is not perfect. Forwarding fails when calling the target directly would work but going through a template does not. There are five classic cases (<i>Effective Modern C++</i>, Item 30), plus the logic error of forwarding twice.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Argument</th><th>Why it fails</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td>Braced initialiser <code>{1, 2, 3}</code></td><td>A braced-init-list has no type, so <code>T</code> cannot be deduced (<code>[temp.deduct.call]/1</code>)</td><td><code>auto il = {1, 2, 3}; fwd(il);</code> or name the type: <code>fwd(std::vector{1, 2, 3})</code></td></tr>
+<tr><td><code>0</code> or <code>NULL</code> as a null pointer</td><td>Deduced as <code>int</code> (or <code>long</code>); an <code>int</code> variable does not convert to a pointer</td><td><code>nullptr</code></td></tr>
+<tr><td>Name of an overloaded function or a function template</td><td>No single type to deduce</td><td><code>static_cast&lt;void(*)(int)&gt;(f)</code> or a lambda</td></tr>
+<tr><td>Bit-field <code>h.ihl</code></td><td>A non-const reference cannot bind to a bit-field</td><td>Copy it first: <code>fwd(static_cast&lt;unsigned&gt;(h.ihl))</code></td></tr>
+<tr><td><code>static const int N = 28;</code> declared but not defined</td><td>Binding a reference odr-uses <code>N</code>, which then needs a definition; link error</td><td><code>static constexpr</code> (implicitly <code>inline</code> since C++17) or an out-of-class definition</td></tr>
+</tbody></table></div>
+<pre data-run="ch21-brace" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">take</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">int</span>&gt;&amp;)</span> </span>{}
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">fwd</span><span class="hljs-params">(T&amp;&amp; x)</span> </span>{ <span class="hljs-built_in">take</span>(std::forward&lt;T&gt;(x)); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">take</span>({<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>});   <span class="hljs-comment">// fine: the parameter type is known</span>
+    <span class="hljs-built_in">fwd</span>({<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>});    <span class="hljs-comment">// error: cannot deduce T from a braced-init-list</span>
+}</code></pre>
+<pre data-run="ch21-null" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">take</span><span class="hljs-params">(<span class="hljs-type">int</span>*)</span> </span>{}
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">fwd</span><span class="hljs-params">(T&amp;&amp; x)</span> </span>{ <span class="hljs-built_in">take</span>(std::forward&lt;T&gt;(x)); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">take</span>(<span class="hljs-number">0</span>);     <span class="hljs-comment">// fine: the literal 0 is a null pointer constant</span>
+    <span class="hljs-built_in">fwd</span>(<span class="hljs-number">0</span>);      <span class="hljs-comment">// error: T = int, and an int expression does not convert to int*</span>
+}</code></pre>
+<p>All five fixes in one program, using a generic forwarder that calls any callable:</p>
+<pre data-run="ch21-fixes"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>, <span class="hljs-keyword">class</span>... A&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">fwd</span><span class="hljs-params">(F&amp;&amp; f, A&amp;&amp;... a)</span> </span>{ std::forward&lt;F&gt;(f)(std::forward&lt;A&gt;(a)...); }
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">take_vec</span><span class="hljs-params">(<span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">int</span>&gt;&amp; v)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;vector of %zu\n&quot;</span>, v.<span class="hljs-built_in">size</span>()); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">take_ptr</span><span class="hljs-params">(<span class="hljs-type">int</span>* p)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;pointer is %s\n&quot;</span>, p ? <span class="hljs-string">&quot;set&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">process</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;process(int %d)\n&quot;</span>, x); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">process</span><span class="hljs-params">(<span class="hljs-type">double</span> x)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;process(double %g)\n&quot;</span>, x); }
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Header</span> { <span class="hljs-type">unsigned</span> version : <span class="hljs-number">4</span>, ihl : <span class="hljs-number">4</span>; };
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">take_u</span><span class="hljs-params">(<span class="hljs-type">unsigned</span> u)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ihl %u\n&quot;</span>, u); }
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Limits</span> { <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> <span class="hljs-type">int</span> N = <span class="hljs-number">28</span>; };   <span class="hljs-comment">// implicitly inline: has a definition</span>
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">take_n</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">int</span>&amp; n)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;N %d\n&quot;</span>, n); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> il = {<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>};                           <span class="hljs-comment">// std::initializer_list&lt;int&gt;</span>
+    <span class="hljs-built_in">fwd</span>(take_vec, il);
+    <span class="hljs-built_in">fwd</span>(take_ptr, <span class="hljs-literal">nullptr</span>);
+    <span class="hljs-built_in">fwd</span>(<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-built_in">void</span> (*)(<span class="hljs-type">int</span>)&gt;(process), <span class="hljs-number">1</span>);
+    <span class="hljs-built_in">fwd</span>([](<span class="hljs-type">double</span> d) { <span class="hljs-built_in">process</span>(d); }, <span class="hljs-number">2.5</span>);
+    Header h{<span class="hljs-number">4</span>, <span class="hljs-number">5</span>};
+    <span class="hljs-built_in">fwd</span>(take_u, <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">unsigned</span>&gt;(h.ihl));
+    <span class="hljs-built_in">fwd</span>(take_n, Limits::N);
+}</code></pre>
+<pre class="out" data-out="ch21-fixes">vector of 3
+pointer is null
+process(int 1)
+process(double 2.5)
+ihl 5
+N 28</pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>The "static const without definition" case often links fine at <code>-O2</code> (the optimiser inlines the call, folds the value and never emits a reference to the symbol) and fails at <code>-O0</code> with "undefined reference" / "Undefined symbols". On GCC 16 and Clang 22 the program in the table fails at <code>-O0</code> and links at <code>-O2</code>; at <code>-O1</code> GCC fails while Clang links. The standard calls it ill-formed, no diagnostic required, so either outcome is "allowed". A bug that depends on the optimisation level is the worst kind. Since C++17, prefer <code>static constexpr</code> data members, which are implicitly <code>inline</code> and so are always defined.</p></div>
+
+<h3 id="ch19-forward-twice">Forwarding the same argument twice</h3>
+<p><code>std::forward</code> may hand the object to a function that moves from it. Any later use of the same parameter then sees a moved-from object. This compiles, and for lvalue arguments it even works, so tests that only pass lvalues never catch it. Forward only at the last use; earlier uses pass the plain name.</p>
+</section>
+
+<section id="ch19-greedy" data-roles="th"><div class="sec-head"><h2>Overloading on forwarding references is greedy</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A function template with a <code>T&amp;&amp;</code> parameter produces an exact match for almost any argument. Overload resolution prefers a non-template only when the two are otherwise equally good. The classic victim is a class with a forwarding constructor:</p>
+<pre data-run="ch21-greedy"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">W</span> {
+    <span class="hljs-built_in">W</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-built_in">W</span>(T&amp;&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;template ctor&quot;</span>); }
+    <span class="hljs-built_in">W</span>(<span class="hljs-type">const</span> W&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy ctor&quot;</span>); }
+    <span class="hljs-built_in">W</span>(W&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move ctor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    W a;
+    <span class="hljs-type">const</span> W ca;
+    <span class="hljs-function">W <span class="hljs-title">b</span><span class="hljs-params">(a)</span></span>;              <span class="hljs-comment">// T = W&amp;: exact match beats adding const</span>
+    <span class="hljs-function">W <span class="hljs-title">c</span><span class="hljs-params">(ca)</span></span>;             <span class="hljs-comment">// T = const W&amp;: tie, the non-template wins</span>
+    <span class="hljs-function">W <span class="hljs-title">d</span><span class="hljs-params">(std::move(a))</span></span>;   <span class="hljs-comment">// T = W: tie, the non-template wins</span>
+    <span class="hljs-function">W <span class="hljs-title">e</span><span class="hljs-params">(std::move(ca))</span></span>;  <span class="hljs-comment">// T = const W: const W&amp;&amp; beats const W&amp;</span>
+}</code></pre>
+<pre class="out" data-out="ch21-greedy">template ctor
+copy ctor
+move ctor
+template ctor</pre>
+<p>Copying a non-const <code>W</code> calls the template. If the template's body does something like <code>name_(std::forward&lt;T&gt;(x))</code> with a <code>std::string</code> member, that is a compile error deep inside the class ("no conversion from W to string"), which confuses everyone. Derived classes hit the same problem: a hand-written derived copy constructor <code>Derived(const Derived&amp; o) : Base(o)</code> calls <code>Base</code> with a <code>const Derived&amp;</code>, and the template (with <code>T = const Derived&amp;</code>) beats <code>Base(const Base&amp;)</code>, which needs a derived-to-base conversion. (The implicit copy constructor of <code>Derived</code> passes the <code>Base</code> subobject, so it is safe.)</p>
+
+<h3 id="ch19-constraints">Constraining the template</h3>
+<p>Remove the template from overload resolution for the types it should not handle. In C++20 use a <code>requires</code> clause; in C++11/14/17 use <code>std::enable_if_t</code> as a defaulted template parameter.</p>
+<pre data-run="ch21-constrained"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;concepts&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Person</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">S</span>&gt;
+        <span class="hljs-function"><span class="hljs-keyword">requires</span> std::constructible_from&lt;std::string, S&amp;&amp;&gt;
+    <span class="hljs-keyword">explicit</span> <span class="hljs-title">Person</span><span class="hljs-params">(S&amp;&amp; s)</span> : name_(std::forward&lt;S&gt;(s)) {</span> std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;forwarding ctor&quot;</span>); }
+    <span class="hljs-built_in">Person</span>(<span class="hljs-type">const</span> Person&amp; o) : <span class="hljs-built_in">name_</span>(o.name_) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy ctor&quot;</span>); }
+    <span class="hljs-built_in">Person</span>(Person&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">name_</span>(std::<span class="hljs-built_in">move</span>(o.name_)) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move ctor&quot;</span>); }
+    <span class="hljs-function"><span class="hljs-type">const</span> std::string&amp; <span class="hljs-title">name</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> name_; }
+<span class="hljs-keyword">private</span>:
+    std::string name_;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Person <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-string">&quot;Ada&quot;</span>)</span></span>;
+    std::string bob = <span class="hljs-string">&quot;Bob&quot;</span>;
+    <span class="hljs-function">Person <span class="hljs-title">b</span><span class="hljs-params">(bob)</span></span>;
+    <span class="hljs-function">Person <span class="hljs-title">c</span><span class="hljs-params">(a)</span></span>;              <span class="hljs-comment">// the template is no longer viable for Person&amp;</span>
+    <span class="hljs-function">Person <span class="hljs-title">d</span><span class="hljs-params">(std::move(b))</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s %s %s %s\n&quot;</span>, a.<span class="hljs-built_in">name</span>().<span class="hljs-built_in">c_str</span>(), bob.<span class="hljs-built_in">c_str</span>(), c.<span class="hljs-built_in">name</span>().<span class="hljs-built_in">c_str</span>(), d.<span class="hljs-built_in">name</span>().<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+<pre class="out" data-out="ch21-constrained">forwarding ctor
+forwarding ctor
+copy ctor
+move ctor
+Ada Bob Ada Bob</pre>
+<p>The C++17 spelling of the same constraint:</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">S</span>,
+          <span class="hljs-keyword">class</span> = std::<span class="hljs-type">enable_if_t</span>&lt;!std::is_base_of_v&lt;Person, std::<span class="hljs-type">decay_t</span>&lt;S&gt;&gt;&gt;&gt;
+<span class="hljs-keyword">explicit</span> <span class="hljs-built_in">Person</span>(S&amp;&amp; s);</code></pre>
+<p>Use <code>is_base_of</code> (or <code>std::derived_from</code>) with <code>decay_t</code>/<code>remove_cvref_t</code> when the class itself might be convertible to the target, so that derived classes are excluded too. Tag dispatch (forward to an implementation function overloaded on <code>std::true_type</code>/<code>std::false_type</code> from a trait such as <code>std::is_integral</code>) is the other classic C++11 technique (<i>Effective Modern C++</i>, Item 27). It works for ordinary function templates but not for constructors, which is why constructors use constraints.</p>
+</section>
+
+<section id="ch19-returning" data-roles="th"><div class="sec-head"><h2>Perfect returning and forwarding lambdas</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch19-decltype-auto">decltype(auto)</h3>
+<p>A wrapper should also return exactly what the target returns. <code>auto</code> as a return type uses template deduction and strips references, so a wrapper around a function returning <code>int&amp;</code> would return a copy. <code>decltype(auto)</code> (C++14) deduces the return type with <code>decltype</code> rules instead, preserving references and value category.</p>
+<pre data-run="ch21-decltype-auto"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>, <span class="hljs-keyword">class</span>... A&gt;
+<span class="hljs-function"><span class="hljs-keyword">decltype</span>(<span class="hljs-keyword">auto</span>) <span class="hljs-title">call</span><span class="hljs-params">(F&amp;&amp; f, A&amp;&amp;... a)</span> </span>{
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">invoke</span>(std::forward&lt;F&gt;(f), std::forward&lt;A&gt;(a)...);
+}
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>, <span class="hljs-keyword">class</span>... A&gt;
+<span class="hljs-function"><span class="hljs-keyword">auto</span> <span class="hljs-title">call_auto</span><span class="hljs-params">(F&amp;&amp; f, A&amp;&amp;... a)</span> </span>{
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">invoke</span>(std::forward&lt;F&gt;(f), std::forward&lt;A&gt;(a)...);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;<span class="hljs-type">int</span>&gt; v{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>};
+    <span class="hljs-keyword">auto</span> at = [&amp;v](std::<span class="hljs-type">size_t</span> i) -&gt; <span class="hljs-type">int</span>&amp; { <span class="hljs-keyword">return</span> v[i]; };
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(<span class="hljs-built_in">call</span>(at, <span class="hljs-number">0</span>)), <span class="hljs-type">int</span>&amp;&gt;);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(<span class="hljs-built_in">call_auto</span>(at, <span class="hljs-number">0</span>)), <span class="hljs-type">int</span>&gt;);
+    <span class="hljs-built_in">call</span>(at, <span class="hljs-number">0</span>) = <span class="hljs-number">10</span>;             <span class="hljs-comment">// writes through the returned reference</span>
+    <span class="hljs-comment">// call_auto(at, 1) = 20;     // error: cannot assign to a prvalue int</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;v[0]=%d\n&quot;</span>, v[<span class="hljs-number">0</span>]);
+}</code></pre>
+<pre class="out" data-out="ch21-decltype-auto">v[0]=10</pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>With <code>decltype(auto)</code>, parentheses change the type. <code>decltype(x)</code> is the declared type of <code>x</code>, but <code>decltype((x))</code> is <code>int&amp;</code> for an lvalue <code>x</code>. So <code>decltype(auto) f() { int x = 1; return (x); }</code> returns a dangling <code>int&amp;</code>. Never parenthesise a local in a <code>decltype(auto)</code> return.</p></div>
+
+<h3 id="ch19-lambdas">Forwarding in generic lambdas</h3>
+<p>A generic lambda parameter declared <code>auto&amp;&amp; x</code> is a forwarding reference, but there is no named <code>T</code> to pass to <code>std::forward</code>. The idiom is <code>std::forward&lt;decltype(x)&gt;(x)</code>. For an lvalue argument <code>decltype(x)</code> is <code>U&amp;</code>, which forwards as an lvalue. For an rvalue it is <code>U&amp;&amp;</code> rather than <code>U</code>, but <code>forward&lt;U&amp;&amp;&gt;</code> returns <code>U&amp;&amp; &amp;&amp;</code>, which collapses to <code>U&amp;&amp;</code>, the same result as <code>forward&lt;U&gt;</code>. C++20 template lambdas let you write the usual form directly.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-keyword">auto</span> log_call = [](<span class="hljs-keyword">auto</span>&amp;&amp; f, <span class="hljs-keyword">auto</span>&amp;&amp;... args) -&gt; <span class="hljs-keyword">decltype</span>(<span class="hljs-keyword">auto</span>) {
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">invoke</span>(std::forward&lt;<span class="hljs-keyword">decltype</span>(f)&gt;(f), std::forward&lt;<span class="hljs-keyword">decltype</span>(args)&gt;(args)...);
+};
+<span class="hljs-keyword">auto</span> log_call20 = []&lt;<span class="hljs-keyword">class</span> F, <span class="hljs-keyword">class</span>... A&gt;(F&amp;&amp; f, A&amp;&amp;... args) -&gt; <span class="hljs-keyword">decltype</span>(<span class="hljs-keyword">auto</span>) {
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">invoke</span>(std::forward&lt;F&gt;(f), std::forward&lt;A&gt;(args)...);
+};</code></pre>
+<p><code>auto&amp;&amp;</code> also appears outside templates. <code>for (auto&amp;&amp; e : range)</code> binds to whatever the iterator yields, including proxy prvalues like <code>std::vector&lt;bool&gt;::reference</code>, where <code>auto&amp;</code> would not compile. <code>auto&amp;&amp; r = f();</code> on a function returning by value binds to a temporary whose lifetime is extended to that of <code>r</code>, so it does not dangle.</p>
+<p>C++23 adds <code>std::forward_like&lt;Self&gt;(member)</code>, which forwards a member with the value category and constness of the enclosing object. It pairs with "deducing this" (<code>this auto&amp;&amp; self</code>) to write one function instead of four ref-qualified overloads.</p>
+</section>
+
+<section id="ch19-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the forwarding problem, and which two language features solve it?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Writing a wrapper that passes its arguments to another function with their original value category and constness, so the target copies when the caller passed an lvalue and can move when the caller passed an rvalue. C++11 solves it with forwarding references (<code>T&amp;&amp;</code> with the special deduction rule plus reference collapsing) and <code>std::forward&lt;T&gt;</code>.</p>
+    <p><b>Why.</b> <code>const A&amp;</code> loses "rvalue-ness" (and adds const), <code>A&amp;</code> rejects rvalues, and overloading every combination needs 2<sup>n</sup> functions. Forwarding references record the category in the deduced <code>T</code>; <code>std::forward</code> reads it back. A common incomplete answer mentions only <code>std::forward</code>, but without the deduction rule there would be nothing for it to read.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Which of these parameters are forwarding references?</p>
+  <pre><code class="language-cpp hljs"><span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">a</span><span class="hljs-params">(T&amp;&amp; x)</span></span>;
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">b</span><span class="hljs-params">(<span class="hljs-type">const</span> T&amp;&amp; x)</span></span>;
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">c</span><span class="hljs-params">(std::vector&lt;T&gt;&amp;&amp; v)</span></span>;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">d</span><span class="hljs-params">(std::string&amp;&amp; s)</span></span>;
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Box</span> { <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">e</span><span class="hljs-params">(T&amp;&amp; x)</span></span>; <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">U</span>&gt; <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(U&amp;&amp; y)</span></span>; };
+<span class="hljs-keyword">auto</span>&amp;&amp; g = <span class="hljs-built_in">compute</span>();
+<span class="hljs-keyword">auto</span> h = [](<span class="hljs-keyword">auto</span>&amp;&amp; z) {};</code></pre>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>a</code>, <code>Box::f</code>, <code>g</code> and the lambda's <code>z</code>. Not <code>b</code>, <code>c</code>, <code>d</code> or <code>Box::e</code>.</p>
+    <p><b>Why.</b> The rule needs the exact form <code>T&amp;&amp;</code> (or <code>auto&amp;&amp;</code>) where <code>T</code> is deduced from that argument in that call. <code>b</code> has <code>const</code>, <code>c</code> wraps <code>T</code> inside <code>vector</code>, <code>d</code> has no template, and in <code>Box::e</code> the <code>T</code> belongs to the class and was fixed at instantiation (<code>Box&lt;int&gt;::e</code> takes <code>int&amp;&amp;</code>). All four only accept rvalues. Candidates often say <code>Box::e</code> is forwarding because "it's in a template", which is the most common error.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>State the reference collapsing rules. Where do they apply?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>&amp; &amp;</code>, <code>&amp; &amp;&amp;</code> and <code>&amp;&amp; &amp;</code> all collapse to <code>&amp;</code>; only <code>&amp;&amp; &amp;&amp;</code> collapses to <code>&amp;&amp;</code>. In words: lvalue reference wins. They apply during template instantiation, <code>auto</code> deduction, <code>typedef</code>/<code>using</code> aliases and <code>decltype</code>.</p>
+    <p><b>Why.</b> You cannot write <code>int&amp; &amp;&amp;</code> in source code, but substituting <code>T = int&amp;</code> into <code>T&amp;&amp;</code> produces it, and the rules define the result. Combined with "an lvalue argument deduces <code>T = U&amp;</code>", they make a <code>T&amp;&amp;</code> parameter become <code>U&amp;</code> for lvalues and <code>U&amp;&amp;</code> for rvalues, which is the whole forwarding-reference mechanism.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why does <code>std::forward</code> require an explicit template argument while <code>std::move</code> does not?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>forward</code> takes <code>remove_reference_t&lt;T&gt;&amp;</code>, a non-deduced context, on purpose: the information it needs (the caller's category) is in the wrapper's <code>T</code>, not in the argument expression, which is always an lvalue.</p>
+    <p><b>Why.</b> If <code>forward</code> deduced from its argument, it would always see an lvalue and always deduce "lvalue", making it useless. <code>std::move</code> needs no outside information: it casts to rvalue unconditionally, so deducing from the argument is fine. People sometimes answer "because of overloading" or "for readability"; the real reason is that the needed information is not present in the argument.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What do <code>T</code>, the parameter type and the category of the expression <code>x</code> become for <code>template &lt;class T&gt; void f(T&amp;&amp; x)</code> called as <code>f(42)</code>, <code>f(i)</code> and <code>f(ci)</code>, where <code>int i; const int ci = 0;</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>f(42)</code>: <code>T = int</code>, parameter <code>int&amp;&amp;</code>. <code>f(i)</code>: <code>T = int&amp;</code>, parameter <code>int&amp;</code>. <code>f(ci)</code>: <code>T = const int&amp;</code>, parameter <code>const int&amp;</code>. In all three, the expression <code>x</code> inside the body is an lvalue.</p>
+    <p><b>Why.</b> Rvalues deduce the plain type; lvalues trigger the special rule that adds <code>&amp;</code> to <code>T</code>, and collapsing then makes the parameter an lvalue reference. Constness is kept as part of <code>T</code>. The body sees a named variable either way, which is why it must call <code>std::forward&lt;T&gt;(x)</code> to restore the category.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>For <code>std::vector&lt;int*&gt; v;</code>, which of these compile: <code>v.push_back(0)</code>, <code>v.push_back(NULL)</code>, <code>v.emplace_back(0)</code>, <code>v.emplace_back(NULL)</code>, <code>v.emplace_back(nullptr)</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Both <code>push_back</code> calls and <code>emplace_back(nullptr)</code> compile. <code>emplace_back(0)</code> and <code>emplace_back(NULL)</code> do not, on GCC 16 or Clang 22.</p>
+    <p><b>Why.</b> <code>push_back</code> takes <code>int* const&amp;</code> or <code>int*&amp;&amp;</code>, so the literal <code>0</code> converts directly: an integer literal with value zero is a null pointer constant. <code>emplace_back</code> deduces <code>Args = int</code> (or <code>long</code> for <code>NULL</code>, which both compilers define as <code>__null</code>), and inside the library the argument is an <code>int&amp;&amp;</code> expression, which is no longer a literal and does not convert to a pointer. This is forwarding failure case 2 from the table, hiding inside a standard container. The common wrong answer is "emplace accepts everything push_back accepts"; it does not, because forwarding throws away the "this is a literal 0" property along with braced lists.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span><code>v.emplace_back({1, 2})</code> fails to compile for <code>std::vector&lt;std::pair&lt;int, int&gt;&gt;</code>, but <code>v.push_back({1, 2})</code> works. Why?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>emplace_back</code> takes <code>Args&amp;&amp;...</code>, and a braced-init-list has no type, so <code>Args</code> cannot be deduced. <code>push_back</code> is not a template on its argument: its parameter is <code>const value_type&amp;</code> or <code>value_type&amp;&amp;</code>, so the braces initialise a <code>pair&lt;int, int&gt;</code> directly.</p>
+    <p><b>Why.</b> <code>[temp.deduct.call]/1</code>: a braced-init-list argument makes the parameter a non-deduced context unless the parameter is <code>std::initializer_list&lt;P&gt;</code> or an array. This is the first of the classic perfect-forwarding failures. Write <code>v.emplace_back(1, 2)</code> instead, which forwards the two ints to <code>pair</code>'s constructor.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When would you use <code>decltype(auto)</code> as a return type instead of <code>auto</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> In forwarding wrappers that must return exactly what the wrapped call returns, including references: <code>decltype(auto) call(F&amp;&amp; f, A&amp;&amp;... a) { return std::invoke(...); }</code>. Also for accessors that should return a reference when the underlying expression yields one.</p>
+    <p><b>Why.</b> <code>auto</code> deduces like a by-value template parameter and drops references and top-level const, so a wrapper around <code>vector::operator[]</code> would return a copy. <code>decltype(auto)</code> applies <code>decltype</code> to the return expression. The cost: <code>return (local);</code> or returning a member access of a local can deduce a reference to a local, which dangles.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Inside <code>template &lt;class T&gt; class Stack { void push(T&amp;&amp; x) { ... } };</code>, a colleague writes <code>data_.push_back(std::forward&lt;T&gt;(x));</code>. Is it a bug?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It is not a bug in behaviour, but it is wrong in intent. <code>x</code> is an rvalue reference (not forwarding, because <code>T</code> belongs to the class), and for a non-reference <code>T</code>, <code>std::forward&lt;T&gt;(x)</code> is exactly <code>std::move(x)</code>. Write <code>std::move(x)</code>.</p>
+    <p><b>Why.</b> The two differ only if someone instantiates the class with an lvalue reference type, say <code>Stack&lt;std::string&amp;&gt;</code>: then <code>T&amp;&amp;</code> collapses to <code>std::string&amp;</code>, <code>forward</code> copies, and <code>move</code> would steal from the caller's object. The convention (move for rvalue references, forward for forwarding references) exists so that readers can tell which kind of parameter they are looking at.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>How do you perfectly forward a parameter in a generic lambda <code>[](auto&amp;&amp; x) { g(???); }</code>, and why does it work?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>g(std::forward&lt;decltype(x)&gt;(x));</code>. In C++20 you can also write <code>[]&lt;class T&gt;(T&amp;&amp; x) { g(std::forward&lt;T&gt;(x)); }</code>.</p>
+    <p><b>Why.</b> <code>decltype(x)</code> is the declared type of the parameter: <code>U&amp;</code> for an lvalue argument and <code>U&amp;&amp;</code> for an rvalue. For an rvalue, <code>forward&lt;U&amp;&amp;&gt;</code> returns <code>U&amp;&amp; &amp;&amp;</code>, which collapses to <code>U&amp;&amp;</code>, identical to <code>forward&lt;U&gt;</code>. So the "wrong" template argument for rvalues gives the right answer. Writing <code>std::forward&lt;decltype(x)&gt;</code> without understanding this is fine in practice, but interviewers like to ask why it works.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is <code>auto&amp;&amp; r = make_string();</code> (returning <code>std::string</code> by value) a dangling reference? What about <code>auto&amp;&amp; c = make_string().c_str();</code> and <code>auto&amp;&amp; f = Builder{}.self();</code> where <code>self()</code> returns <code>Builder&amp;</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The first is safe: <code>r</code> binds directly to the temporary, whose lifetime is extended to <code>r</code>'s. The second is a <code>const char*</code> pointing into a temporary string that dies at the end of the statement: dangling. The third is a reference returned by a function: no extension, dangling.</p>
+    <p><b>Why.</b> Lifetime extension (<code>[class.temporary]/6</code>) applies only when a reference binds directly to a temporary (or a subobject of it via member access). A reference or pointer returned from a function call is not a temporary, so it never extends anything. <code>auto&amp;&amp;</code> is not special here; it just picks the reference type. People assume "<code>auto&amp;&amp;</code> always keeps things alive".</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What does a <code>const</code> lvalue argument do to a forwarding reference parameter? Can the target move from it?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>T</code> is deduced as <code>const U&amp;</code>, the parameter is <code>const U&amp;</code>, and <code>std::forward&lt;T&gt;(x)</code> yields <code>const U&amp;</code>. The target receives a const lvalue and can only copy.</p>
+    <p><b>Why.</b> Forwarding preserves every property, constness included. A <code>const</code> rvalue (<code>std::move(ci)</code>) deduces <code>T = const U</code> and forwards as <code>const U&amp;&amp;</code>, which still binds only to copy constructors. That is correct behaviour: forwarding must not grant permissions the caller did not have.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch19-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does each call deduce?</p>
+  <pre data-run="ch21-o-deduce"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">tn</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">using</span> std::is_same_v;
+    <span class="hljs-function"><span class="hljs-keyword">if</span> <span class="hljs-title">constexpr</span> <span class="hljs-params">(is_same_v&lt;T, <span class="hljs-type">int</span>&gt;)</span> <span class="hljs-keyword">return</span> &quot;<span class="hljs-type">int</span>&quot;</span>;
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> <span class="hljs-built_in">constexpr</span> (is_same_v&lt;T, <span class="hljs-type">int</span>&amp;&gt;) <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;int&amp;&quot;</span>;
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> <span class="hljs-built_in">constexpr</span> (is_same_v&lt;T, <span class="hljs-type">int</span>&amp;&amp;&gt;) <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;int&amp;&amp;&quot;</span>;
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> <span class="hljs-built_in">constexpr</span> (is_same_v&lt;T, <span class="hljs-type">const</span> <span class="hljs-type">int</span>&gt;) <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;const int&quot;</span>;
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> <span class="hljs-built_in">constexpr</span> (is_same_v&lt;T, <span class="hljs-type">const</span> <span class="hljs-type">int</span>&amp;&gt;) <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;const int&amp;&quot;</span>;
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">if</span> <span class="hljs-built_in">constexpr</span> (is_same_v&lt;T, <span class="hljs-type">const</span> <span class="hljs-type">int</span>&amp;&amp;&gt;) <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;const int&amp;&amp;&quot;</span>;
+    <span class="hljs-keyword">else</span> <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;?&quot;</span>;
+}
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(T&amp;&amp;)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;T=%s param=%s\n&quot;</span>, <span class="hljs-built_in">tn</span>&lt;T&gt;(), <span class="hljs-built_in">tn</span>&lt;T&amp;&amp;&gt;()); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> x = <span class="hljs-number">0</span>;
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> cx = <span class="hljs-number">0</span>;
+    <span class="hljs-type">int</span>&amp;&amp; rr = <span class="hljs-number">5</span>;
+    <span class="hljs-built_in">f</span>(x);
+    <span class="hljs-built_in">f</span>(cx);
+    <span class="hljs-built_in">f</span>(rr);
+    <span class="hljs-built_in">f</span>(<span class="hljs-number">0</span>);
+    <span class="hljs-built_in">f</span>(std::<span class="hljs-built_in">move</span>(x));
+    <span class="hljs-built_in">f</span>(std::<span class="hljs-built_in">move</span>(cx));
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch21-o-deduce">T=int&amp; param=int&amp;
+T=const int&amp; param=const int&amp;
+T=int&amp; param=int&amp;
+T=int param=int&amp;&amp;
+T=int param=int&amp;&amp;
+T=const int param=const int&amp;&amp;</pre>
+    <p><b>Answer.</b> As shown. The interesting line is the third: <code>rr</code> is declared <code>int&amp;&amp;</code>, but as an expression it is an lvalue, so <code>T = int&amp;</code>.</p>
+    <p><b>Why.</b> Deduction looks at the argument expression's type and category, never at how a variable was declared. Lvalues deduce <code>U&amp;</code>, rvalues deduce <code>U</code>, and <code>const</code> stays part of <code>U</code>. The last line shows that a <code>const</code> rvalue forwards as <code>const int&amp;&amp;</code>, which a move constructor cannot accept.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The author wanted <code>relay</code> to make a local copy of its argument. What is printed?</p>
+  <pre data-run="ch21-o-relay"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tr</span> {
+    <span class="hljs-built_in">Tr</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Tr</span>(<span class="hljs-type">const</span> Tr&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  copy&quot;</span>); }
+    <span class="hljs-built_in">Tr</span>(Tr&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  move&quot;</span>); }
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">relay</span><span class="hljs-params">(T&amp;&amp; x)</span> </span>{
+    T local = std::forward&lt;T&gt;(x);
+    (<span class="hljs-type">void</span>)local;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  local is %s\n&quot;</span>, std::is_reference_v&lt;T&gt; ? <span class="hljs-string">&quot;a reference&quot;</span> : <span class="hljs-string">&quot;an object&quot;</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Tr t;
+    <span class="hljs-type">const</span> Tr ct;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;lvalue:&quot;</span>);        <span class="hljs-built_in">relay</span>(t);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;const lvalue:&quot;</span>);  <span class="hljs-built_in">relay</span>(ct);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;rvalue:&quot;</span>);        <span class="hljs-built_in">relay</span>(Tr{});
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch21-o-relay">lvalue:
+  local is a reference
+const lvalue:
+  local is a reference
+rvalue:
+  move
+  local is an object</pre>
+    <p><b>Answer.</b> No copy is ever printed. For lvalues, <code>T</code> is a reference type, so <code>T local</code> declares a reference that aliases the caller's object. Only the rvalue case creates an object, by moving.</p>
+    <p><b>Why.</b> <code>T</code> is <code>Tr&amp;</code> or <code>const Tr&amp;</code> for lvalue arguments. Code that uses <code>T</code> as "the value type" inside a forwarding function is a classic bug: modifying <code>local</code> would modify the caller's object. Use <code>std::remove_cvref_t&lt;T&gt; local = std::forward&lt;T&gt;(x);</code> or simply <code>auto local = std::forward&lt;T&gt;(x);</code> to get a real copy or move.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Three lambdas, two arguments each. What is printed?</p>
+  <pre data-run="ch21-o-lambda"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tr</span> {
+    <span class="hljs-built_in">Tr</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Tr</span>(<span class="hljs-type">const</span> Tr&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  copy&quot;</span>); }
+    <span class="hljs-built_in">Tr</span>(Tr&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  move&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">sink</span><span class="hljs-params">(Tr)</span> </span>{}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> plain = [](<span class="hljs-keyword">auto</span>&amp;&amp; x) { <span class="hljs-built_in">sink</span>(x); };
+    <span class="hljs-keyword">auto</span> fwd = [](<span class="hljs-keyword">auto</span>&amp;&amp; x) { <span class="hljs-built_in">sink</span>(std::forward&lt;<span class="hljs-keyword">decltype</span>(x)&gt;(x)); };
+    <span class="hljs-keyword">auto</span> fwd20 = []&lt;<span class="hljs-keyword">class</span> U&gt;(U&amp;&amp; x) { <span class="hljs-built_in">sink</span>(std::forward&lt;U&gt;(x)); };
+    Tr t;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;plain:&quot;</span>); <span class="hljs-built_in">plain</span>(t); <span class="hljs-built_in">plain</span>(Tr{});
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;fwd:&quot;</span>);   <span class="hljs-built_in">fwd</span>(t);   <span class="hljs-built_in">fwd</span>(Tr{});
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;fwd20:&quot;</span>); <span class="hljs-built_in">fwd20</span>(t); <span class="hljs-built_in">fwd20</span>(Tr{});
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch21-o-lambda">plain:
+  copy
+  copy
+fwd:
+  copy
+  move
+fwd20:
+  copy
+  move</pre>
+    <p><b>Answer.</b> Without <code>std::forward</code> both calls copy; with it, the lvalue copies and the temporary moves.</p>
+    <p><b>Why.</b> <code>auto&amp;&amp; x</code> is a forwarding reference, but inside the body <code>x</code> is a named lvalue, so <code>sink(x)</code> always copies. <code>decltype(x)</code> is <code>Tr&amp;</code> or <code>Tr&amp;&amp;</code>; forwarding with either gives the right category thanks to collapsing. The C++20 template-lambda form is identical in effect.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A class with an unconstrained forwarding constructor. Which constructor does each line call?</p>
+  <pre data-run="ch21-o-hijack"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Base</span> {
+    <span class="hljs-built_in">Base</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt; <span class="hljs-built_in">Base</span>(T&amp;&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Base template&quot;</span>); }
+    <span class="hljs-built_in">Base</span>(<span class="hljs-type">const</span> Base&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Base copy&quot;</span>); }
+    <span class="hljs-built_in">Base</span>(Base&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;Base move&quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Derived</span> : Base {
+    <span class="hljs-built_in">Derived</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Derived</span>(<span class="hljs-type">const</span> Derived&amp; o) : <span class="hljs-built_in">Base</span>(o) {}               <span class="hljs-comment">// passes a Derived, not a Base</span>
+    <span class="hljs-built_in">Derived</span>(Derived&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">Base</span>(std::<span class="hljs-built_in">move</span>(o)) {}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Derived d;
+    <span class="hljs-type">const</span> Derived cd;
+    <span class="hljs-function">Derived <span class="hljs-title">d2</span><span class="hljs-params">(d)</span></span>;
+    <span class="hljs-function">Derived <span class="hljs-title">d3</span><span class="hljs-params">(cd)</span></span>;
+    <span class="hljs-function">Derived <span class="hljs-title">d4</span><span class="hljs-params">(std::move(d))</span></span>;
+    <span class="hljs-function">Base <span class="hljs-title">b</span><span class="hljs-params">(cd)</span></span>;
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch21-o-hijack">Base template
+Base template
+Base template
+Base template</pre>
+    <p><b>Answer.</b> All four lines call the template.</p>
+    <p><b>Why.</b> <code>Derived</code>'s hand-written copy constructor calls <code>Base(o)</code> with <code>o</code> of type <code>const Derived&amp;</code>. The template deduces <code>T = const Derived&amp;</code>, an exact match, while <code>Base(const Base&amp;)</code> needs a derived-to-base conversion, which ranks worse. The move constructor passes <code>Derived&amp;&amp;</code>, and again the template wins over <code>Base(Base&amp;&amp;)</code>. <code>Base b(cd)</code> goes through the template for the same reason. Had <code>Derived</code> used the implicit copy and move constructors, they would pass the <code>Base</code> subobject itself and the real constructors would run; hand-written ones that pass the whole object are the trap. Constraining with <code>requires (!std::derived_from&lt;std::remove_cvref_t&lt;T&gt;, Base&gt;)</code> makes all four use the copy or move constructors.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A helper stores a string. After calling it, the caller's variable is empty. Why?</p>
+  <pre data-run="ch21-b-move-fwdref"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> std::vector&lt;std::string&gt; saved;
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">S</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">remember</span><span class="hljs-params">(S&amp;&amp; s)</span> </span>{
+    saved.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(s));
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::string name = <span class="hljs-string">&quot;Ada Lovelace, first programmer&quot;</span>;
+    <span class="hljs-built_in">remember</span>(name);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;name=&#x27;%s&#x27; saved=&#x27;%s&#x27;\n&quot;</span>, name.<span class="hljs-built_in">c_str</span>(), saved[<span class="hljs-number">0</span>].<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch21-b-move-fwdref">name='' saved='Ada Lovelace, first programmer'</pre>
+    <p><b>Answer.</b> <code>std::move</code> on a forwarding reference moves unconditionally. For the lvalue <code>name</code>, <code>S = std::string&amp;</code>, and <code>std::move(s)</code> steals the caller's string. Use <code>std::forward&lt;S&gt;(s)</code>.</p>
+    <p><b>Why.</b> The caller passed an lvalue and expects it to be untouched; only <code>forward</code> respects that. The printed empty string is what both libstdc++ and libc++ leave behind; the standard only says "valid but unspecified", which is worse: the program might print the old value on another library, hiding the bug in testing.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The second log line is wrong for rvalue arguments. Why?</p>
+  <pre data-run="ch21-b-twice"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> std::vector&lt;std::string&gt; store, audit;
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">S</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">record</span><span class="hljs-params">(S&amp;&amp; s)</span> </span>{
+    store.<span class="hljs-built_in">push_back</span>(std::forward&lt;S&gt;(s));
+    audit.<span class="hljs-built_in">push_back</span>(std::forward&lt;S&gt;(s));
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::string a = <span class="hljs-string">&quot;alpha-alpha-alpha-alpha&quot;</span>;
+    <span class="hljs-built_in">record</span>(a);
+    <span class="hljs-built_in">record</span>(std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;bravo-bravo-bravo-bravo&quot;</span>));
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; store.<span class="hljs-built_in">size</span>(); ++i)
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;store=&#x27;%s&#x27; audit=&#x27;%s&#x27;\n&quot;</span>, store[i].<span class="hljs-built_in">c_str</span>(), audit[i].<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch21-b-twice">store='alpha-alpha-alpha-alpha' audit='alpha-alpha-alpha-alpha'
+store='bravo-bravo-bravo-bravo' audit=''</pre>
+    <p><b>Answer.</b> The argument is forwarded twice. For an rvalue, the first <code>forward</code> lets <code>push_back</code> move the string into <code>store</code>, and the second pushes the moved-from (empty) husk into <code>audit</code>.</p>
+    <p><b>Why.</b> Forward only on the last use. Fix: <code>audit.push_back(s); store.push_back(std::forward&lt;S&gt;(s));</code>, copying first and forwarding last. The lvalue call works either way, so tests that only use named variables pass, which is why this bug survives code review. The empty output is the libstdc++ and libc++ behaviour for a moved-from string.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This factory takes forwarding references but still copies. Find the problem.</p>
+  <pre data-run="ch21-b-noforward"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Tr</span> {
+    <span class="hljs-built_in">Tr</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">Tr</span>(<span class="hljs-type">const</span> Tr&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy&quot;</span>); }
+    <span class="hljs-built_in">Tr</span>(Tr&amp;&amp;) <span class="hljs-keyword">noexcept</span> { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;move&quot;</span>); }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Job</span> {
+    Tr payload;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Job</span><span class="hljs-params">(Tr p)</span> : payload(std::move(p)) {</span>}
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span>... Args&gt;
+<span class="hljs-function">std::unique_ptr&lt;Job&gt; <span class="hljs-title">make_job</span><span class="hljs-params">(Args&amp;&amp;... args)</span> </span>{
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;Job&gt;(args...);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> j = <span class="hljs-built_in">make_job</span>(Tr{});
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch21-b-noforward">copy
+move</pre>
+    <p><b>Answer.</b> <code>args...</code> expands to named lvalues, so <code>make_unique</code> receives lvalues and the <code>Job</code> parameter is copy-constructed. Write <code>std::make_unique&lt;Job&gt;(std::forward&lt;Args&gt;(args)...)</code>; the output then becomes <code>move</code>, <code>move</code>.</p>
+    <p><b>Why.</b> Declaring a forwarding reference only captures the category in <code>Args</code>; nothing uses it unless <code>std::forward</code> is called. With move-only arguments (a <code>unique_ptr</code>) the same bug becomes a compile error deep inside <code>make_unique</code>, which is easier to notice than a silent copy.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this not compile, and what are two fixes?</p>
+  <pre data-run="ch21-b-overload" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">handler</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;int %d\n&quot;</span>, x); }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">handler</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;str %s\n&quot;</span>, s); }
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>, <span class="hljs-keyword">class</span>... A&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">dispatch</span><span class="hljs-params">(F&amp;&amp; f, A&amp;&amp;... a)</span> </span>{ std::forward&lt;F&gt;(f)(std::forward&lt;A&gt;(a)...); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">dispatch</span>(handler, <span class="hljs-number">42</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>handler</code> names an overload set, which has no single type, so <code>F</code> cannot be deduced. Fixes: <code>dispatch(static_cast&lt;void (*)(int)&gt;(handler), 42);</code> or wrap it: <code>dispatch([](auto&amp;&amp; x) { handler(std::forward&lt;decltype(x)&gt;(x)); }, 42);</code>.</p>
+    <p><b>Why.</b> Calling <code>handler(42)</code> directly works because overload resolution sees the argument. Passing the name to a template asks the compiler to pick a type before any call happens. The same failure occurs for a function template name, even with explicit template arguments: <code>dispatch(std::max&lt;int&gt;, 1, 2)</code> does not compile on GCC or Clang, because <code>std::max&lt;int&gt;</code> still names several overloads (two arguments, two arguments plus a comparator, an initializer list). People often assume the <code>&lt;int&gt;</code> picks one function. The lambda fix is the robust one: it defers overload resolution to the call.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A bit-field passed through a forwarding wrapper. Why the compile error?</p>
+  <pre data-run="ch21-b-bitfield" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">IPv4Header</span> {
+    std::<span class="hljs-type">uint32_t</span> version : <span class="hljs-number">4</span>, ihl : <span class="hljs-number">4</span>, dscp : <span class="hljs-number">6</span>, ecn : <span class="hljs-number">2</span>, total_length : <span class="hljs-number">16</span>;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(std::<span class="hljs-type">uint32_t</span> v)</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%u\n&quot;</span>, v); }
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">log_and_show</span><span class="hljs-params">(T&amp;&amp; x)</span> </span>{ <span class="hljs-built_in">show</span>(std::forward&lt;T&gt;(x)); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    IPv4Header h{<span class="hljs-number">4</span>, <span class="hljs-number">5</span>, <span class="hljs-number">0</span>, <span class="hljs-number">0</span>, <span class="hljs-number">20</span>};
+    <span class="hljs-built_in">show</span>(h.ihl);           <span class="hljs-comment">// fine</span>
+    <span class="hljs-built_in">log_and_show</span>(h.ihl);   <span class="hljs-comment">// error</span>
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>h.ihl</code> is an lvalue, so <code>T = std::uint32_t&amp;</code>, and a non-const reference cannot bind to a bit-field (<code>[class.bit]/3</code>): bit-fields are not addressable. Fix: pass a copy, <code>log_and_show(static_cast&lt;std::uint32_t&gt;(h.ihl))</code> or <code>auto v = h.ihl; log_and_show(v);</code>.</p>
+    <p><b>Why.</b> A function that takes the bit-field by value or by <code>const&amp;</code> works, because the compiler can make a temporary copy. A forwarding reference deduced from an lvalue is a non-const lvalue reference, which must refer to the actual bits. This comes up in networking code that parses packed headers.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A helper captures a call to run later. ASan reports a stack-use-after-scope. Why, and how do you fix it while keeping perfect forwarding?</p>
+  <pre data-run="ch21-b-defer" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">long</span> <span class="hljs-title">count_a</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; s)</span> </span>{ <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">count</span>(s.<span class="hljs-built_in">begin</span>(), s.<span class="hljs-built_in">end</span>(), <span class="hljs-string">&#x27;a&#x27;</span>); }
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>, <span class="hljs-keyword">class</span>... A&gt;
+<span class="hljs-function"><span class="hljs-keyword">auto</span> <span class="hljs-title">defer</span><span class="hljs-params">(F f, A&amp;&amp;... a)</span> </span>{
+    <span class="hljs-keyword">return</span> [f, &amp;a...] { <span class="hljs-keyword">return</span> <span class="hljs-built_in">f</span>(std::forward&lt;A&gt;(a)...); };
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> job = <span class="hljs-built_in">defer</span>(count_a, std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;banana, papaya and a long tail of text&quot;</span>));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;a count: %ld\n&quot;</span>, <span class="hljs-built_in">job</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>[f, &amp;a...]</code> captures the forwarding references by reference. For the rvalue argument, <code>a</code> refers to the temporary <code>std::string</code>, which dies at the end of the statement that creates <code>job</code>. Calling <code>job()</code> then reads a dead object. Fix by capturing the pack by value with a C++20 init-capture pack: <code>[f, ...a = std::forward&lt;A&gt;(a)]() mutable { return f(std::move(a)...); }</code>. Lvalue arguments are then copied into the closure and rvalues are moved in.</p>
+    <p><b>Why.</b> A forwarding reference is still a reference: perfect forwarding is only safe within the call that received the arguments. Anything that outlives the call (a closure, a stored task, a thread) must decay-copy the arguments, as <code>std::thread</code>, <code>std::bind</code> and <code>std::async</code> do. Before C++20, use <code>std::make_tuple(std::forward&lt;A&gt;(a)...)</code> captured by value and <code>std::apply</code>. A tempting half-fix is <code>[=]</code> with <code>std::forward&lt;A&gt;(a)</code> left in the body: the copies are then <code>const</code> members of a non-<code>mutable</code> closure, <code>std::forward</code> cannot bind them, and the code stops compiling. The captured copies belong to the closure, so the body should <code>std::move</code> them, which needs <code>mutable</code>. Without ASan this program often prints the right count, because the dead string's buffer has not been reused yet.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch19-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>my::move</code> and <code>my::forward</code> (both overloads of <code>forward</code>) and show, with an overload probe, that a forwarding wrapper built on them preserves all four combinations of const and value category. Show that forwarding an rvalue as an lvalue is rejected at compile time.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>move</code> casts to <code>remove_reference_t&lt;T&gt;&amp;&amp;</code>. <code>forward</code> has two overloads taking <code>remove_reference_t&lt;T&gt;&amp;</code> and <code>&amp;&amp;</code>, both returning <code>static_cast&lt;T&amp;&amp;&gt;(t)</code>; the second asserts that <code>T</code> is not an lvalue reference. A probe with four overloads reports what the wrapper delivered.</p>
+<pre data-run="ch21-c-forward"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> my {
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp;&amp; <span class="hljs-title">move</span><span class="hljs-params">(T&amp;&amp; t)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-keyword">return</span> <span class="hljs-keyword">static_cast</span>&lt;std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp;&amp;&gt;(t);
+}
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> T&amp;&amp; <span class="hljs-title">forward</span><span class="hljs-params">(std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp; t)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;T&amp;&amp;&gt;(t);
+}
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> T&amp;&amp; <span class="hljs-title">forward</span><span class="hljs-params">(std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp;&amp; t)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-built_in">static_assert</span>(!std::is_lvalue_reference_v&lt;T&gt;, <span class="hljs-string">&quot;cannot forward an rvalue as an lvalue&quot;</span>);
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;T&amp;&amp;&gt;(t);
+}
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">probe</span><span class="hljs-params">(<span class="hljs-type">int</span>&amp;)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;int&amp;&quot;</span>; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">probe</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">int</span>&amp;)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;const int&amp;&quot;</span>; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">probe</span><span class="hljs-params">(<span class="hljs-type">int</span>&amp;&amp;)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;int&amp;&amp;&quot;</span>; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">probe</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">int</span>&amp;&amp;)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;const int&amp;&amp;&quot;</span>; }
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">relay</span><span class="hljs-params">(T&amp;&amp; x)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">probe</span>(my::forward&lt;T&gt;(x)); }
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">int</span> <span class="hljs-title">value</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-number">3</span>; }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> x = <span class="hljs-number">1</span>;
+    <span class="hljs-type">const</span> <span class="hljs-type">int</span> cx = <span class="hljs-number">2</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">relay</span>(x));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">relay</span>(cx));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">relay</span>(<span class="hljs-number">7</span>));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">relay</span>(my::<span class="hljs-built_in">move</span>(cx)));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">probe</span>(my::forward&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-built_in">value</span>())));   <span class="hljs-comment">// the rvalue overload</span>
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(my::forward&lt;<span class="hljs-type">int</span>&amp;&gt;(x)), <span class="hljs-type">int</span>&amp;&gt;);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(my::forward&lt;<span class="hljs-type">int</span>&gt;(x)), <span class="hljs-type">int</span>&amp;&amp;&gt;);
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(my::<span class="hljs-built_in">move</span>(x)), <span class="hljs-type">int</span>&amp;&amp;&gt;);
+}</code></pre>
+<pre class="out" data-out="ch21-c-forward">int&amp;
+const int&amp;
+int&amp;&amp;
+const int&amp;&amp;
+int&amp;&amp;</pre>
+<pre data-run="ch21-c-forward-bad" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> my {
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> T&amp;&amp; <span class="hljs-title">forward</span><span class="hljs-params">(std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp; t)</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;T&amp;&amp;&gt;(t); }
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> T&amp;&amp; <span class="hljs-title">forward</span><span class="hljs-params">(std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&amp;&amp; t)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-built_in">static_assert</span>(!std::is_lvalue_reference_v&lt;T&gt;, <span class="hljs-string">&quot;cannot forward an rvalue as an lvalue&quot;</span>);
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;T&amp;&amp;&gt;(t);
+}
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span>&amp; r = my::forward&lt;<span class="hljs-type">int</span>&amp;&gt;(<span class="hljs-number">42</span>);   <span class="hljs-comment">// static_assert fires: would dangle</span>
+    (<span class="hljs-type">void</span>)r;
+}</code></pre>
+    <p><b>Complexity and pitfalls.</b> No run-time cost; both are casts. Pitfalls: writing <code>forward(T&amp;&amp; t)</code> with a deducible parameter (callers could omit the template argument and always get the lvalue answer); returning <code>remove_reference_t&lt;T&gt;&amp;&amp;</code> from <code>forward</code> (that is <code>move</code>); omitting the rvalue overload, which makes <code>forward&lt;int&gt;(value())</code> fail to compile. The standard versions are also <code>[[nodiscard]]</code> in recent libraries.</p>
+    <p class="rating">Estimated rating: ~1500 · two lines each, but you must explain non-deduced contexts and collapsing to justify them</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>my::make_unique</code> with the standard's three forms: <code>make_unique&lt;T&gt;(args...)</code> for single objects, <code>make_unique&lt;T[]&gt;(n)</code> for unbounded arrays (value-initialised), and a deleted overload for bounded arrays <code>T[N]</code>. Test with a move-only argument, an aggregate (C++20) and an array.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Three overloads selected by constraints on <code>T</code>. The single-object form forwards the pack into <code>new T(...)</code>. The array form computes the element type with <code>remove_extent_t</code> and uses <code>new E[n]()</code>, where the <code>()</code> value-initialises (zeroes ints). The bounded-array form is <code>= delete</code> so that <code>make_unique&lt;int[3]&gt;()</code> is a clear "use of deleted function" error instead of a confusing one.</p>
+<pre data-run="ch21-c-make-unique" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> my {
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... Args&gt;
+    <span class="hljs-built_in">requires</span> (!std::is_array_v&lt;T&gt;)
+<span class="hljs-function">std::unique_ptr&lt;T&gt; <span class="hljs-title">make_unique</span><span class="hljs-params">(Args&amp;&amp;... args)</span> </span>{
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">unique_ptr</span>&lt;T&gt;(<span class="hljs-keyword">new</span> <span class="hljs-built_in">T</span>(std::forward&lt;Args&gt;(args)...));
+}
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+    <span class="hljs-function"><span class="hljs-keyword">requires</span> std::is_unbounded_array_v&lt;T&gt;
+std::unique_ptr&lt;T&gt; <span class="hljs-title">make_unique</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">unique_ptr</span>&lt;T&gt;(<span class="hljs-keyword">new</span> std::<span class="hljs-type">remove_extent_t</span>&lt;T&gt;[n]());
+}
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... Args&gt;
+    <span class="hljs-function"><span class="hljs-keyword">requires</span> std::is_bounded_array_v&lt;T&gt;
+<span class="hljs-type">void</span> <span class="hljs-title">make_unique</span><span class="hljs-params">(Args&amp;&amp;...)</span> </span>= <span class="hljs-keyword">delete</span>;
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Point</span> { <span class="hljs-type">int</span> x, y; };                      <span class="hljs-comment">// aggregate: no constructor</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Owner</span> {
+    std::unique_ptr&lt;<span class="hljs-type">int</span>&gt; p;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Owner</span><span class="hljs-params">(std::unique_ptr&lt;<span class="hljs-type">int</span>&gt; q)</span> : p(std::move(q)) {</span>}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">auto</span> s = my::<span class="hljs-built_in">make_unique</span>&lt;std::string&gt;(<span class="hljs-number">3</span>, <span class="hljs-string">&#x27;z&#x27;</span>);
+    <span class="hljs-keyword">auto</span> pt = my::<span class="hljs-built_in">make_unique</span>&lt;Point&gt;(<span class="hljs-number">1</span>, <span class="hljs-number">2</span>);       <span class="hljs-comment">// C++20 parenthesised aggregate init</span>
+    <span class="hljs-keyword">auto</span> o = my::<span class="hljs-built_in">make_unique</span>&lt;Owner&gt;(std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">42</span>));
+    <span class="hljs-keyword">auto</span> arr = my::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>[]&gt;(<span class="hljs-number">4</span>);
+    arr[<span class="hljs-number">2</span>] = <span class="hljs-number">9</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s (%d,%d) %d [%d %d %d %d]\n&quot;</span>, s-&gt;<span class="hljs-built_in">c_str</span>(), pt-&gt;x, pt-&gt;y, *o-&gt;p,
+                arr[<span class="hljs-number">0</span>], arr[<span class="hljs-number">1</span>], arr[<span class="hljs-number">2</span>], arr[<span class="hljs-number">3</span>]);
+}</code></pre>
+<pre class="out" data-out="ch21-c-make-unique">zzz (1,2) 42 [0 0 9 0]</pre>
+    <p><b>Complexity and pitfalls.</b> One allocation per call. Pitfalls: using braces <code>new T{...}</code>, which changes meaning for types with initializer-list constructors (<code>make_unique&lt;std::vector&lt;int&gt;&gt;(3, 1)</code> must make three ones, not the list {3, 1}); forgetting the <code>()</code> in the array form, which leaves ints uninitialised (C++20's <code>make_unique_for_overwrite</code> does that on purpose); not forwarding, which breaks move-only arguments. Why <code>make_unique</code> exists at all: before C++17, <code>f(std::unique_ptr&lt;A&gt;(new A), g())</code> could leak if the compiler evaluated <code>new A</code>, then <code>g()</code> threw (see <a href="#ch09">Ch 9</a>).</p>
+    <p class="rating">Estimated rating: ~1600 · variadic forwarding plus array specialisation via constraints, with a few value-initialisation details</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>logged(name, f, args...)</code>, a wrapper that prints <code>-&gt; name(N args)</code> before the call and <code>&lt;- name</code> after it, perfectly forwards the callable and arguments through <code>std::invoke</code>, and perfectly returns the result (value, reference or <code>void</code>). It must work with member function pointers and move-only return types.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> The return type is <code>decltype(auto)</code> and the body returns the <code>std::invoke</code> call directly, which preserves references and works for <code>void</code> (returning a void expression is allowed). The "after" message is printed by a local object's destructor, which runs after the return value has been constructed. That avoids storing the result in a variable, which would break perfect returning.</p>
+<pre data-run="ch21-c-logged"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>, <span class="hljs-keyword">class</span>... A&gt;
+<span class="hljs-function"><span class="hljs-keyword">decltype</span>(<span class="hljs-keyword">auto</span>) <span class="hljs-title">logged</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* name, F&amp;&amp; f, A&amp;&amp;... a)</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;-&gt; %s(%zu args)\n&quot;</span>, name, <span class="hljs-keyword">sizeof</span>...(A));
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Exit</span> {
+        <span class="hljs-type">const</span> <span class="hljs-type">char</span>* n;
+        ~<span class="hljs-built_in">Exit</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;&lt;- %s\n&quot;</span>, n); }
+    } exit_log{name};
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">invoke</span>(std::forward&lt;F&gt;(f), std::forward&lt;A&gt;(a)...);
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Account</span> {
+    <span class="hljs-type">int</span> balance = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">deposit</span><span class="hljs-params">(<span class="hljs-type">int</span> x)</span> </span>{ balance += x; }
+    <span class="hljs-function"><span class="hljs-type">int</span>&amp; <span class="hljs-title">ref</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> balance; }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::unique_ptr&lt;std::string&gt; <span class="hljs-title">make_name</span><span class="hljs-params">(std::string s)</span> </span>{
+    <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">make_unique</span>&lt;std::string&gt;(std::<span class="hljs-built_in">move</span>(s));
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Account acc;
+    <span class="hljs-built_in">logged</span>(<span class="hljs-string">&quot;deposit&quot;</span>, &amp;Account::deposit, acc, <span class="hljs-number">50</span>);              <span class="hljs-comment">// member pointer, void</span>
+    <span class="hljs-built_in">logged</span>(<span class="hljs-string">&quot;ref&quot;</span>, &amp;Account::ref, acc) += <span class="hljs-number">5</span>;                      <span class="hljs-comment">// returns int&amp;</span>
+    <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(<span class="hljs-built_in">logged</span>(<span class="hljs-string">&quot;r&quot;</span>, &amp;Account::ref, acc)), <span class="hljs-type">int</span>&amp;&gt;);
+    <span class="hljs-keyword">auto</span> name = <span class="hljs-built_in">logged</span>(<span class="hljs-string">&quot;make_name&quot;</span>, make_name, std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;Ada&quot;</span>)); <span class="hljs-comment">// move-only result</span>
+    std::vector&lt;<span class="hljs-type">int</span>&gt; v{<span class="hljs-number">3</span>, <span class="hljs-number">1</span>, <span class="hljs-number">2</span>};
+    <span class="hljs-keyword">auto</span> sum = <span class="hljs-built_in">logged</span>(<span class="hljs-string">&quot;sum&quot;</span>, [](<span class="hljs-type">const</span> std::vector&lt;<span class="hljs-type">int</span>&gt;&amp; xs) { <span class="hljs-type">int</span> s = <span class="hljs-number">0</span>; <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> x : xs) s += x; <span class="hljs-keyword">return</span> s; }, v);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;balance=%d name=%s sum=%d\n&quot;</span>, acc.balance, name-&gt;<span class="hljs-built_in">c_str</span>(), sum);
+}</code></pre>
+<pre class="out" data-out="ch21-c-logged">-&gt; deposit(2 args)
+&lt;- deposit
+-&gt; ref(1 args)
+&lt;- ref
+-&gt; make_name(1 args)
+&lt;- make_name
+-&gt; sum(1 args)
+&lt;- sum
+balance=55 name=Ada sum=6</pre>
+    <p><b>Complexity and pitfalls.</b> No overhead beyond the two prints. Pitfalls: writing <code>auto result = std::invoke(...); log(); return result;</code> loses references and adds a move (and needs a special case for <code>void</code>); writing <code>decltype(auto) r = ...; return r;</code> keeps references but returning a named <code>T&amp;&amp;</code> variable needs C++23's implicit-move rules; forgetting <code>std::invoke</code> breaks member pointers. Note that <code>&lt;- ref</code> prints before the <code>+= 5</code> runs, because the destructor fires when <code>logged</code> returns.</p>
+    <p class="rating">Estimated rating: ~1800 · perfect returning with a post-call hook is a known trick that most candidates do not reach unaided</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a class <code>Label</code> holding a <code>std::string</code>, with a forwarding constructor that accepts anything a <code>std::string</code> can be constructed from. <code>Label</code> also has an implicit <code>operator std::string()</code>. Copying and moving a <code>Label</code>, and copying a class derived from it, must use the real copy and move constructors. Prove it with a trace.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A positive constraint (<code>constructible_from&lt;std::string, S&gt;</code>) is not enough here, because <code>Label</code> converts to <code>std::string</code>, so a <code>Label&amp;</code> argument would satisfy it and the template would hijack copies. Add a negative constraint that removes <code>Label</code> and anything derived from it: <code>!std::derived_from&lt;std::remove_cvref_t&lt;S&gt;, Label&gt;</code>.</p>
+<pre data-run="ch21-c-label"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;concepts&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Label</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">S</span>&gt;
+        <span class="hljs-keyword">requires</span> std::constructible_from&lt;std::string, S&amp;&amp;&gt; &amp;&amp;
+                 (!std::derived_from&lt;std::<span class="hljs-type">remove_cvref_t</span>&lt;S&gt;, Label&gt;)
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Label</span><span class="hljs-params">(S&amp;&amp; s)</span> : text_(std::forward&lt;S&gt;(s)) {</span> std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  forwarding&quot;</span>); }
+    <span class="hljs-built_in">Label</span>(<span class="hljs-type">const</span> Label&amp; o) : <span class="hljs-built_in">text_</span>(o.text_) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  copy&quot;</span>); }
+    <span class="hljs-built_in">Label</span>(Label&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">text_</span>(std::<span class="hljs-built_in">move</span>(o.text_)) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  move&quot;</span>); }
+    <span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">std::string</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> text_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> std::string&amp; <span class="hljs-title">text</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> text_; }
+<span class="hljs-keyword">private</span>:
+    std::string text_;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Badge</span> : Label {
+    <span class="hljs-type">int</span> level;
+    <span class="hljs-built_in">Badge</span>(std::string s, <span class="hljs-type">int</span> l) : <span class="hljs-built_in">Label</span>(std::<span class="hljs-built_in">move</span>(s)), <span class="hljs-built_in">level</span>(l) {}
+    <span class="hljs-built_in">Badge</span>(<span class="hljs-type">const</span> Badge&amp; o) : <span class="hljs-built_in">Label</span>(o), <span class="hljs-built_in">level</span>(o.level) {}   <span class="hljs-comment">// passes a Badge to Label</span>
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;from literal, string, string_view:&quot;</span>);
+    <span class="hljs-function">Label <span class="hljs-title">a</span><span class="hljs-params">(<span class="hljs-string">&quot;alpha&quot;</span>)</span></span>;
+    std::string s = <span class="hljs-string">&quot;beta&quot;</span>;
+    <span class="hljs-function">Label <span class="hljs-title">b</span><span class="hljs-params">(s)</span></span>;
+    <span class="hljs-function">Label <span class="hljs-title">c</span><span class="hljs-params">(std::string_view(<span class="hljs-string">&quot;gamma&quot;</span>))</span></span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;copy and move:&quot;</span>);
+    <span class="hljs-function">Label <span class="hljs-title">d</span><span class="hljs-params">(a)</span></span>;
+    <span class="hljs-function">Label <span class="hljs-title">e</span><span class="hljs-params">(std::move(b))</span></span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;derived:&quot;</span>);
+    <span class="hljs-function">Badge <span class="hljs-title">x</span><span class="hljs-params">(<span class="hljs-string">&quot;delta&quot;</span>, <span class="hljs-number">3</span>)</span></span>;
+    <span class="hljs-function">Badge <span class="hljs-title">y</span><span class="hljs-params">(x)</span></span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s %s %s %s %d\n&quot;</span>, a.<span class="hljs-built_in">text</span>().<span class="hljs-built_in">c_str</span>(), d.<span class="hljs-built_in">text</span>().<span class="hljs-built_in">c_str</span>(), e.<span class="hljs-built_in">text</span>().<span class="hljs-built_in">c_str</span>(),
+                y.<span class="hljs-built_in">text</span>().<span class="hljs-built_in">c_str</span>(), y.level);
+}</code></pre>
+<pre class="out" data-out="ch21-c-label">from literal, string, string_view:
+  forwarding
+  forwarding
+  forwarding
+copy and move:
+  copy
+  move
+derived:
+  forwarding
+  copy
+alpha alpha beta delta 3</pre>
+    <p><b>Complexity and pitfalls.</b> Construction is linear in the string length. Without the <code>derived_from</code> constraint, <code>Label d(a)</code> would run the template (<code>Label&amp;</code> converts to <code>std::string</code> through the conversion operator, an extra copy) and so would <code>Badge y(x)</code>, because <code>Badge</code>'s copy constructor passes a whole <code>const Badge&amp;</code> to <code>Label</code>. The constraint uses <code>remove_cvref_t</code> because <code>S</code> is a reference type for lvalues. Explicit is kept on the forwarding constructor so that strings do not silently convert to <code>Label</code>.</p>
+    <p class="rating">Estimated rating: ~1700 · requires seeing that a positive constraint is defeated by the conversion operator</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>make_scope_guard(f)</code>, returning a move-only <code>ScopeGuard</code> that runs <code>f</code> on destruction unless <code>dismiss()</code> was called. It must store the callable by value (decayed), copying lvalue callables and moving rvalue ones, and accept function names, lambdas and function objects. Trace the copies and moves of a function object.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>ScopeGuard&lt;F&gt;</code> holds an <code>F</code> and an <code>active</code> flag. The factory deduces the guard's type as <code>ScopeGuard&lt;std::decay_t&lt;F&gt;&gt;</code> (so a function name becomes a function pointer and a reference becomes a value) and forwards the callable into the guard's constructor. The guard is returned as a prvalue, so no move of the guard happens in C++17 and later; a move constructor is still provided for users who want to transfer it.</p>
+<pre data-run="ch21-c-guard"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">ScopeGuard</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">G</span>&gt;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">ScopeGuard</span><span class="hljs-params">(G&amp;&amp; g)</span> : f_(std::forward&lt;G&gt;(g)) {</span>}
+    <span class="hljs-built_in">ScopeGuard</span>(ScopeGuard&amp;&amp; o) <span class="hljs-built_in">noexcept</span>(std::is_nothrow_move_constructible_v&lt;F&gt;)
+        : <span class="hljs-built_in">f_</span>(std::<span class="hljs-built_in">move</span>(o.f_)), <span class="hljs-built_in">active_</span>(std::<span class="hljs-built_in">exchange</span>(o.active_, <span class="hljs-literal">false</span>)) {}
+    <span class="hljs-built_in">ScopeGuard</span>(<span class="hljs-type">const</span> ScopeGuard&amp;) = <span class="hljs-keyword">delete</span>;
+    ScopeGuard&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> ScopeGuard&amp;) = <span class="hljs-keyword">delete</span>;
+    ScopeGuard&amp; <span class="hljs-keyword">operator</span>=(ScopeGuard&amp;&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">ScopeGuard</span>() { <span class="hljs-keyword">if</span> (active_) <span class="hljs-built_in">f_</span>(); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">dismiss</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{ active_ = <span class="hljs-literal">false</span>; }
+<span class="hljs-keyword">private</span>:
+    F f_;
+    <span class="hljs-type">bool</span> active_ = <span class="hljs-literal">true</span>;
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+[[nodiscard]] ScopeGuard&lt;std::<span class="hljs-type">decay_t</span>&lt;F&gt;&gt; <span class="hljs-built_in">make_scope_guard</span>(F&amp;&amp; f) {
+    <span class="hljs-keyword">return</span> ScopeGuard&lt;std::<span class="hljs-type">decay_t</span>&lt;F&gt;&gt;(std::forward&lt;F&gt;(f));
+}
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Action</span> {
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* msg;
+    <span class="hljs-built_in">Action</span>(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* m) : <span class="hljs-built_in">msg</span>(m) {}
+    <span class="hljs-built_in">Action</span>(<span class="hljs-type">const</span> Action&amp; o) : <span class="hljs-built_in">msg</span>(o.msg) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  Action copy&quot;</span>); }
+    <span class="hljs-built_in">Action</span>(Action&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">msg</span>(o.msg) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  Action move&quot;</span>); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  run: %s\n&quot;</span>, msg); }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">cleanup</span><span class="hljs-params">()</span> </span>{ std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  run: cleanup()&quot;</span>); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Action <span class="hljs-title">named</span><span class="hljs-params">(<span class="hljs-string">&quot;named&quot;</span>)</span></span>;
+    {
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;lvalue functor:&quot;</span>);
+        <span class="hljs-keyword">auto</span> g1 = <span class="hljs-built_in">make_scope_guard</span>(named);
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;rvalue functor:&quot;</span>);
+        <span class="hljs-keyword">auto</span> g2 = <span class="hljs-built_in">make_scope_guard</span>(<span class="hljs-built_in">Action</span>(<span class="hljs-string">&quot;temp&quot;</span>));
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;function name and lambda:&quot;</span>);
+        <span class="hljs-keyword">auto</span> g3 = <span class="hljs-built_in">make_scope_guard</span>(cleanup);
+        <span class="hljs-keyword">auto</span> g4 = <span class="hljs-built_in">make_scope_guard</span>([] { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  run: lambda&quot;</span>); });
+        g4.<span class="hljs-built_in">dismiss</span>();
+        <span class="hljs-built_in">static_assert</span>(std::is_same_v&lt;<span class="hljs-keyword">decltype</span>(g3), ScopeGuard&lt;<span class="hljs-built_in">void</span> (*)()&gt;&gt;);
+        std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;leaving scope:&quot;</span>);
+    }
+}</code></pre>
+<pre class="out" data-out="ch21-c-guard">lvalue functor:
+  Action copy
+rvalue functor:
+  Action move
+function name and lambda:
+leaving scope:
+  run: cleanup()
+  run: temp
+  run: named</pre>
+    <p><b>Complexity and pitfalls.</b> Zero overhead beyond the stored callable and a bool. Guards run in reverse order of creation (<code>g4</code> is dismissed). Pitfalls: storing <code>F</code> instead of <code>decay_t&lt;F&gt;</code> makes the guard hold a reference to the caller's functor (dangling if the functor is a temporary) or fail to compile for function types; letting an exception escape the destructor terminates the program, so production guards wrap the call in <code>try</code> or require <code>noexcept</code> callables; the unconstrained template constructor is safe here only because copying is deleted and the class is never constructed from itself through it (the move constructor wins the tie for rvalues). C++ has <code>std::experimental::scope_exit</code> in the Library Fundamentals TS v3 with the same design.</p>
+    <p class="rating">Estimated rating: ~1600 · decay plus forwarding into a stored member, with move-only semantics and destructor ordering</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>my::forward_like&lt;T&gt;(x)</code> (the C++23 utility): it returns <code>x</code> with the value category and constness of <code>T</code>, so that a function taking <code>Self&amp;&amp; self</code> can forward <code>self.member</code> correctly. Test all four combinations of const and value category on the owner.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Read two facts from <code>T</code>: is <code>T&amp;&amp;</code> an lvalue reference, and is <code>remove_reference_t&lt;T&gt;</code> const. Then return <code>x</code> as an lvalue or an xvalue, adding <code>const</code> with <code>std::as_const</code> when the owner was const. The return type is <code>auto&amp;&amp;</code>, so each <code>if constexpr</code> branch produces its own reference type.</p>
+<pre data-run="ch21-c-forward-like"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">namespace</span> my {
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">U</span>&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> <span class="hljs-keyword">auto</span>&amp;&amp; <span class="hljs-title">forward_like</span><span class="hljs-params">(U&amp;&amp; x)</span> <span class="hljs-keyword">noexcept</span> </span>{
+    <span class="hljs-keyword">constexpr</span> <span class="hljs-type">bool</span> add_const = std::is_const_v&lt;std::<span class="hljs-type">remove_reference_t</span>&lt;T&gt;&gt;;
+    <span class="hljs-function"><span class="hljs-keyword">if</span> <span class="hljs-title">constexpr</span> <span class="hljs-params">(std::is_lvalue_reference_v&lt;T&amp;&amp;&gt;)</span> </span>{
+        <span class="hljs-function"><span class="hljs-keyword">if</span> <span class="hljs-title">constexpr</span> <span class="hljs-params">(add_const)</span> <span class="hljs-keyword">return</span> <span class="hljs-title">std::as_const</span><span class="hljs-params">(x)</span></span>;
+        <span class="hljs-keyword">else</span> <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;U&amp;&gt;(x);
+    } <span class="hljs-keyword">else</span> {
+        <span class="hljs-keyword">if</span> <span class="hljs-built_in">constexpr</span> (add_const) <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(std::<span class="hljs-built_in">as_const</span>(x));
+        <span class="hljs-keyword">else</span> <span class="hljs-keyword">return</span> std::<span class="hljs-built_in">move</span>(x);
+    }
+}
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">probe</span><span class="hljs-params">(std::string&amp;)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;string&amp;&quot;</span>; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">probe</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp;)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;const string&amp;&quot;</span>; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">probe</span><span class="hljs-params">(std::string&amp;&amp;)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;string&amp;&amp;&quot;</span>; }
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">probe</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp;&amp;)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;const string&amp;&amp;&quot;</span>; }
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Holder</span> { std::string s = <span class="hljs-string">&quot;payload&quot;</span>; };
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">Self</span>&gt;
+<span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">get</span><span class="hljs-params">(Self&amp;&amp; self)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">probe</span>(my::forward_like&lt;Self&gt;(self.s)); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Holder h;
+    <span class="hljs-type">const</span> Holder ch;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">get</span>(h));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">get</span>(ch));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">get</span>(Holder{}));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, <span class="hljs-built_in">get</span>(std::<span class="hljs-built_in">move</span>(ch)));
+    std::string taken = my::forward_like&lt;Holder&gt;(h.s);   <span class="hljs-comment">// owner treated as rvalue: moves</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;taken=%s left=%zu\n&quot;</span>, taken.<span class="hljs-built_in">c_str</span>(), h.s.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch21-c-forward-like">string&amp;
+const string&amp;
+string&amp;&amp;
+const string&amp;&amp;
+taken=payload left=0</pre>
+    <p><b>Complexity and pitfalls.</b> Compile-time only. Why not just <code>std::forward&lt;Self&gt;(self).s</code>? That also works for data members (member access on an xvalue is an xvalue), but not for things reached through a pointer or a getter, such as <code>*self.ptr_</code> in an optional-like class; <code>forward_like</code> handles those. Pitfall: for a <code>const</code> owner, the result must be const even if the member is not, otherwise a const object's internals could be moved from. The <code>left=0</code> line reflects both standard libraries' moved-from strings.</p>
+    <p class="rating">Estimated rating: ~1900 · four-way category and constness propagation with if constexpr and auto&amp;&amp; returns</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch19-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>Forwarding reference</b>: exactly <code>T&amp;&amp;</code> (or <code>auto&amp;&amp;</code>) with <code>T</code> deduced in this call. <code>const T&amp;&amp;</code>, <code>vector&lt;T&gt;&amp;&amp;</code> and a class template's <code>T&amp;&amp;</code> are plain rvalue references.</li>
+<li><b>Deduction</b>: lvalue argument gives <code>T = U&amp;</code>, rvalue gives <code>T = U</code>; const is kept. <b>Collapsing</b>: any <code>&amp;</code> wins; only <code>&amp;&amp; &amp;&amp;</code> gives <code>&amp;&amp;</code>.</li>
+<li><b><code>std::forward&lt;T&gt;(x)</code></b> = <code>static_cast&lt;T&amp;&amp;&gt;(x)</code>; the template argument is mandatory because the argument is always an lvalue. Forward once, at the last use.</li>
+<li><b>move vs forward</b>: <code>std::move</code> for rvalue references and values you own; <code>std::forward</code> for forwarding references. Moving a forwarding reference steals from callers' lvalues.</li>
+<li><b>Variadic</b>: <code>template &lt;class... A&gt; f(A&amp;&amp;... a)</code> with <code>std::forward&lt;A&gt;(a)...</code>; that is all of <code>make_unique</code> and <code>emplace</code>.</li>
+<li><b>Failures</b>: braced lists, <code>0</code>/<code>NULL</code>, overloaded names, bit-fields, undefined <code>static const</code> members.</li>
+<li><b>Greedy templates</b>: <code>T&amp;&amp;</code> constructors beat the copy constructor for non-const lvalues and derived classes; constrain with <code>requires</code> or <code>enable_if</code>.</li>
+<li><b>Returning</b>: <code>decltype(auto)</code> for perfect returning, never <code>return (local);</code>. In generic lambdas use <code>std::forward&lt;decltype(x)&gt;(x)</code>.</li>
+</ul>
+</section>

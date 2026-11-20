@@ -13,3 +13,5 @@ videos/.work/
 videos/data.js
 projects/
 plan/data.js
+guide/dist/
+guide/.work/

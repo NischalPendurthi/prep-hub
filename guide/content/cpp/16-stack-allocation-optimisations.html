@@ -1,0 +1,1395 @@
+---
+title: Stack allocation optimisations
+part: Part C · Memory management
+lede: The cheapest allocation is the one that never reaches the allocator. This chapter explains why the stack is so cheap, how big it really is, and the techniques that keep small objects off the heap: small string optimisation, small-buffer optimisation, inline-storage vectors, stack buffers for `pmr`, and the compiler's own heap elision. Interviewers ask about it because it separates people who know `std::string` has SSO from people who can say how many bytes fit, why `std::vector` cannot do the same, and what happens when a thread runs out of stack.
+desc: SSO, small-buffer optimisation, std::array, alloca, inline storage
+hours: 5
+prereqs: [Ch 7](#ch07), [Ch 12](#ch12), [Ch 15](#ch15)
+---
+<section id="ch16-cost" data-roles="th"><div class="sec-head"><h2>Why the stack is cheap</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> The stack is a bump allocator that the hardware and the ABI give you for free. Each thread owns one contiguous region and one register (<code>rsp</code> on x86-64, <code>sp</code> on AArch64) that marks its top. Allocating every local of a function is a single subtraction from that register in the prologue, and freeing all of them is a single addition in the epilogue. There is no search for a free block, no header, no lock and no bookkeeping.</p>
+<p><b>Under the hood.</b> The compiler knows the size of every local at compile time, so it adds them up (plus spills and alignment) and emits one adjustment. A heap allocation is a call into <code>operator new</code>, which calls <code>malloc</code>, which picks a size class, pops a block from a thread cache or a shared free list, and may fall back to a system call (<a href="#ch08">Ch 8</a>). The matching <code>delete</code> has to find the size class again and push the block back. The generated code shows the difference:</p>
+<pre><code class="language-text hljs">// int local_sum() { int a[64]; fill(a); return sum(a); }      (AArch64, abridged)
+local_sum:
+    sub   sp, sp, #272           // all locals allocated: one instruction
+    stp   x29, x30, [sp, #256]   // save frame pointer and link register
+    ...
+    ldp   x29, x30, [sp, #256]
+    add   sp, sp, #272           // all locals freed: one instruction
+    ret
+
+// int heap_sum() { int* a = new int[64]; fill(a); int s = sum(a); delete[] a; return s; }
+heap_sum:
+    ...
+    mov   x0, #256
+    bl    operator new[](unsigned long)    // tens of instructions in the fast path
+    ...
+    bl    operator delete[](void*)         // and again on the way out</code></pre>
+<p>The stack also wins on locality. The top of the stack is touched constantly, so it is almost always in L1 cache and its pages are already mapped. A fresh heap block can come from anywhere in the address space and may share nothing with the data you are using.</p>
+<h3 id="ch16-cost-table">Key facts</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Operation</th><th>Typical cost</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Allocate all locals of a frame</td><td>1 instruction, about 0 ns</td><td>One <code>sub sp</code>, sizes known at compile time</td></tr>
+<tr><td>Free all locals</td><td>1 instruction</td><td>One <code>add sp</code> (or <code>mov sp, fp</code>)</td></tr>
+<tr><td><code>malloc</code>/<code>new</code> fast path (thread cache hit)</td><td>about 10 to 50 ns</td><td>Size-class lookup, free-list pop, function calls</td></tr>
+<tr><td><code>malloc</code> slow path</td><td>hundreds of ns to microseconds</td><td>Central lists, locks, <code>mmap</code>/<code>brk</code>, page faults</td></tr>
+<tr><td>First touch of a new heap page</td><td>about 0.1 to 1 µs</td><td>Minor page fault, kernel zeroes the page</td></tr>
+<tr><td>Default stack, Linux main thread</td><td>8 MB (<code>ulimit -s</code> = 8192)</td><td><code>RLIMIT_STACK</code> soft limit</td></tr>
+<tr><td>Default stack, macOS secondary thread</td><td>512 KB</td><td><code>pthread_attr</code> default</td></tr>
+</tbody></table></div>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>The stack is fast for three reasons: allocation is a pointer bump that the compiler fuses for the whole frame, deallocation is free and implicit, and the memory is hot in cache. Its limits are just as important: the size is fixed and small, the lifetime ends with the function, and the size of each object must be known at compile time (unless you use <code>alloca</code> or VLAs, which are their own trouble).</p></div>
+<p>The rest of the chapter is about using the stack, or storage inside an object, for things that would normally go to the heap, without hitting those limits.</p>
+</section>
+
+<section id="ch16-frame" data-roles="th"><div class="sec-head"><h2>Stack frame layout</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Each call pushes a <b>frame</b>. The exact layout depends on the ABI (System V x86-64 on Linux, AAPCS64 on Linux arm64, Apple's arm64 variant on macOS), but every frame has the same parts: a way back to the caller, saved registers, locals, and space for arguments to the next call.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 420" role="img" aria-label="A stack frame grows downward: caller frame, return address, saved frame pointer, callee-saved registers, locals, outgoing arguments, then the red zone below the stack pointer">
+<defs><marker id="ch16-c18a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="40" y="28" class="t-small t-muted">high addresses</text>
+<text x="40" y="408" class="t-small t-muted">low addresses</text>
+<line x1="24" y1="40" x2="24" y2="392" class="d-line" marker-end="url(#ch18-c18a)"/>
+<text x="30" y="216" class="t-small t-muted" transform="rotate(-90 30 216)">grows down</text>
+<rect x="80" y="40" width="300" height="44" class="d-soft"/>
+<text x="230" y="60" text-anchor="middle" class="t-small">caller's frame</text>
+<text x="230" y="76" text-anchor="middle" class="t-small t-muted">its locals, stack-passed arguments</text>
+<rect x="80" y="84" width="300" height="36" class="d-box"/>
+<text x="230" y="107" text-anchor="middle" class="t-small t-mono">return address</text>
+<rect x="80" y="120" width="300" height="36" class="d-acc"/>
+<text x="230" y="143" text-anchor="middle" class="t-small t-mono">saved frame pointer</text>
+<rect x="80" y="156" width="300" height="40" class="d-box"/>
+<text x="230" y="181" text-anchor="middle" class="t-small">callee-saved registers</text>
+<rect x="80" y="196" width="300" height="70" class="d-key"/>
+<text x="230" y="226" text-anchor="middle" class="t-small t-bold">locals and spills</text>
+<text x="230" y="244" text-anchor="middle" class="t-small t-muted">int a[64], small strings, std::array</text>
+<rect x="80" y="266" width="300" height="40" class="d-box"/>
+<text x="230" y="291" text-anchor="middle" class="t-small">outgoing argument area</text>
+<rect x="80" y="306" width="300" height="56" class="d-trap d-dash"/>
+<text x="230" y="330" text-anchor="middle" class="t-small t-trap">red zone (128 B)</text>
+<text x="230" y="348" text-anchor="middle" class="t-small t-muted">SysV x86-64 and Apple arm64, leaf functions</text>
+<line x1="440" y1="138" x2="384" y2="138" class="d-line-acc" marker-end="url(#ch18-c18a)"/>
+<text x="448" y="142" class="t-small t-mono t-acc">fp (rbp / x29)</text>
+<line x1="440" y1="306" x2="384" y2="306" class="d-line-key" marker-end="url(#ch18-c18a)"/>
+<text x="448" y="310" class="t-small t-mono t-key">sp (rsp / sp)</text>
+<text x="448" y="190" class="t-small">prologue: save fp, then</text>
+<text x="448" y="206" class="t-small t-mono">sub sp, sp, #frame_size</text>
+<text x="448" y="222" class="t-small">allocates the whole frame</text>
+<text x="448" y="250" class="t-small">epilogue: one add frees it</text>
+<text x="448" y="96" class="t-small t-muted">x86-64: pushed by call</text>
+<text x="448" y="112" class="t-small t-muted">AArch64: in x30 (LR), saved with fp</text>
+</svg></div><figcaption><b>A frame is carved out with one subtraction.</b> The return address and saved frame pointer link frames into a chain that debuggers and profilers walk. Locals sit at fixed offsets from <code>sp</code> or <code>fp</code>. The red zone below <code>sp</code> may be used by leaf functions without moving <code>sp</code> at all.</figcaption></figure>
+<p>Two details matter in interviews. First, on x86-64 the <code>call</code> instruction pushes the return address, so a buffer overflow on a local array can overwrite it (the classic stack smashing attack, mitigated by stack canaries from <code>-fstack-protector</code>). On AArch64 the return address arrives in the link register <code>x30</code> and is saved next to the frame pointer by <code>stp x29, x30</code>. Second, the stack pointer must stay aligned: 16 bytes at every call on both x86-64 SysV and AArch64.</p>
+<h3 id="ch16-red-zone">Red zones</h3>
+<p>The System V x86-64 ABI promises that the 128 bytes below <code>rsp</code> will not be clobbered by signal handlers. A leaf function (one that calls nothing) can keep its locals there and skip the <code>sub rsp</code> entirely. Apple's arm64 ABI also has a 128-byte red zone, while the generic AAPCS64 used by Linux on arm64 has none, and Windows x64 has none. Kernel code is compiled with <code>-mno-red-zone</code>, because an interrupt arriving on the same stack would overwrite it.</p>
+<h3 id="ch16-stack-probes">Stack probes</h3>
+<p>If a function allocates a frame bigger than a page in one step, <code>sp</code> can jump straight over the guard page below the stack and land in some other mapping (the "stack clash" class of exploits, 2017). Stack probes fix this: the compiler touches each page of a large frame in order, so the guard page is always hit first. GCC and Clang emit them with <code>-fstack-clash-protection</code>, which many Linux distributions enable by default. Windows does the same through <code>__chkstk</code> for any frame over 4 KB. Probes cost a few instructions per page, only in functions with large frames.</p>
+</section>
+
+<section id="ch16-limits" data-roles="th"><div class="sec-head"><h2>Stack size limits and stack overflow</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The stack is small and fixed, and that is the price of its speed. Know the defaults, because "why does this recursion crash only in a worker thread?" is a common interview and debugging question.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Platform</th><th>Main thread</th><th>Other threads</th><th>How to change</th></tr></thead>
+<tbody>
+<tr><td>Linux, glibc</td><td>8 MB soft limit, grows on demand</td><td>Defaults to <code>RLIMIT_STACK</code> at startup (usually 8 MB), fixed size</td><td><code>ulimit -s</code>, <code>setrlimit</code> before <code>exec</code>, <code>pthread_attr_setstacksize</code></td></tr>
+<tr><td>Linux, musl (Alpine)</td><td>8 MB</td><td>128 KB</td><td><code>pthread_attr_setstacksize</code>, linker flag <code>-Wl,-z,stack-size=</code></td></tr>
+<tr><td>macOS</td><td>8 MB</td><td>512 KB</td><td><code>pthread_attr_setstacksize</code>, linker <code>-stack_size</code> for main</td></tr>
+<tr><td>Windows</td><td>1 MB</td><td>1 MB</td><td>Linker <code>/STACK</code>, <code>CreateThread</code> parameter</td></tr>
+</tbody></table></div>
+<p>On Linux the main thread's stack is a mapping that the kernel grows downward on page faults until it reaches <code>RLIMIT_STACK</code>. Thread stacks are allocated once by the thread library with <code>mmap</code>, with a guard page (or more) at the low end that is mapped with no access. Touching the guard page raises <code>SIGSEGV</code>. A stack overflow is not a C++ exception: no <code>std::bad_alloc</code> is thrown, no destructors run, and the process dies unless you installed a handler on an alternate signal stack (<code>sigaltstack</code>), which can only log and exit.</p>
+<p>This program prints the limits it runs with. The values are platform-specific, so its output is not checked.</p>
+<pre data-run="ch18-limits" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;pthread.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;sys/resource.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    rlimit r{};
+    <span class="hljs-built_in">getrlimit</span>(RLIMIT_STACK, &amp;r);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;RLIMIT_STACK soft: %llu KB\n&quot;</span>, (<span class="hljs-type">unsigned</span> <span class="hljs-type">long</span> <span class="hljs-type">long</span>)r.rlim_cur / <span class="hljs-number">1024</span>);
+
+    <span class="hljs-type">pthread_attr_t</span> attr;
+    <span class="hljs-built_in">pthread_attr_init</span>(&amp;attr);
+    std::<span class="hljs-type">size_t</span> sz = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">pthread_attr_getstacksize</span>(&amp;attr, &amp;sz);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;default new-thread stack: %zu KB\n&quot;</span>, sz / <span class="hljs-number">1024</span>);
+    <span class="hljs-built_in">pthread_attr_destroy</span>(&amp;attr);
+}</code></pre>
+<p>On the Apple M1 used to test this guide it prints <code>8176 KB</code> for the soft limit (8 MB less one 16 KB page) and <code>512 KB</code> for new threads. A typical Linux x86-64 box prints <code>8192 KB</code> for both.</p>
+<h3 id="ch16-thread-stack">Giving a thread a bigger stack</h3>
+<p><code>std::thread</code> has no way to set the stack size. Use <code>pthread_attr_setstacksize</code> with <code>pthread_create</code>, <code>boost::thread::attributes</code>, or move the deep work onto the main thread. Better still, remove the depth: turn recursion over user-controlled data (trees, graphs, JSON nesting) into a loop with an explicit stack in a <code>std::vector</code>, which lives on the heap and grows as needed.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>A recursive destructor is still recursion. A linked list built from <code>std::unique_ptr&lt;Node&gt; next</code> destroys node 1, which destroys node 2, and so on: one frame per node. A list of a million nodes overflows an 8 MB stack. The fix is an iterative destructor that unlinks nodes in a loop (see the drills).</p></div>
+<p>Rules of thumb that interviewers like to hear: keep frames under a few KB, never put a buffer whose size depends on input on the stack, and treat any recursion whose depth depends on input as a bug waiting for a deep input.</p>
+</section>
+
+<section id="ch16-sso" data-roles="th"><div class="sec-head"><h2>Small string optimisation</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> Most strings in real programs are short: names, keys, tokens, numbers. A <code>std::string</code> already needs a pointer, a size and a capacity, which is 24 bytes on a 64-bit target. SSO reuses those bytes (and sometimes a few more) as an inline character buffer when the string is short, so a short string needs no heap allocation at all.</p>
+<p><b>Under the hood.</b> The two major implementations use different layouts, and the numbers differ.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 740 330" role="img" aria-label="libstdc++ string is 32 bytes with a pointer, a size and a 16 byte buffer; libc++ string is 24 bytes with a short mode holding 22 characters">
+<defs><marker id="ch16-c18b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="24" class="t-bold">libstdc++ (GCC): sizeof = 32, inline capacity 15</text>
+<rect x="20" y="40" width="160" height="40" class="d-acc"/><text x="100" y="65" text-anchor="middle" class="t-small t-mono">char* ptr (8)</text>
+<rect x="180" y="40" width="160" height="40" class="d-box"/><text x="260" y="65" text-anchor="middle" class="t-small t-mono">size_t size (8)</text>
+<rect x="340" y="40" width="320" height="40" class="d-key"/><text x="500" y="58" text-anchor="middle" class="t-small t-mono">union { char buf[16]; size_t cap; }</text>
+<text x="500" y="73" text-anchor="middle" class="t-small t-muted">15 chars + NUL, or the heap capacity</text>
+<path d="M100,80 C100,118 500,118 500,84" class="d-line-acc" fill="none" marker-end="url(#ch18-c18b)"/>
+<text x="300" y="122" text-anchor="middle" class="t-small t-acc">short: ptr points into its own buffer (self-referential)</text>
+<text x="20" y="168" class="t-bold">libc++ (Clang): sizeof = 24, inline capacity 22</text>
+<text x="20" y="190" class="t-small t-muted">short mode</text>
+<rect x="100" y="176" width="40" height="40" class="d-trap"/><text x="120" y="200" text-anchor="middle" class="t-small t-mono">1</text>
+<rect x="140" y="176" width="520" height="40" class="d-key"/><text x="400" y="200" text-anchor="middle" class="t-small t-mono">char data[23]: up to 22 chars + NUL</text>
+<text x="120" y="232" text-anchor="middle" class="t-small t-trap">size + mode bit</text>
+<text x="20" y="270" class="t-small t-muted">long mode</text>
+<rect x="100" y="256" width="186" height="40" class="d-trap"/><text x="193" y="281" text-anchor="middle" class="t-small t-mono">cap | mode bit (8)</text>
+<rect x="286" y="256" width="187" height="40" class="d-box"/><text x="380" y="281" text-anchor="middle" class="t-small t-mono">size (8)</text>
+<rect x="473" y="256" width="187" height="40" class="d-acc"/><text x="566" y="281" text-anchor="middle" class="t-small t-mono">char* data (8)</text>
+<line x1="660" y1="276" x2="706" y2="276" class="d-line-acc" marker-end="url(#ch18-c18b)"/>
+<text x="708" y="266" text-anchor="end" class="t-small t-muted">heap</text>
+<text x="380" y="318" text-anchor="middle" class="t-small t-muted">one bit in the first byte tells the two modes apart</text>
+</svg></div><figcaption><b>Same idea, different trade-offs.</b> libstdc++ keeps the pointer valid in both modes, so <code>data()</code> is a plain load with no branch, but the object is 32 bytes and holds a pointer to itself. libc++ packs 22 characters into 24 bytes and branches on the mode bit in <code>data()</code> and <code>size()</code>.</figcaption></figure>
+<p>The program below measures it. It counts calls to <code>operator new</code> and assigns to a global string so the compiler cannot elide the allocation. The listed output is for GCC/libstdc++; the libc++ output follows it.</p>
+<pre data-run="ch18-sso"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">int</span>&gt; g_allocs{<span class="hljs-number">0</span>};   <span class="hljs-comment">// atomic: see the elision section</span>
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    g_allocs.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+    <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n ? n : <span class="hljs-number">1</span>)) <span class="hljs-keyword">return</span> p;
+    <span class="hljs-keyword">throw</span> std::bad_alloc{};
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">free</span>(p); }
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">free</span>(p); }
+
+<span class="hljs-type">static</span> std::string g;
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;sizeof(std::string) = %zu, empty capacity = %zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(std::string), g.<span class="hljs-built_in">capacity</span>());
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> len : {<span class="hljs-number">15</span>, <span class="hljs-number">16</span>, <span class="hljs-number">22</span>, <span class="hljs-number">23</span>}) {
+        <span class="hljs-type">int</span> before = g_allocs.<span class="hljs-built_in">load</span>();
+        g = std::<span class="hljs-built_in">string</span>(len, <span class="hljs-string">&#x27;x&#x27;</span>);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;len %2zu: heap allocations %d\n&quot;</span>, len, g_allocs.<span class="hljs-built_in">load</span>() - before);
+        g.<span class="hljs-built_in">clear</span>();
+        g.<span class="hljs-built_in">shrink_to_fit</span>();
+    }
+}</code></pre>
+<pre class="out" data-out="ch18-sso" data-compiler="gcc">sizeof(std::string) = 32, empty capacity = 15
+len 15: heap allocations 0
+len 16: heap allocations 1
+len 22: heap allocations 1
+len 23: heap allocations 1</pre>
+<pre><code class="language-text hljs">// Clang with libc++ (same program)
+sizeof(std::string) = 24, empty capacity = 22
+len 15: heap allocations 0
+len 16: heap allocations 0
+len 22: heap allocations 0
+len 23: heap allocations 1</code></pre>
+<p>MSVC's STL matches libstdc++ on these numbers (32 bytes, 15 characters) in x64 release builds; debug builds with iterator debugging add a pointer and make it 40 bytes. Everything here is implementation-defined: the standard does not require SSO at all. It does make it possible, because <code>[string.require]</code> allows swap and move to invalidate iterators and pointers into a string.</p>
+<h3 id="ch16-sso-pitfalls">What SSO changes in practice</h3>
+<ul>
+<li><b>Moving a short string copies its characters.</b> There is no heap pointer to steal. It is still cheap (a few dozen bytes), but a move is no longer "three pointer copies".</li>
+<li><b>Pointers and views into a short string do not follow a move.</b> After <code>b = std::move(a)</code>, a <code>string_view</code> that pointed into a long <code>a</code> now points into <code>b</code>'s heap buffer and still sees the text, while one that pointed into a short <code>a</code> still points at <code>a</code>'s inline buffer, which is now empty. Code that "worked" with long strings breaks with short ones.</li>
+<li><b>libstdc++ strings are not trivially relocatable.</b> Because a short string points to itself, you cannot <code>memcpy</code> it to a new address. Containers must call the move constructor. libc++ strings have no self-pointer.</li>
+<li><b><code>sizeof</code> matters.</b> A <code>std::vector&lt;std::string&gt;</code> of short keys is a contiguous array of 24 or 32 byte objects with the text inside, which is good for cache behaviour (<a href="#ch17">Ch 17</a>).</li>
+<li><b><code>reserve</code> and <code>shrink_to_fit</code></b> can move a string between modes. <code>shrink_to_fit</code> on a short string that has a heap buffer may bring it back inline.</li>
+</ul>
+</section>
+
+<section id="ch16-sbo" data-roles="th"><div class="sec-head"><h2>Small-buffer optimisation in type-erased wrappers</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>The same trick generalises. Any wrapper that holds "some object of unknown type" (<code>std::function</code>, <code>std::any</code>, <code>std::move_only_function</code>, many <code>Task</code> or <code>Callback</code> classes) can keep a small inline buffer and place the object there with placement new (<a href="#ch12">Ch 12</a>) if it fits. Otherwise it allocates on the heap and stores a pointer.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-comment">// the shape of every SBO wrapper</span>
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">AnyCallable</span> {
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) <span class="hljs-type">unsigned</span> <span class="hljs-type">char</span> buf_[<span class="hljs-number">16</span>];   <span class="hljs-comment">// inline storage</span>
+    <span class="hljs-type">void</span>* obj_;                                          <span class="hljs-comment">// points into buf_ or to the heap</span>
+    <span class="hljs-type">const</span> Ops* ops_;                                     <span class="hljs-comment">// invoke, move, destroy for the real type</span>
+};</code></pre>
+<p>Whether an object goes inline depends on three conditions, all implementation-defined: it is small enough, its alignment fits the buffer, and it passes a type check. The check differs: <code>std::any</code> in both libraries requires a nothrow move constructor, libc++'s <code>std::function</code> requires a nothrow <i>copy</i> constructor, and libstdc++'s <code>std::function</code> requires the callable to be trivially copyable. The reason is the same in every case: moving the wrapper has to move or copy the inline object, and the wrapper's own move constructor is <code>noexcept</code> (heap-stored objects are moved by copying a pointer, which cannot throw).</p>
+<p>Measured on GCC 16 with libstdc++ and Clang 22 with libc++ (escaping objects, so nothing is elided):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Wrapper</th><th>sizeof (libstdc++ / libc++)</th><th>Inline if the stored object is at most</th></tr></thead>
+<tbody>
+<tr><td><code>std::function&lt;void()&gt;</code></td><td>32 / 32</td><td>16 bytes on both (libstdc++ also requires it to be trivially copyable, libc++ requires a nothrow copy constructor)</td></tr>
+<tr><td><code>std::any</code></td><td>16 / 32</td><td>8 bytes (libstdc++) / 24 bytes (libc++), plus nothrow move</td></tr>
+<tr><td><code>std::string</code></td><td>32 / 24</td><td>15 / 22 characters</td></tr>
+</tbody></table></div>
+<p>A lambda that captures two pointers fits everywhere. A lambda that captures a <code>std::string</code> by value never fits libstdc++'s <code>std::function</code> (not trivially copyable) and always allocates. That is why hot callback paths often use a custom fixed-capacity function type (written in the coding drills) or <code>std::function_ref</code> (C++26), which never owns and never allocates.</p>
+<div class="callout tip"><p class="callout-title">Tip</p><p>To see whether a wrapper allocates, replace the global <code>operator new</code> with a counting version, as the programs in this chapter do. Make the object escape (store it in a global), and make the counter a <code>std::atomic</code>, or the optimiser may remove the allocation, or the count, and give you a false zero (details in the elision section below).</p></div>
+</section>
+
+<section id="ch16-inline-storage" data-roles="th"><div class="sec-head"><h2>Inline-storage vectors and fixed arrays</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A small vector is a vector with SSO: it reserves room for <code>N</code> elements inside the object and uses the heap only when the size exceeds <code>N</code>. Real implementations are <code>absl::InlinedVector&lt;T, N&gt;</code>, <code>llvm::SmallVector&lt;T, N&gt;</code>, <code>boost::container::small_vector&lt;T, N&gt;</code> and <code>folly::small_vector</code>. A related type with no heap at all is the static or in-place vector: <code>boost::container::static_vector</code>, and <code>std::inplace_vector&lt;T, N&gt;</code> in C++26, which throws (or offers <code>try_push_back</code>) when full.</p>
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 300" role="img" aria-label="A small vector stores begin, size and capacity followed by inline slots; after spilling, begin points to a heap block and the inline slots are unused">
+<defs><marker id="ch16-c18c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="26" class="t-bold">SmallVector&lt;int, 4&gt; with 3 elements: inline</text>
+<rect x="20" y="40" width="90" height="40" class="d-acc"/><text x="65" y="65" text-anchor="middle" class="t-small t-mono">begin</text>
+<rect x="110" y="40" width="70" height="40" class="d-box"/><text x="145" y="65" text-anchor="middle" class="t-small t-mono">size 3</text>
+<rect x="180" y="40" width="70" height="40" class="d-box"/><text x="215" y="65" text-anchor="middle" class="t-small t-mono">cap 4</text>
+<rect x="250" y="40" width="70" height="40" class="d-key"/><text x="285" y="65" text-anchor="middle" class="t-small t-mono">10</text>
+<rect x="320" y="40" width="70" height="40" class="d-key"/><text x="355" y="65" text-anchor="middle" class="t-small t-mono">20</text>
+<rect x="390" y="40" width="70" height="40" class="d-key"/><text x="425" y="65" text-anchor="middle" class="t-small t-mono">30</text>
+<rect x="460" y="40" width="70" height="40" class="d-soft d-dash"/><text x="495" y="65" text-anchor="middle" class="t-small t-muted">free</text>
+<path d="M65,80 C65,112 285,112 285,84" class="d-line-acc" fill="none" marker-end="url(#ch18-c18c)"/>
+<text x="550" y="58" class="t-small">no allocation,</text>
+<text x="550" y="74" class="t-small">data is inside the object</text>
+<text x="20" y="160" class="t-bold">after the 5th push_back: spilled to the heap</text>
+<rect x="20" y="174" width="90" height="40" class="d-acc"/><text x="65" y="199" text-anchor="middle" class="t-small t-mono">begin</text>
+<rect x="110" y="174" width="70" height="40" class="d-box"/><text x="145" y="199" text-anchor="middle" class="t-small t-mono">size 5</text>
+<rect x="180" y="174" width="70" height="40" class="d-box"/><text x="215" y="199" text-anchor="middle" class="t-small t-mono">cap 8</text>
+<rect x="250" y="174" width="280" height="40" class="d-soft d-dash"/><text x="390" y="199" text-anchor="middle" class="t-small t-trap">inline slots: unused, still paid for</text>
+<rect x="250" y="250" width="440" height="36" class="d-key"/><text x="470" y="273" text-anchor="middle" class="t-small t-mono">heap: 10 20 30 40 50 _ _ _</text>
+<path d="M65,214 C65,250 150,268 246,268" class="d-line-acc" fill="none" marker-end="url(#ch18-c18c)"/>
+</svg></div><figcaption><b>Inline until it overflows.</b> While <code>size ≤ N</code> the elements live inside the object (on the stack if the object is a local). Past <code>N</code> it behaves like <code>std::vector</code>, and the inline bytes become dead weight.</figcaption></figure>
+<h3 id="ch16-small-vector-design">Designing one</h3>
+<ul>
+<li><b>Storage.</b> <code>alignas(T) unsigned char buf[N * sizeof(T)]</code>, never <code>T buf[N]</code>, because that would default-construct <code>N</code> elements and require <code>T</code> to be default constructible. Elements are created with placement new and destroyed by hand (<a href="#ch12">Ch 12</a>).</li>
+<li><b>Header.</b> A <code>T* begin</code> that points either at the buffer or at a heap block, plus size and capacity. "Am I inline?" is <code>begin == buffer</code>. LLVM uses 32-bit size and capacity to keep the header at 16 bytes.</li>
+<li><b>Growth.</b> When full, allocate <code>2 × cap</code>, construct the new element first (the argument may refer to an element of the vector itself), then move the old elements across with <code>std::move_if_noexcept</code> semantics, destroy them, and free the old block if it was on the heap.</li>
+<li><b>Move is O(N) when inline.</b> You cannot steal a buffer that lives inside the source object. Moving an inline small vector moves every element, can throw if <code>T</code>'s move can throw, and invalidates pointers into the source. A heap-backed one can steal the pointer as <code>std::vector</code> does.</li>
+<li><b>Copy must not copy the pointer.</b> A copied inline small vector must point at its own buffer. Copying <code>begin</code> verbatim is the most common bug in hand-written versions (see the drills).</li>
+<li><b>Choosing N.</b> Use profiling data: pick <code>N</code> so that 90 to 99 percent of instances never spill. A huge <code>N</code> bloats every object and every frame that holds one. LLVM's default <code>SmallVector&lt;T&gt;</code> picks <code>N</code> so that the whole object is about 64 bytes.</li>
+</ul>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"Why does <code>std::vector</code> not have SSO like <code>std::string</code>?" Because the standard forbids it. Container move construction must be constant time, and <code>swap</code> must not invalidate iterators, pointers or references to elements (<code>[container.reqmts]</code>). With inline elements both promises break: moving would be O(N) and the elements would change address. <code>std::string</code> is exempt because <code>[string.require]</code> explicitly allows those invalidations.</p></div>
+<h3 id="ch16-arrays">std::array vs C arrays vs std::vector</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Property</th><th><code>T a[N]</code></th><th><code>std::array&lt;T, N&gt;</code></th><th><code>std::vector&lt;T&gt;</code></th></tr></thead>
+<tbody>
+<tr><td>Storage</td><td>inline (stack or inside the object)</td><td>inline, same layout as <code>T[N]</code></td><td>heap, 24-byte header</td></tr>
+<tr><td>Size</td><td>compile time</td><td>compile time, <code>size()</code> is <code>constexpr</code></td><td>run time</td></tr>
+<tr><td>Copy and assign</td><td>no assignment, decays to <code>T*</code> when passed</td><td>value semantics, comparable</td><td>value semantics, allocates</td></tr>
+<tr><td>Return from a function</td><td>not allowed</td><td>by value</td><td>by value (moves)</td></tr>
+<tr><td>Zero size</td><td>ill-formed (<code>T a[0]</code> is a GCC extension)</td><td>allowed, <code>sizeof</code> is still at least 1</td><td>allowed</td></tr>
+<tr><td>Overhead</td><td>none</td><td>none (an aggregate wrapping <code>T[N]</code>)</td><td>allocation, indirection</td></tr>
+</tbody></table></div>
+<p>Prefer <code>std::array</code> over a C array in new code: it does not decay, it knows its size, and it can be copied, compared and returned. Use <code>std::to_array</code> (C++20) to deduce <code>N</code>, and <code>std::span</code> to pass either one to a function without a template.</p>
+</section>
+
+<section id="ch16-alloca" data-roles="th"><div class="sec-head"><h2>alloca and variable-length arrays</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><code>alloca(n)</code> moves <code>sp</code> down by <code>n</code> bytes at run time and returns the address. A VLA (<code>int buf[n];</code> with a run-time <code>n</code>) does the same with array syntax. Both free the memory when the function returns, and both are attractive because a run-time sized scratch buffer costs a subtraction.</p>
+<p><b>Neither is standard C++.</b> VLAs are standard in C99 and optional in C11; in C++ they are a GCC and Clang extension (rejected by MSVC, flagged by <code>-Wvla</code>, and by Clang's <code>-Wvla-cxx-extension</code>). <code>alloca</code> is a non-standard function from <code>&lt;alloca.h&gt;</code> (<code>_alloca</code> on Windows). A proposed <code>std::dynarray</code> was dropped before C++14.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">parse</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    <span class="hljs-type">char</span>* scratch = <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">char</span>*&gt;(<span class="hljs-built_in">alloca</span>(n));   <span class="hljs-comment">// no failure report: a big n just crashes</span>
+    <span class="hljs-type">int</span> counts[n];                                    <span class="hljs-comment">// VLA: GCC/Clang extension in C++</span>
+    <span class="hljs-comment">// ...</span>
+}</code></pre>
+<p>The dangers:</p>
+<ul>
+<li><b>No failure path.</b> <code>alloca</code> cannot return null or throw. Too large a request silently runs past the guard page, which crashes or, without stack probes, corrupts another mapping. An attacker who controls <code>n</code> controls your stack pointer.</li>
+<li><b>Lifetime is the function, not the scope.</b> <code>alloca</code> inside a loop allocates again on every iteration and frees nothing until return, so a loop of a million iterations can exhaust the stack.</li>
+<li><b>Inlining changes behaviour.</b> If a function that calls <code>alloca</code> is inlined into a loop, the caller's frame grows on every iteration. Compilers refuse to inline such functions in many cases, which is its own cost.</li>
+<li><b>VLAs are not ordinary types.</b> <code>sizeof</code> is evaluated at run time, they cannot be members or template arguments, and they cannot be initialised with <code>= {}</code> in older compilers.</li>
+</ul>
+<p>The safe pattern gives the speed in the common case and a bound in the bad case: a fixed-size stack buffer for small inputs and the heap for large ones. That is <code>absl::FixedArray</code>, LLVM's <code>SmallString</code>, and the small vector above.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">parse</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    std::array&lt;<span class="hljs-type">char</span>, 256&gt; local;
+    std::unique_ptr&lt;<span class="hljs-type">char</span>[]&gt; big;
+    <span class="hljs-type">char</span>* scratch = n &lt;= local.<span class="hljs-built_in">size</span>() ? local.<span class="hljs-built_in">data</span>() : (big = std::<span class="hljs-built_in">make_unique_for_overwrite</span>&lt;<span class="hljs-type">char</span>[]&gt;(n)).<span class="hljs-built_in">get</span>();
+    <span class="hljs-comment">// use scratch[0 .. n)</span>
+}</code></pre>
+</section>
+
+<section id="ch16-elision" data-roles="th"><div class="sec-head"><h2>Heap allocation elision and escape analysis</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>The rule.</b> Since C++14 (N3664), <code>[expr.new]</code> allows an implementation to omit a call to a replaceable global allocation function made by a <i>new-expression</i>, or to merge several allocations into one. The storage is then "provided by the implementation", which in practice means a register or a stack slot. This holds even if you replaced <code>operator new</code> with a function that has side effects, such as a counter. The permission covers new-expressions only: a direct call such as <code>::operator new(16)</code> is an ordinary function call and is not elided by the rule.</p>
+<p><b>What compilers do.</b> Clang and GCC (version 10 onwards) run an escape analysis: if the pointer never leaves the function (it is not stored to memory that outlives the call, not passed to an opaque function, not returned) and the <code>new</code> is paired with a <code>delete</code> on every path, the pair is removed and the object becomes a local. Clang applies the same reasoning to library code that uses <code>__builtin_operator_new</code>, which libc++ does, so even temporary <code>std::vector</code>s and <code>std::string</code>s sometimes vanish.</p>
+<pre data-run="ch18-elide" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">int</span>&gt; g_allocs{<span class="hljs-number">0</span>};   <span class="hljs-comment">// atomic: see the elision section</span>
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    g_allocs.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+    <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n ? n : <span class="hljs-number">1</span>)) <span class="hljs-keyword">return</span> p;
+    <span class="hljs-keyword">throw</span> std::bad_alloc{};
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">free</span>(p); }
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">free</span>(p); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span>* p = <span class="hljs-keyword">new</span> <span class="hljs-built_in">int</span>(<span class="hljs-number">41</span>);
+    *p += <span class="hljs-number">1</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;value %d\n&quot;</span>, *p);
+    <span class="hljs-keyword">delete</span> p;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;operator new calls: %d\n&quot;</span>, g_allocs.<span class="hljs-built_in">load</span>());
+}</code></pre>
+<p>Built with <code>-O1</code>, both GCC 16 and Clang 22 print <code>operator new calls: 0</code>: the allocation was folded into a constant. At <code>-O0</code> they print <code>1</code>. Both outputs are conforming, which is why the output is not checked.</p>
+<p>GCC goes one step further. By default (<code>-fassume-sane-operators-new-delete</code>, added and enabled by default in GCC 15) it assumes that a replaced <code>operator new</code> does not read or modify any other global state of the program. With a plain <code>static int</code> counter, GCC may therefore read the counter before and after a <code>new</code> and fold the difference to zero, even when the allocation really happens. Every counting program in this chapter uses <code>std::atomic&lt;int&gt;</code> for the counter, which GCC cannot reason away; with a plain <code>int</code>, the SSO program above prints 0 allocations for every length under GCC 16.</p>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"My allocation counter says zero, so my code does not allocate." Not necessarily: it only proves that this build, with this inlining, elided it. One more call to a function the optimiser cannot see (logging, a virtual call) and the object escapes, and the allocation comes back. Do not rely on elision for performance; use a type with inline storage when you need a guarantee.</p></div>
+<p>Java's JIT and Go's compiler run this kind of escape analysis on every allocation. C++ compilers do it only for code the optimiser can see (one function after inlining, or across translation units with LTO), and no compiler moves an object that escapes onto the stack. The guarantee you can rely on is the one you write: a local object, a <code>std::array</code>, or an inline buffer.</p>
+</section>
+
+<section id="ch16-other" data-roles="th"><div class="sec-head"><h2>Stack buffers for pmr, returning and passing</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch16-pmr-stack">A pmr arena on a stack buffer</h3>
+<p><code>std::pmr::monotonic_buffer_resource</code> (<a href="#ch15">Ch 15</a>) can start from a buffer you give it. Put that buffer on the stack and every <code>pmr</code> container in the function allocates by bumping a pointer through stack memory, with no <code>delete</code> calls at all: everything is released when the resource goes out of scope.</p>
+<pre data-run="ch18-pmr" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory_resource&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) std::byte buf[<span class="hljs-number">4096</span>];
+    std::<span class="hljs-function">pmr::monotonic_buffer_resource <span class="hljs-title">arena</span><span class="hljs-params">(buf, <span class="hljs-keyword">sizeof</span> buf, std::pmr::null_memory_resource())</span></span>;
+
+    std::<span class="hljs-function">pmr::vector&lt;std::pmr::string&gt; <span class="hljs-title">words</span><span class="hljs-params">(&amp;arena)</span></span>;   <span class="hljs-comment">// the strings inherit the arena</span>
+    words.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">4</span>);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-type">char</span>* w : {<span class="hljs-string">&quot;stack&quot;</span>, <span class="hljs-string">&quot;buffers&quot;</span>, <span class="hljs-string">&quot;are&quot;</span>, <span class="hljs-string">&quot;fast, until they run out of room&quot;</span>})
+        words.<span class="hljs-built_in">emplace_back</span>(w);
+
+    std::<span class="hljs-type">size_t</span> total = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; w : words) total += w.<span class="hljs-built_in">size</span>();
+    std::cout &lt;&lt; words.<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&quot; words, &quot;</span> &lt;&lt; total &lt;&lt; <span class="hljs-string">&quot; chars, no heap\n&quot;</span>;
+}</code></pre>
+<pre class="out" data-out="ch18-pmr">4 words, 47 chars, no heap</pre>
+<p>Two rules. First, choose the upstream deliberately: the default upstream is <code>new_delete_resource()</code>, so an overflowing buffer silently falls back to the heap. Passing <code>null_memory_resource()</code> makes overflow throw <code>std::bad_alloc</code> instead, which is what you want in a latency-critical path where a hidden heap call is a bug. Second, a monotonic resource never reuses memory, so a growing vector leaves every old block behind. Reserve up front.</p>
+<h3 id="ch16-return-large">Returning large objects</h3>
+<p>Returning a big object by value does not copy it onto the caller's stack and back. The caller reserves space for the result in its own frame and passes a hidden pointer to it; the callee constructs the result directly there. Since C++17 this is guaranteed for prvalues (<code>return T{...};</code>) and allowed, and usually done, for named locals (NRVO). See <a href="#ch21">Ch 21</a> and <a href="#ch22">Ch 22</a>. So <code>std::array&lt;double, 512&gt; make()</code> costs no copy, but it does put 4 KB on the caller's stack.</p>
+<h3 id="ch16-pass-small">Passing small types by value</h3>
+<p>Both the System V x86-64 ABI and AAPCS64 pass a trivially copyable struct of up to 16 bytes in two registers. So <code>int</code>, <code>double</code>, a pointer, <code>std::string_view</code>, <code>std::span</code>, <code>std::pair&lt;int, int&gt;</code> and a small <code>Point</code> should be passed by value: a <code>const&amp;</code> forces the caller to put the object in memory, adds an indirection, and makes the optimiser worry that the reference aliases something the function writes.</p>
+<p>The catch is "trivially copyable". The Itanium C++ ABI (used by GCC and Clang on Linux and macOS) passes any type with a non-trivial copy constructor, move constructor or destructor <i>by invisible reference</i>: the caller builds a temporary in its own frame and passes its address. That includes <code>std::unique_ptr</code>, so passing a <code>unique_ptr</code> by value costs more than passing a raw pointer, even though both hold one pointer. Large or non-trivial types (strings, vectors) are passed by <code>const&amp;</code> when you only read them, and by value only when you would copy them anyway (the sink pattern, <a href="#ch18">Ch 18</a>).</p>
+</section>
+
+<section id="ch16-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why is allocating a local array faster than <code>new</code>-ing the same array? Give at least three reasons.</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The stack allocation is a compile-time-sized pointer bump fused with the rest of the frame (one <code>sub sp</code>), it is freed by one <code>add sp</code> with no bookkeeping, it needs no synchronisation because each thread owns its stack, and the memory is almost always hot in L1 cache and already mapped.</p>
+    <p><b>Why.</b> <code>new</code> calls <code>operator new</code>, which calls <code>malloc</code>: a size-class lookup, a free-list pop from a thread cache, and on a miss a trip to a shared arena with locks or a system call. <code>delete</code> repeats the lookup. A fresh heap block may also be cold in cache. The common incomplete answer is "the heap is slow because of system calls"; most allocations never make a system call, and the fast path still costs tens of nanoseconds against roughly zero for the stack.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the small string optimisation, and how many characters fit inline in libstdc++ and in libc++ on a 64-bit target?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> SSO stores short strings inside the <code>std::string</code> object instead of on the heap. libstdc++ (GCC): <code>sizeof</code> 32, up to 15 characters inline. libc++ (Clang): <code>sizeof</code> 24, up to 22 characters inline. MSVC: 32 bytes, 15 characters.</p>
+    <p><b>Why.</b> libstdc++ keeps a pointer, a size and a 16-byte union that holds either the characters (15 plus the terminating NUL) or the heap capacity. libc++ overlays the whole 24 bytes: one byte holds the size and a mode bit, the other 23 hold up to 22 characters and the NUL. The figures are measured in this chapter with a counting <code>operator new</code>. A common wrong answer is "SSO is required by the standard"; it is permitted, not required, and every number is implementation-defined.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Why does <code>std::vector</code> not use a small-buffer optimisation, when <code>std::string</code> does?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The standard's container requirements forbid it. Moving a container must be constant time, and <code>swap</code> must not invalidate references, pointers or iterators to elements (<code>[container.reqmts]</code>). Inline elements would have to be moved one by one (O(N)) and would change address.</p>
+    <p><b>Why.</b> With a heap buffer, <code>std::vector</code>'s move steals the pointer, so an iterator into the source is now an iterator into the destination. Code relies on that, for example keeping pointers into a vector that is then moved into a member. <code>std::string</code> has an explicit exemption in <code>[string.require]</code>: passing a string to a library function that takes a non-const reference may invalidate its iterators. People often answer "because elements may be big"; size is a reason not to choose a large N, but the real blocker is the standard's guarantees. Libraries that want SSO for vectors provide separate types (<code>SmallVector</code>, <code>InlinedVector</code>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A <code>std::string_view</code> points into string <code>a</code>. You then write <code>std::string b = std::move(a);</code>. Is the view still valid, and does the answer depend on the string's length?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Formally, the view must be treated as invalid. In practice it depends on the length: for a long string the heap buffer moves to <code>b</code>, so the view still points at the text (now owned by <code>b</code>); for a short string the characters were copied into <code>b</code>'s own inline buffer and the view still points into <code>a</code>, which is now empty.</p>
+    <p><b>Why.</b> <code>[string.require]</code> lets a move invalidate pointers into the source, precisely so that SSO is possible. Code tested only with long strings "works", then breaks for short names. The wrong answer is "moves steal the buffer, so pointers follow". They follow only when there is a heap buffer to steal.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Can <code>delete new int(5);</code> run without calling <code>operator new</code> at all, even if you replaced <code>operator new</code> with a function that increments a counter?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes. Since C++14, <code>[expr.new]</code> permits an implementation to omit calls to replaceable global allocation functions from new-expressions, or to merge them, and to provide the storage another way. GCC and Clang both do this at <code>-O1</code> when the pointer does not escape.</p>
+    <p><b>Why.</b> The rule (from paper N3664) exists so that compilers can turn short-lived heap objects into locals. Because the permission is explicit, the side effects inside your replacement function are not "observable behaviour" that must be preserved. The common wrong answer is "a replaced operator new has side effects, so the compiler must call it". Direct calls such as <code>::operator new(4)</code> are ordinary function calls and are not covered.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What are the default stack sizes on Linux and macOS, for the main thread and for other threads, and how do you give a <code>std::thread</code> a bigger stack?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Linux (glibc): main thread 8 MB (the <code>RLIMIT_STACK</code> soft limit, <code>ulimit -s</code> shows 8192), other threads default to the same value read at startup, usually 8 MB. musl uses 128 KB for threads. macOS: 8 MB main, 512 KB for secondary threads. <code>std::thread</code> cannot set a stack size; use <code>pthread_attr_setstacksize</code> with <code>pthread_create</code> or <code>boost::thread::attributes</code>.</p>
+    <p><b>Why.</b> The main thread's stack is grown by the kernel on demand up to the rlimit, while each thread stack is one fixed <code>mmap</code> with a guard page. That is why code that recurses happily in <code>main</code> can crash in a worker on macOS or Alpine. The standard library deliberately has no portable stack-size knob. A common wrong answer is "the stack grows until memory runs out"; it is capped by the rlimit and, for threads, by the fixed mapping.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does a stack overflow throw an exception you can catch, such as <code>std::bad_alloc</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. On Linux and macOS the overflowing access hits a guard page and the kernel delivers <code>SIGSEGV</code> (sometimes <code>SIGBUS</code> on macOS). No C++ exception is thrown, no destructors run, and the default action kills the process.</p>
+    <p><b>Why.</b> The C++ standard says nothing about stack exhaustion; it is outside the abstract machine. A signal handler cannot run on the stack that just overflowed, so you need <code>sigaltstack</code> plus <code>SA_ONSTACK</code> even to log the crash, and you cannot safely resume. Windows raises a structured exception (<code>EXCEPTION_STACK_OVERFLOW</code>), which is still not a C++ exception. The fix is to bound depth, not to catch.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is <code>int n = read(); int buf[n];</code> valid C++?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. Array bounds in C++ must be constant expressions. Variable-length arrays are a C99 feature (optional since C11) that GCC and Clang accept in C++ as an extension; MSVC rejects them, and <code>-pedantic</code>, <code>-Wvla</code> or Clang's <code>-Wvla-cxx-extension</code> flag them.</p>
+    <p><b>Why.</b> VLAs break the type system (their <code>sizeof</code> is a run-time value, they cannot be members or template arguments), they have no failure path when <code>n</code> is too large, and an attacker-controlled <code>n</code> moves your stack pointer. A proposed <code>std::dynarray</code> was dropped. People say "it compiles, so it is legal"; it compiles because of an extension. Use <code>std::array</code> with a bound and a heap fallback, or a small vector.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Moving a <code>std::vector</code> is O(1) and <code>noexcept</code>. Is moving an <code>llvm::SmallVector&lt;T, 8&gt;</code> or <code>absl::InlinedVector&lt;T, 8&gt;</code> the same?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Only when the source has spilled to the heap. When the elements are inline, moving has to move-construct each element into the destination's inline buffer: O(N), and it can throw if <code>T</code>'s move constructor can throw.</p>
+    <p><b>Why.</b> You cannot transfer ownership of bytes that are physically inside another object. This also means pointers into an inline source are not valid in the destination. As a result, putting small vectors inside a <code>std::vector</code> makes reallocation more expensive, and if the move is not <code>noexcept</code>, <code>std::vector</code> will copy them instead (<code>move_if_noexcept</code>). The wrong answer assumes every move is a pointer steal.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When does <code>std::function</code> allocate, and how would you avoid it on a hot path?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It allocates when the callable does not fit its small buffer or does not meet the implementation's conditions for inline storage. Measured here: both libstdc++ and libc++ store up to 16 bytes inline; libstdc++ also needs the callable to be trivially copyable (the <code>__stored_locally</code> test in <code>std_function.h</code>), libc++ needs a nothrow copy constructor. A lambda that captures one 8-byte object with a user-written copy constructor therefore allocates in libstdc++ even though it is small. A lambda capturing a <code>std::string</code> therefore always allocates in libstdc++.</p>
+    <p><b>Why.</b> <code>std::function</code> is a type-erased owner that must be copyable, so it either places the callable in its buffer with placement new or holds a pointer to a heap copy. Avoid the allocation by keeping captures small (capture a pointer to a context struct), by using a template parameter instead of type erasure, by using <code>std::function_ref</code> (C++26) for non-owning callbacks, or by writing a fixed-capacity function type that refuses at compile time to hold anything larger (see the coding drills).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is a red zone, which platforms have one, and why does the Linux kernel disable it?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A red zone is a region just below the stack pointer that the ABI guarantees asynchronous code will not overwrite, so leaf functions can use it for locals without adjusting <code>sp</code>. System V x86-64 has 128 bytes, and so does Apple's arm64 ABI. Generic AAPCS64 (Linux on arm64) and Windows x64 have none. The Linux kernel builds with <code>-mno-red-zone</code> because interrupts and exceptions in kernel mode push state onto the current stack and would trash it.</p>
+    <p><b>Why.</b> In user space, signal handlers are delivered below the red zone, which is how the ABI keeps its promise. In the kernel there is no such adjustment. The saving is small (one <code>sub</code> and one <code>add</code> in a leaf), which is why some ABIs do without it.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What problem do stack probes and <code>-fstack-clash-protection</code> solve?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> They stop a large frame, <code>alloca</code> or VLA from moving <code>sp</code> past the guard page in one jump. The compiler touches every page of a big allocation in order, so the guard page is always hit and the program faults safely.</p>
+    <p><b>Why.</b> A guard page only works if something touches it. A 64 KB frame on a stack with a 4 KB guard can skip straight over it into the heap or another thread's stack, and later writes corrupt that memory silently (the 2017 "stack clash" exploits). Windows has always done this through <code>__chkstk</code>. The cost is a few instructions per page in functions with large frames. Mentioning the Linux kernel's enlarged stack guard gap (256 pages since 2017) earns extra credit.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>A colleague changes <code>void f(int x)</code> to <code>void f(const int&amp; x)</code> "to avoid a copy". Faster or slower? And is passing <code>std::unique_ptr&lt;T&gt;</code> by value as cheap as passing <code>T*</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Slower or equal. An <code>int</code> by value travels in a register; by <code>const&amp;</code> the caller must store it in memory, pass its address, and the callee must load it, and the optimiser must assume the reference may alias memory the function writes. And no: <code>unique_ptr</code> by value is more expensive than a raw pointer under the Itanium ABI.</p>
+    <p><b>Why.</b> System V x86-64 and AAPCS64 pass trivially copyable objects of up to 16 bytes in registers, so <code>int</code>, <code>string_view</code>, <code>span</code> and small structs belong by value. A type with a non-trivial destructor or copy/move constructor, such as <code>unique_ptr</code>, is passed by invisible reference: the caller materialises a temporary in its frame and passes its address, and the caller (not the callee) destroys it. "References are always cheaper" is the wrong instinct carried over from large objects.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why is <code>std::array&lt;int, 4&gt;</code> faster than a <code>std::vector&lt;int&gt;</code> holding 4 elements, when indexing either one is the same pointer arithmetic? When does the vector win?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The array has no allocation, no deallocation and no indirection, and its size is a compile-time constant. The vector pays a call to <code>operator new</code> on construction and <code>operator delete</code> on destruction (tens of nanoseconds, against nothing), keeps its elements in a separate heap block reached through a pointer, and carries its size at run time. The vector wins when the size is large or unknown (the array would blow the stack or need a worst-case bound) and when you move it: moving a vector steals one pointer, moving an array copies every element.</p>
+    <p><b>Why.</b> With <code>std::array</code> the 16 bytes live inside the enclosing object or frame, usually in an L1-hot cache line, and often entirely in registers after optimisation. Because <code>N</code> is in the type, the compiler can fully unroll and vectorise loops over it, and copying is a 16-byte <code>memcpy</code>. A <code>std::vector&lt;std::array&lt;int, 4&gt;&gt;</code> is one contiguous block; a <code>std::vector&lt;std::vector&lt;int&gt;&gt;</code> is one allocation per row and a pointer chase per row. The common wrong answer is "<code>vector::operator[]</code> is slower"; it is not, once the data pointer is loaded. The cost is in creating, destroying and reaching the storage.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>Why prefer <code>std::array&lt;T, N&gt;</code> over <code>T[N]</code>? Is there any run-time cost?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No run-time cost: <code>std::array</code> is an aggregate wrapping <code>T[N]</code> with the same layout. It gains value semantics (copy, assign, compare, return from functions), it never decays to a pointer, and it carries its size in the type (<code>size()</code> is <code>constexpr</code>).</p>
+    <p><b>Why.</b> C arrays decay to <code>T*</code> when passed, so <code>sizeof</code> inside the callee gives the pointer size and bounds information is lost; they cannot be assigned or returned. <code>std::array</code> also supports <code>at()</code> with bounds checking, structured bindings, and zero size. Pass it as <code>std::span&lt;const T&gt;</code> to accept arrays of any length. Someone usually claims "std::array adds overhead like vector"; it has no heap, no header and no indirection.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch16-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print on a 64-bit target?</p>
+<pre data-run="ch18-decay"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">f</span><span class="hljs-params">(<span class="hljs-type">int</span> a[<span class="hljs-number">10</span>])</span> </span>{ std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu\n&quot;</span>, <span class="hljs-built_in">sizeof</span>(a)); }
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> a[<span class="hljs-number">10</span>] = {};
+    std::array&lt;<span class="hljs-type">int</span>, 10&gt; b{};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %zu\n&quot;</span>, <span class="hljs-keyword">sizeof</span> a, <span class="hljs-keyword">sizeof</span> b);
+    <span class="hljs-built_in">f</span>(a);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu\n&quot;</span>, <span class="hljs-keyword">sizeof</span> a / <span class="hljs-keyword">sizeof</span> a[<span class="hljs-number">0</span>]);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch18-decay">40 40
+8
+10</pre>
+    <p><b>Why.</b> <code>int a[10]</code> and <code>std::array&lt;int, 10&gt;</code> have the same 40-byte layout: <code>std::array</code> is an aggregate around a C array with no extra members. Inside <code>f</code>, the parameter <code>int a[10]</code> is adjusted to <code>int* a</code> (<code>[dcl.fct]</code>), so <code>sizeof</code> gives the pointer size, 8, and the 10 is ignored. Both compilers warn (<code>-Wsizeof-array-argument</code>). The usual wrong answer is 40 for the call. The <code>sizeof a / sizeof a[0]</code> idiom only works where <code>a</code> is still an array; <code>std::size(a)</code> refuses to compile on a pointer, which is why it is safer.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>How many heap allocations does each assignment to <code>std::function</code> make?</p>
+<pre data-run="ch18-function-sbo"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">int</span>&gt; g_allocs{<span class="hljs-number">0</span>};   <span class="hljs-comment">// atomic: see the elision section</span>
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    g_allocs.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+    <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n ? n : <span class="hljs-number">1</span>)) <span class="hljs-keyword">return</span> p;
+    <span class="hljs-keyword">throw</span> std::bad_alloc{};
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">free</span>(p); }
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">free</span>(p); }
+
+<span class="hljs-type">static</span> std::function&lt;<span class="hljs-type">int</span>()&gt; g_fn;   <span class="hljs-comment">// global, so the callable escapes</span>
+
+<span class="hljs-keyword">template</span> &lt;std::<span class="hljs-type">size_t</span> N&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">store</span><span class="hljs-params">()</span> </span>{
+    std::array&lt;<span class="hljs-type">char</span>, N&gt; capture{};
+    <span class="hljs-type">int</span> before = g_allocs.<span class="hljs-built_in">load</span>();
+    g_fn = [capture] { <span class="hljs-keyword">return</span> <span class="hljs-built_in">int</span>(capture[<span class="hljs-number">0</span>]); };
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;capture of %2zu bytes: %d\n&quot;</span>, N, g_allocs.<span class="hljs-built_in">load</span>() - before);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">store</span>&lt;<span class="hljs-number">8</span>&gt;();
+    <span class="hljs-built_in">store</span>&lt;<span class="hljs-number">16</span>&gt;();
+    <span class="hljs-built_in">store</span>&lt;<span class="hljs-number">24</span>&gt;();
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch18-function-sbo">capture of  8 bytes: 0
+capture of 16 bytes: 0
+capture of 24 bytes: 1</pre>
+    <p><b>Why.</b> Both libstdc++ and libc++ have a 32-byte <code>std::function</code> whose small buffer holds a callable of up to 16 bytes. libstdc++ uses a 16-byte buffer next to two function pointers. libc++ uses a 24-byte buffer, but it stores a small object that has its own vtable pointer, which leaves 16 bytes for the lambda. A lambda capturing a <code>std::array&lt;char, N&gt;</code> by value is trivially copyable and nothrow copyable, so only size decides. The global target matters: with a local <code>std::function</code> the optimiser can remove the heap allocation entirely and print 0 for all three, which is legal under <code>[expr.new]</code>. The exact threshold is implementation-defined; MSVC's buffer is larger.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>This uses a GCC/Clang extension. What does it print when run with no arguments?</p>
+<pre data-run="ch18-vla"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">(<span class="hljs-type">int</span> argc, <span class="hljs-type">char</span>**)</span> </span>{
+    <span class="hljs-type">int</span> n = argc + <span class="hljs-number">2</span>;
+    <span class="hljs-type">int</span> v[n];                      <span class="hljs-comment">// VLA: not standard C++</span>
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) v[i] = i * i;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu %d\n&quot;</span>, <span class="hljs-keyword">sizeof</span> v, v[n - <span class="hljs-number">1</span>]);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch18-vla">12 4</pre>
+    <p><b>Why.</b> With no arguments <code>argc</code> is 1, so <code>n</code> is 3. For a VLA, <code>sizeof</code> is evaluated at run time, giving 3 × 4 = 12, and the last element is 2 × 2 = 4. In standard C++ <code>sizeof</code> is always a compile-time constant, which is one reason VLAs do not fit the language. GCC accepts this silently unless you pass <code>-Wvla</code> or <code>-pedantic</code>; Clang warns by default with <code>-Wvla-cxx-extension</code>. MSVC refuses to compile it.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Which of these <code>std::any</code> assignments allocate?</p>
+<pre data-run="ch18-any-sbo"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;atomic&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;any&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;array&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdlib&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+
+<span class="hljs-type">static</span> std::atomic&lt;<span class="hljs-type">int</span>&gt; g_allocs{<span class="hljs-number">0</span>};   <span class="hljs-comment">// atomic: see the elision section</span>
+<span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-keyword">operator</span> <span class="hljs-title">new</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+    g_allocs.<span class="hljs-built_in">fetch_add</span>(<span class="hljs-number">1</span>, std::memory_order_relaxed);
+    <span class="hljs-keyword">if</span> (<span class="hljs-type">void</span>* p = std::<span class="hljs-built_in">malloc</span>(n ? n : <span class="hljs-number">1</span>)) <span class="hljs-keyword">return</span> p;
+    <span class="hljs-keyword">throw</span> std::bad_alloc{};
+}
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p)</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">free</span>(p); }
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span>)</span> <span class="hljs-keyword">noexcept</span> </span>{ std::<span class="hljs-built_in">free</span>(p); }
+
+<span class="hljs-type">static</span> std::any g_any;
+
+<span class="hljs-keyword">template</span> &lt;std::<span class="hljs-type">size_t</span> N&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">store</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> before = g_allocs.<span class="hljs-built_in">load</span>();
+    g_any = std::array&lt;<span class="hljs-type">char</span>, N&gt;{};
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;any holding %2zu bytes: %d allocation(s)\n&quot;</span>, N, g_allocs.<span class="hljs-built_in">load</span>() - before);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-built_in">store</span>&lt;<span class="hljs-number">8</span>&gt;();
+    <span class="hljs-built_in">store</span>&lt;<span class="hljs-number">32</span>&gt;();
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch18-any-sbo">any holding  8 bytes: 0 allocation(s)
+any holding 32 bytes: 1 allocation(s)</pre>
+    <p><b>Why.</b> <code>std::any</code> keeps small, nothrow-movable objects in an internal buffer. The buffer size is where the libraries differ: libstdc++'s <code>std::any</code> is 16 bytes and stores inline only objects of at most one pointer (8 bytes); libc++'s is 32 bytes and stores up to 24 bytes inline. The program prints only the cases where they agree. A 16-byte object would allocate on libstdc++ and not on libc++. The standard only "encourages" implementations to avoid allocation for small objects such as <code>int</code> (<code>[any.class]</code>).</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This passes every test with long names and fails for short ones. Why?</p>
+<pre data-run="ch18-view-move" data-mode="ub"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Registry</span> {
+    std::vector&lt;std::string&gt; names;
+    std::vector&lt;std::string_view&gt; index;
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">add</span><span class="hljs-params">(std::string name)</span> </span>{
+        index.<span class="hljs-built_in">push_back</span>(name);              <span class="hljs-comment">// view into the parameter</span>
+        names.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(name));   <span class="hljs-comment">// ...which is then moved from</span>
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Registry r;
+    r.names.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">8</span>);
+    r.<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;a-rather-long-name-that-lives-on-the-heap&quot;</span>);
+    r.<span class="hljs-built_in">add</span>(<span class="hljs-string">&quot;bob&quot;</span>);
+    <span class="hljs-keyword">for</span> (std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>; i &lt; r.index.<span class="hljs-built_in">size</span>(); ++i)
+        std::cout &lt;&lt; <span class="hljs-string">&quot;view &quot;</span> &lt;&lt; i &lt;&lt; (r.index[i] == r.names[i] ? <span class="hljs-string">&quot; ok\n&quot;</span> : <span class="hljs-string">&quot; broken\n&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The view is taken from <code>name</code> before it is moved. For the long name, the move transfers the heap buffer into the vector, so the view happens to point at live text owned by <code>names.back()</code>. For <code>"bob"</code>, SSO copies the three characters into the vector element's inline buffer; the view still points into the parameter <code>name</code>, which is moved-from and then destroyed when <code>add</code> returns. Reading it is undefined behaviour. On the test machine the Clang build printed <code>view 1 broken</code>, while the GCC build printed <code>ok</code> because the dead parameter's bytes had not been overwritten yet: the worst kind of bug, one that passes tests.</p>
+    <p><b>Fix.</b> Take the view from the stored string: <code>names.push_back(std::move(name)); index.push_back(names.back());</code>, and make sure <code>names</code> never reallocates (reserve, or use <code>std::deque</code>), or store indices instead of views. The lesson: a move does not promise that pointers into the source follow the data, and with SSO they visibly do not.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A tiny inline-buffer name type. What is wrong, and which tool catches it?</p>
+<pre data-run="ch18-selfptr" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Name</span> {
+    <span class="hljs-type">char</span> buf[<span class="hljs-number">16</span>];
+    <span class="hljs-type">char</span>* data;   <span class="hljs-comment">// points at buf</span>
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Name</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s)</span> : data(buf) {</span>
+        std::<span class="hljs-built_in">strncpy</span>(buf, s, <span class="hljs-keyword">sizeof</span> buf - <span class="hljs-number">1</span>);
+        buf[<span class="hljs-keyword">sizeof</span> buf - <span class="hljs-number">1</span>] = <span class="hljs-string">&#x27;\0&#x27;</span>;
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-function">Name <span class="hljs-title">kept</span><span class="hljs-params">(<span class="hljs-string">&quot;placeholder&quot;</span>)</span></span>;
+    {
+        <span class="hljs-function">Name <span class="hljs-title">temp</span><span class="hljs-params">(<span class="hljs-string">&quot;alice&quot;</span>)</span></span>;
+        kept = temp;               <span class="hljs-comment">// implicit copy assignment</span>
+    }
+    std::<span class="hljs-built_in">puts</span>(std::<span class="hljs-built_in">strcmp</span>(kept.data, <span class="hljs-string">&quot;alice&quot;</span>) == <span class="hljs-number">0</span> ? <span class="hljs-string">&quot;alice&quot;</span> : <span class="hljs-string">&quot;corrupted&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The implicit copy assignment copies <code>data</code> verbatim, so <code>kept.data</code> points into <code>temp.buf</code>. When the inner scope ends, <code>temp</code> is gone and the <code>strcmp</code> reads dead stack memory. AddressSanitizer reports <code>stack-use-after-scope</code>.</p>
+    <p><b>Why.</b> Any type with inline storage and a pointer to it is self-referential, so the compiler-generated copy and move operations are wrong for it (rule of three/five, <a href="#ch01">Ch 1</a>). Fix it by writing copy operations that set <code>data = buf</code> and copy the characters, or better, by not storing the pointer at all: compute it (<code>const char* c_str() const { return buf; }</code>). This is exactly the bug libstdc++'s <code>std::string</code> has to avoid in its move constructor, and the classic bug in hand-written small vectors.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this crash with GCC, while the Clang build seems to work?</p>
+<pre data-run="ch18-ret-local" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">greeting</span><span class="hljs-params">(<span class="hljs-type">int</span> id)</span> </span>{
+    <span class="hljs-type">char</span> buf[<span class="hljs-number">32</span>];
+    std::<span class="hljs-built_in">snprintf</span>(buf, <span class="hljs-keyword">sizeof</span> buf, <span class="hljs-string">&quot;hello %d&quot;</span>, id);
+    <span class="hljs-keyword">return</span> buf;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">const</span> <span class="hljs-type">char</span>* g = <span class="hljs-built_in">greeting</span>(<span class="hljs-number">7</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%c\n&quot;</span>, g[<span class="hljs-number">0</span>]);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>buf</code> lives in <code>greeting</code>'s frame, which is released by the epilogue's <code>add sp</code>. The returned pointer dangles, and the next call (<code>printf</code>) reuses that stack. Both compilers warn (<code>-Wreturn-local-addr</code> in GCC, <code>-Wreturn-stack-address</code> in Clang). GCC goes further: because the result is undefined anyway, it returns a null pointer, so <code>g[0]</code> crashes immediately. Clang returns the stale address; on the test machine it even printed the expected <code>h</code>, because nothing had overwritten the dead frame yet. Both behaviours are allowed, since the program has undefined behaviour.</p>
+    <p><b>Fix.</b> Return a value: <code>std::string</code> (likely within SSO, so no allocation), or <code>std::array&lt;char, 32&gt;</code>, which is returned in place by copy elision. Stack memory never outlives its function; the same applies to <code>alloca</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This builds a list of a million nodes and crashes when it is destroyed. Why, given that there is no recursion in the source?</p>
+<pre data-run="ch18-list-overflow" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+    <span class="hljs-type">int</span> value;
+    std::unique_ptr&lt;Node&gt; next;
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::unique_ptr&lt;Node&gt; head;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1&#x27;000&#x27;000</span>; ++i)
+        head = std::<span class="hljs-built_in">make_unique</span>&lt;Node&gt;(Node{i, std::<span class="hljs-built_in">move</span>(head)});
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;built&quot;</span>);
+    head.<span class="hljs-built_in">reset</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;destroyed&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> The recursion is in the generated destructors. Destroying node 0 destroys its member <code>next</code>, whose deleter destroys node 1, and so on: one or more stack frames per node, a million deep. That exceeds the 8 MB main-thread stack, and the process dies with <code>SIGSEGV</code>; ASan reports <code>stack-overflow</code> in <code>~unique_ptr</code>. It is not a tail call, because <code>operator delete</code> runs after the destructor returns.</p>
+    <p><b>Fix.</b> Give the list an iterative destructor that detaches each node before it dies:</p>
+<pre><code class="language-cpp hljs">~<span class="hljs-built_in">List</span>() {
+    <span class="hljs-keyword">while</span> (head) head = std::<span class="hljs-built_in">move</span>(head-&gt;next);   <span class="hljs-comment">// old head is destroyed with next already null</span>
+}</code></pre>
+    <p>The same issue hits trees built from <code>unique_ptr</code> children, recursive JSON values and deep expression trees. Interviewers like it because the source contains no recursive call.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>Why does this not compile, and what is the smallest fix?</p>
+<pre data-run="ch18-carray-assign" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-title">int</span> <span class="hljs-params">(make())</span>[3] </span>{
+    <span class="hljs-type">int</span> r[<span class="hljs-number">3</span>] = {<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>};
+    <span class="hljs-keyword">return</span> r;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> a[<span class="hljs-number">3</span>] = {<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>};
+    <span class="hljs-type">int</span> b[<span class="hljs-number">3</span>];
+    b = a;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d\n&quot;</span>, b[<span class="hljs-number">2</span>]);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Two errors. A function cannot return an array type (<code>[dcl.fct]</code>), and arrays are not assignable: in <code>b = a</code> the left side is an array lvalue, which is not modifiable, and the right side decays to <code>int*</code>.</p>
+    <p><b>Fix.</b> Use <code>std::array&lt;int, 3&gt;</code>: it is an aggregate class, so the implicit copy assignment copies all three elements, and it can be returned by value (constructed in the caller's frame by copy elision). C arrays inside a struct are copied with the struct, which is the only reason <code>std::array</code> works at all: it is a struct with an array member.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The author wanted parsing to stay off the heap entirely. Does it?</p>
+<pre data-run="ch18-mono-upstream"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory_resource&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-comment">// Counts what reaches the default resource, standing in for &quot;the heap&quot;.</span>
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">CountingResource</span> : std::pmr::memory_resource {
+    <span class="hljs-type">int</span> calls = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">do_allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> <span class="hljs-keyword">override</span> </span>{
+        ++calls;
+        <span class="hljs-keyword">return</span> std::pmr::<span class="hljs-built_in">new_delete_resource</span>()-&gt;<span class="hljs-built_in">allocate</span>(n, a);
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">do_deallocate</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span> n, std::<span class="hljs-type">size_t</span> a)</span> <span class="hljs-keyword">override</span> </span>{
+        std::pmr::<span class="hljs-built_in">new_delete_resource</span>()-&gt;<span class="hljs-built_in">deallocate</span>(p, n, a);
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">do_is_equal</span><span class="hljs-params">(<span class="hljs-type">const</span> memory_resource&amp; o)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-keyword">this</span> == &amp;o; }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::<span class="hljs-type">size_t</span> <span class="hljs-title">parse</span><span class="hljs-params">(<span class="hljs-type">int</span> n)</span> </span>{
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) std::byte buf[<span class="hljs-number">256</span>];
+    std::<span class="hljs-function">pmr::monotonic_buffer_resource <span class="hljs-title">arena</span><span class="hljs-params">(buf, <span class="hljs-keyword">sizeof</span> buf)</span></span>;
+    std::<span class="hljs-function">pmr::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">tokens</span><span class="hljs-params">(&amp;arena)</span></span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; n; ++i) tokens.<span class="hljs-built_in">push_back</span>(i);
+    <span class="hljs-keyword">return</span> tokens.<span class="hljs-built_in">size</span>();
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    CountingResource heap;
+    std::pmr::<span class="hljs-built_in">set_default_resource</span>(&amp;heap);
+    std::<span class="hljs-type">size_t</span> n = <span class="hljs-built_in">parse</span>(<span class="hljs-number">100</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;tokens %zu, heap used: %s\n&quot;</span>, n, heap.calls &gt; <span class="hljs-number">0</span> ? <span class="hljs-string">&quot;yes&quot;</span> : <span class="hljs-string">&quot;no&quot;</span>);
+    std::pmr::<span class="hljs-built_in">set_default_resource</span>(<span class="hljs-literal">nullptr</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch18-mono-upstream">tokens 100, heap used: yes</pre>
+    <p><b>Answer.</b> No. 100 ints need a 512-byte block at the last growth, and the earlier blocks (4 + 8 + ... + 256 bytes) are never reused, so the 256-byte buffer runs out early. The resource then asks its upstream. The constructor without an upstream argument uses <code>get_default_resource()</code>, which is normally <code>new_delete_resource()</code> and calls <code>operator new</code>. The program installs a counting default resource to make that visible. (Counting with a replaced global <code>operator new</code> is not reliable for this one: on macOS, GCC's libstdc++ dylib calls its own <code>operator new</code> internally.)</p>
+    <p><b>Fix.</b> Decide what overflow should mean. If the heap is forbidden, pass <code>std::pmr::null_memory_resource()</code> as the upstream so overflow throws <code>bad_alloc</code> and tests catch it. Either way, call <code>tokens.reserve(n)</code> so the monotonic arena is not wasted on abandoned blocks, and size the buffer from measurements.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch16-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>SmallVector&lt;T, N&gt;</code>: a vector that stores up to <code>N</code> elements inside the object and spills to the heap beyond that. Support <code>push_back</code> (copy and move), <code>emplace_back</code>, <code>pop_back</code>, <code>operator[]</code>, <code>size</code>, <code>capacity</code>, iteration, <code>is_inline()</code>, and correct copy, move and destruction. <code>T</code> need not be default constructible. <code>v.push_back(v[0])</code> must work even when it triggers growth.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Keep raw, aligned storage for <code>N</code> elements (<code>alignas(T) unsigned char[N * sizeof(T)]</code>) and a <code>T*</code> that points either at it or at a heap block. Construct elements with placement new and destroy them with <code>std::destroy</code>. On growth, allocate double the capacity, construct the new element in the new block first (so an argument that refers to an existing element is still alive), then move the old elements across and free the old block if it was on the heap. Moving steals the pointer only when the source is on the heap; an inline source must have its elements moved one by one.</p>
+<pre data-run="ch18-k-smallvec" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, std::<span class="hljs-type">size_t</span> N&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">SmallVector</span> {
+    <span class="hljs-built_in">static_assert</span>(N &gt; <span class="hljs-number">0</span>, <span class="hljs-string">&quot;use std::vector when N == 0&quot;</span>);
+    <span class="hljs-built_in">static_assert</span>(<span class="hljs-built_in">alignof</span>(T) &lt;= __STDCPP_DEFAULT_NEW_ALIGNMENT__, <span class="hljs-string">&quot;over-aligned T needs aligned new&quot;</span>);
+
+    <span class="hljs-built_in">alignas</span>(T) <span class="hljs-type">unsigned</span> <span class="hljs-type">char</span> buf_[<span class="hljs-function">N * <span class="hljs-title">sizeof</span><span class="hljs-params">(T)</span>]</span>;
+    T* data_;
+    std::<span class="hljs-type">size_t</span> size_ = <span class="hljs-number">0</span>;
+    std::<span class="hljs-type">size_t</span> cap_ = N;
+
+    <span class="hljs-function">T* <span class="hljs-title">inline_data</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">reinterpret_cast</span>&lt;T*&gt;(buf_); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">release_heap</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">is_inline</span>()) ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(data_)</span></span>;
+        data_ = <span class="hljs-built_in">inline_data</span>();
+        cap_ = N;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">steal</span><span class="hljs-params">(SmallVector&amp; o)</span> </span>{
+        <span class="hljs-keyword">if</span> (o.<span class="hljs-built_in">is_inline</span>()) {   <span class="hljs-comment">// elements live inside o: move them one by one</span>
+            std::<span class="hljs-built_in">uninitialized_move</span>(o.data_, o.data_ + o.size_, data_);
+            size_ = o.size_;
+            o.<span class="hljs-built_in">clear</span>();
+        } <span class="hljs-keyword">else</span> {               <span class="hljs-comment">// heap block: take the pointer</span>
+            data_ = o.data_; size_ = o.size_; cap_ = o.cap_;
+            o.data_ = o.<span class="hljs-built_in">inline_data</span>(); o.size_ = <span class="hljs-number">0</span>; o.cap_ = N;
+        }
+    }
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">SmallVector</span>() : <span class="hljs-built_in">data_</span>(<span class="hljs-built_in">inline_data</span>()) {}
+    <span class="hljs-built_in">SmallVector</span>(<span class="hljs-type">const</span> SmallVector&amp; o) : <span class="hljs-built_in">SmallVector</span>() {
+        <span class="hljs-built_in">reserve</span>(o.size_);
+        std::<span class="hljs-built_in">uninitialized_copy</span>(o.data_, o.data_ + o.size_, data_);
+        size_ = o.size_;
+    }
+    <span class="hljs-built_in">SmallVector</span>(SmallVector&amp;&amp; o) <span class="hljs-built_in">noexcept</span>(std::is_nothrow_move_constructible_v&lt;T&gt;) : <span class="hljs-built_in">SmallVector</span>() { <span class="hljs-built_in">steal</span>(o); }
+    SmallVector&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> SmallVector&amp; o) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;o) {
+            <span class="hljs-built_in">clear</span>();
+            <span class="hljs-built_in">reserve</span>(o.size_);
+            std::<span class="hljs-built_in">uninitialized_copy</span>(o.data_, o.data_ + o.size_, data_);
+            size_ = o.size_;
+        }
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    SmallVector&amp; <span class="hljs-keyword">operator</span>=(SmallVector&amp;&amp; o) <span class="hljs-built_in">noexcept</span>(std::is_nothrow_move_constructible_v&lt;T&gt;) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;o) { <span class="hljs-built_in">clear</span>(); <span class="hljs-built_in">release_heap</span>(); <span class="hljs-built_in">steal</span>(o); }
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    ~<span class="hljs-built_in">SmallVector</span>() { <span class="hljs-built_in">clear</span>(); <span class="hljs-built_in">release_heap</span>(); }
+
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">is_inline</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">void</span>*&gt;(data_) == <span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">const</span> <span class="hljs-type">void</span>*&gt;(buf_); }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">capacity</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> cap_; }
+    T&amp; <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) { <span class="hljs-keyword">return</span> data_[i]; }
+    <span class="hljs-type">const</span> T&amp; <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> data_[i]; }
+    <span class="hljs-function">T* <span class="hljs-title">begin</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> data_; }
+    <span class="hljs-function">T* <span class="hljs-title">end</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> data_ + size_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> T* <span class="hljs-title">begin</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> data_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> T* <span class="hljs-title">end</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> data_ + size_; }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">clear</span><span class="hljs-params">()</span> </span>{ std::<span class="hljs-built_in">destroy</span>(data_, data_ + size_); size_ = <span class="hljs-number">0</span>; }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">pop_back</span><span class="hljs-params">()</span> </span>{ std::<span class="hljs-built_in">destroy_at</span>(data_ + --size_); }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reserve</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-keyword">if</span> (n &lt;= cap_) <span class="hljs-keyword">return</span>;
+        T* nd = <span class="hljs-built_in">static_cast</span>&lt;T*&gt;(::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(n * <span class="hljs-built_in">sizeof</span>(T)));
+        std::<span class="hljs-built_in">uninitialized_move</span>(data_, data_ + size_, nd);   <span class="hljs-comment">// assumes T&#x27;s move does not throw</span>
+        std::<span class="hljs-built_in">destroy</span>(data_, data_ + size_);
+        <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">is_inline</span>()) ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(data_)</span></span>;
+        data_ = nd;
+        cap_ = n;
+    }
+
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span>... A&gt;
+    <span class="hljs-function">T&amp; <span class="hljs-title">emplace_back</span><span class="hljs-params">(A&amp;&amp;... args)</span> </span>{
+        <span class="hljs-keyword">if</span> (size_ &lt; cap_) {
+            T* p = ::<span class="hljs-built_in">new</span> (<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">void</span>*&gt;(data_ + size_)) <span class="hljs-built_in">T</span>(std::forward&lt;A&gt;(args)...);
+            ++size_;
+            <span class="hljs-keyword">return</span> *p;
+        }
+        std::<span class="hljs-type">size_t</span> ncap = cap_ * <span class="hljs-number">2</span>;
+        T* nd = <span class="hljs-built_in">static_cast</span>&lt;T*&gt;(::<span class="hljs-keyword">operator</span> <span class="hljs-built_in">new</span>(ncap * <span class="hljs-built_in">sizeof</span>(T)));
+        T* p;
+        <span class="hljs-keyword">try</span> {   <span class="hljs-comment">// build the new element first: args may refer to an element of *this</span>
+            p = ::<span class="hljs-built_in">new</span> (<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">void</span>*&gt;(nd + size_)) <span class="hljs-built_in">T</span>(std::forward&lt;A&gt;(args)...);
+        } <span class="hljs-built_in">catch</span> (...) {
+            ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(nd)</span></span>;
+            <span class="hljs-keyword">throw</span>;
+        }
+        std::<span class="hljs-built_in">uninitialized_move</span>(data_, data_ + size_, nd);
+        std::<span class="hljs-built_in">destroy</span>(data_, data_ + size_);
+        <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">is_inline</span>()) ::<span class="hljs-function"><span class="hljs-keyword">operator</span> <span class="hljs-title">delete</span><span class="hljs-params">(data_)</span></span>;
+        data_ = nd;
+        cap_ = ncap;
+        ++size_;
+        <span class="hljs-keyword">return</span> *p;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(<span class="hljs-type">const</span> T&amp; v)</span> </span>{ <span class="hljs-built_in">emplace_back</span>(v); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(T&amp;&amp; v)</span> </span>{ <span class="hljs-built_in">emplace_back</span>(std::<span class="hljs-built_in">move</span>(v)); }
+};
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">V</span>&gt;
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* label, <span class="hljs-type">const</span> V&amp; v)</span> </span>{
+    std::cout &lt;&lt; label &lt;&lt; <span class="hljs-string">&#x27;:&#x27;</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; x : v) std::cout &lt;&lt; <span class="hljs-string">&#x27; &#x27;</span> &lt;&lt; x;
+    std::cout &lt;&lt; <span class="hljs-string">&quot; (size &quot;</span> &lt;&lt; v.<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&quot;, &quot;</span> &lt;&lt; (v.<span class="hljs-built_in">is_inline</span>() ? <span class="hljs-string">&quot;inline&quot;</span> : <span class="hljs-string">&quot;heap&quot;</span>) &lt;&lt; <span class="hljs-string">&quot;)\n&quot;</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    SmallVector&lt;std::string, <span class="hljs-number">2</span>&gt; v;
+    v.<span class="hljs-built_in">push_back</span>(<span class="hljs-string">&quot;a&quot;</span>);
+    v.<span class="hljs-built_in">push_back</span>(<span class="hljs-string">&quot;b&quot;</span>);
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;two&quot;</span>, v);
+    v.<span class="hljs-built_in">push_back</span>(<span class="hljs-string">&quot;c&quot;</span>);
+    v.<span class="hljs-built_in">push_back</span>(v[<span class="hljs-number">0</span>]);   <span class="hljs-comment">// aliasing an element during growth</span>
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;four&quot;</span>, v);
+
+    SmallVector&lt;std::string, <span class="hljs-number">2</span>&gt; copy = v;
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;copy&quot;</span>, copy);
+    SmallVector&lt;std::string, <span class="hljs-number">2</span>&gt; moved = std::<span class="hljs-built_in">move</span>(v);
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;moved&quot;</span>, moved);
+    std::cout &lt;&lt; <span class="hljs-string">&quot;source after move: size &quot;</span> &lt;&lt; v.<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&#x27;\n&#x27;</span>;
+
+    SmallVector&lt;std::string, <span class="hljs-number">2</span>&gt; s1;
+    s1.<span class="hljs-built_in">push_back</span>(<span class="hljs-string">&quot;x&quot;</span>);
+    SmallVector&lt;std::string, <span class="hljs-number">2</span>&gt; s2 = std::<span class="hljs-built_in">move</span>(s1);
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;small move&quot;</span>, s2);
+    s2 = copy;
+    s2.<span class="hljs-built_in">pop_back</span>();
+    <span class="hljs-built_in">show</span>(<span class="hljs-string">&quot;assigned&quot;</span>, s2);
+}</code></pre>
+<pre class="out" data-out="ch18-k-smallvec">two: a b (size 2, inline)
+four: a b c a (size 4, heap)
+copy: a b c a (size 4, heap)
+moved: a b c a (size 4, heap)
+source after move: size 0
+small move: x (size 1, inline)
+assigned: a b c (size 3, heap)</pre>
+    <p><b>Complexity and pitfalls.</b> Amortised O(1) <code>push_back</code>; move is O(1) for a heap-backed source and O(size) for an inline one. Pitfalls: copying <code>data_</code> verbatim in the copy constructor (the copy would point into the source's buffer), declaring <code>T buf[N]</code> (constructs N elements), forgetting to reset a moved-from heap source to its own inline buffer, and growing before constructing the new element, which makes <code>v.push_back(v[0])</code> read a destroyed object. A production version also uses <code>std::move_if_noexcept</code> during growth for the strong guarantee, supports over-aligned <code>T</code> with <code>std::align_val_t</code>, and adds <code>insert</code>, <code>erase</code> and <code>resize</code>.</p>
+    <p class="rating">Estimated rating: ~1900 · manual lifetimes, aliasing during growth and two different move paths</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a string class with a small string optimisation in the libstdc++ style: a pointer, a size, and a 16-byte union holding either up to 15 characters plus NUL or the heap capacity. Provide construction from <code>const char*</code>, copy and move (constructor and assignment), <code>append</code> (which must work when the argument points into the string itself), <code>c_str</code>, <code>size</code>, <code>capacity</code> and <code>is_small</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> The pointer always points at the characters, so <code>c_str()</code> needs no branch; "small" means <code>ptr_ == local_</code>. The move constructor is where SSO bites: for a small source you must copy the characters and point at your own buffer, never copy <code>o.ptr_</code>. For a heap source you steal the pointer and reset the source to its empty inline state. <code>append</code> grows geometrically and copies the new characters into the new block before freeing the old one, because the argument may live in the old block.</p>
+<pre data-run="ch18-k-sso" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstring&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;iostream&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">SsoString</span> {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> kInline = <span class="hljs-number">15</span>;   <span class="hljs-comment">// plus the NUL</span>
+    <span class="hljs-type">char</span>* ptr_;                 <span class="hljs-comment">// points at local_ or at a heap block</span>
+    std::<span class="hljs-type">size_t</span> size_ = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">union</span> {
+        <span class="hljs-type">char</span> local_[kInline + <span class="hljs-number">1</span>];
+        std::<span class="hljs-type">size_t</span> cap_;       <span class="hljs-comment">// heap capacity, valid only when !is_small()</span>
+    };
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">init</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s, std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-keyword">if</span> (n &lt;= kInline) {
+            ptr_ = local_;
+        } <span class="hljs-keyword">else</span> {
+            ptr_ = <span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[n + <span class="hljs-number">1</span>];
+            cap_ = n;
+        }
+        std::<span class="hljs-built_in">memcpy</span>(ptr_, s, n);
+        ptr_[n] = <span class="hljs-string">&#x27;\0&#x27;</span>;
+        size_ = n;
+    }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">take</span><span class="hljs-params">(SsoString&amp; o)</span> <span class="hljs-keyword">noexcept</span> </span>{
+        size_ = o.size_;
+        <span class="hljs-keyword">if</span> (o.<span class="hljs-built_in">is_small</span>()) {
+            ptr_ = local_;                              <span class="hljs-comment">// never copy o.ptr_ here</span>
+            std::<span class="hljs-built_in">memcpy</span>(local_, o.local_, o.size_ + <span class="hljs-number">1</span>);
+        } <span class="hljs-keyword">else</span> {
+            ptr_ = o.ptr_;
+            cap_ = o.cap_;
+            o.ptr_ = o.local_;
+        }
+        o.size_ = <span class="hljs-number">0</span>;
+        o.local_[<span class="hljs-number">0</span>] = <span class="hljs-string">&#x27;\0&#x27;</span>;
+    }
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">SsoString</span>() : <span class="hljs-built_in">ptr_</span>(local_) { local_[<span class="hljs-number">0</span>] = <span class="hljs-string">&#x27;\0&#x27;</span>; }
+    <span class="hljs-built_in">SsoString</span>(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s) { <span class="hljs-built_in">init</span>(s, std::<span class="hljs-built_in">strlen</span>(s)); }
+    <span class="hljs-built_in">SsoString</span>(<span class="hljs-type">const</span> SsoString&amp; o) { <span class="hljs-built_in">init</span>(o.ptr_, o.size_); }
+    <span class="hljs-built_in">SsoString</span>(SsoString&amp;&amp; o) <span class="hljs-keyword">noexcept</span> { <span class="hljs-built_in">take</span>(o); }
+    SsoString&amp; <span class="hljs-keyword">operator</span>=(SsoString&amp;&amp; o) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;o) {
+            <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">is_small</span>()) <span class="hljs-keyword">delete</span>[] ptr_;
+            <span class="hljs-built_in">take</span>(o);
+        }
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    SsoString&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> SsoString&amp; o) {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;o) *<span class="hljs-keyword">this</span> = <span class="hljs-built_in">SsoString</span>(o);   <span class="hljs-comment">// copy, then move-assign</span>
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    ~<span class="hljs-built_in">SsoString</span>() { <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">is_small</span>()) <span class="hljs-keyword">delete</span>[] ptr_; }
+
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">is_small</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> ptr_ == local_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">capacity</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">is_small</span>() ? kInline : cap_; }
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">c_str</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> ptr_; }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">append</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s, std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        std::<span class="hljs-type">size_t</span> need = size_ + n;
+        <span class="hljs-keyword">if</span> (need &gt; <span class="hljs-built_in">capacity</span>()) {
+            std::<span class="hljs-type">size_t</span> ncap = need &gt; <span class="hljs-number">2</span> * <span class="hljs-built_in">capacity</span>() ? need : <span class="hljs-number">2</span> * <span class="hljs-built_in">capacity</span>();
+            <span class="hljs-type">char</span>* p = <span class="hljs-keyword">new</span> <span class="hljs-type">char</span>[ncap + <span class="hljs-number">1</span>];
+            std::<span class="hljs-built_in">memcpy</span>(p, ptr_, size_);
+            std::<span class="hljs-built_in">memcpy</span>(p + size_, s, n);   <span class="hljs-comment">// s may point into the old buffer: copy before freeing</span>
+            <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">is_small</span>()) <span class="hljs-keyword">delete</span>[] ptr_;
+            ptr_ = p;
+            cap_ = ncap;                    <span class="hljs-comment">// overwrites local_, which is no longer in use</span>
+        } <span class="hljs-keyword">else</span> {
+            std::<span class="hljs-built_in">memmove</span>(ptr_ + size_, s, n);
+        }
+        size_ = need;
+        ptr_[size_] = <span class="hljs-string">&#x27;\0&#x27;</span>;
+    }
+    SsoString&amp; <span class="hljs-keyword">operator</span>+=(<span class="hljs-type">const</span> <span class="hljs-type">char</span>* s) { <span class="hljs-built_in">append</span>(s, std::<span class="hljs-built_in">strlen</span>(s)); <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">show</span><span class="hljs-params">(<span class="hljs-type">const</span> SsoString&amp; s)</span> </span>{
+    std::cout &lt;&lt; <span class="hljs-string">&#x27;&quot;&#x27;</span> &lt;&lt; s.<span class="hljs-built_in">c_str</span>() &lt;&lt; <span class="hljs-string">&quot;\&quot; size &quot;</span> &lt;&lt; s.<span class="hljs-built_in">size</span>() &lt;&lt; <span class="hljs-string">&quot; cap &quot;</span> &lt;&lt; s.<span class="hljs-built_in">capacity</span>()
+              &lt;&lt; (s.<span class="hljs-built_in">is_small</span>() ? <span class="hljs-string">&quot; inline\n&quot;</span> : <span class="hljs-string">&quot; heap\n&quot;</span>);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    SsoString a = <span class="hljs-string">&quot;hello&quot;</span>;
+    <span class="hljs-built_in">show</span>(a);
+    a += <span class="hljs-string">&quot;, world!!!&quot;</span>;       <span class="hljs-comment">// 15 chars: still inline</span>
+    <span class="hljs-built_in">show</span>(a);
+    a += <span class="hljs-string">&quot; and more&quot;</span>;        <span class="hljs-comment">// spills to the heap</span>
+    <span class="hljs-built_in">show</span>(a);
+
+    SsoString small = <span class="hljs-string">&quot;tiny&quot;</span>;
+    SsoString moved = std::<span class="hljs-built_in">move</span>(small);
+    <span class="hljs-built_in">show</span>(moved);
+    <span class="hljs-built_in">show</span>(small);
+
+    SsoString big = moved;
+    big = a;                 <span class="hljs-comment">// copy assignment</span>
+    <span class="hljs-built_in">show</span>(big);
+    a.<span class="hljs-built_in">append</span>(a.<span class="hljs-built_in">c_str</span>(), a.<span class="hljs-built_in">size</span>());   <span class="hljs-comment">// self-append that reallocates</span>
+    <span class="hljs-built_in">show</span>(a);
+}</code></pre>
+<pre class="out" data-out="ch18-k-sso">"hello" size 5 cap 15 inline
+"hello, world!!!" size 15 cap 15 inline
+"hello, world!!! and more" size 24 cap 30 heap
+"tiny" size 4 cap 15 inline
+"" size 0 cap 15 inline
+"hello, world!!! and more" size 24 cap 24 heap
+"hello, world!!! and morehello, world!!! and more" size 48 cap 60 heap</pre>
+    <p><b>Complexity and pitfalls.</b> Amortised O(1) per appended character, O(n) copy, O(1) move (copying at most 16 bytes). Pitfalls: copying the self-pointer in a move or copy (the dangling-buffer bug from the reading drills), freeing the old buffer before copying a self-referencing argument, reading <code>cap_</code> while the union holds characters (only read it when <code>!is_small()</code>), and forgetting the NUL. The copy assignment reuses the move assignment through a temporary, which gives the strong exception guarantee.</p>
+    <p class="rating">Estimated rating: ~1700 · union with an active-member rule, self-pointer and self-append aliasing</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>InplaceFunction&lt;R(Args...), Cap&gt;</code>: a move-only, type-erased callable that never allocates. A callable that is larger than <code>Cap</code>, over-aligned, or not nothrow movable must be rejected at compile time. Calling an empty one throws <code>std::bad_function_call</code>. It must accept move-only lambdas.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Store the callable in an aligned byte buffer with placement new, and keep a pointer to a static table of three function pointers (invoke, move, destroy) instantiated once per callable type. That table is a hand-written vtable, so the object is <code>Cap</code> + 8 bytes with no heap and no virtual functions. All checks are <code>static_assert</code>s in the converting constructor, so an oversized capture is a compile error rather than a hidden allocation. Being move-only removes the need for a copy operation, which is what makes move-only captures possible (the same reason <code>std::move_only_function</code> exists in C++23).</p>
+<pre data-run="ch18-k-inplace-fn" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;functional&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">Sig</span>, std::<span class="hljs-type">size_t</span> Cap = <span class="hljs-number">32</span>&gt;
+<span class="hljs-keyword">class</span> InplaceFunction;
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">R</span>, <span class="hljs-keyword">class</span>... Args, std::<span class="hljs-type">size_t</span> Cap&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">InplaceFunction</span>&lt;<span class="hljs-built_in">R</span>(Args...), Cap&gt; {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Ops</span> {
+        <span class="hljs-built_in">R</span> (*invoke)(<span class="hljs-type">void</span>*, Args&amp;&amp;...);
+        <span class="hljs-built_in">void</span> (*move)(<span class="hljs-type">void</span>* dst, <span class="hljs-type">void</span>* src) <span class="hljs-keyword">noexcept</span>;   <span class="hljs-comment">// move-construct into dst, destroy src</span>
+        <span class="hljs-built_in">void</span> (*destroy)(<span class="hljs-type">void</span>*) <span class="hljs-keyword">noexcept</span>;
+    };
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>&gt;
+    <span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> Ops ops_for{
+        [](<span class="hljs-type">void</span>* p, Args&amp;&amp;... a) -&gt; R { <span class="hljs-keyword">return</span> (*<span class="hljs-built_in">static_cast</span>&lt;F*&gt;(p))(std::forward&lt;Args&gt;(a)...); },
+        [](<span class="hljs-type">void</span>* dst, <span class="hljs-type">void</span>* src) <span class="hljs-keyword">noexcept</span> {
+            ::<span class="hljs-keyword">new</span> (dst) <span class="hljs-built_in">F</span>(std::<span class="hljs-built_in">move</span>(*<span class="hljs-built_in">static_cast</span>&lt;F*&gt;(src)));
+            <span class="hljs-built_in">static_cast</span>&lt;F*&gt;(src)-&gt;~<span class="hljs-built_in">F</span>();
+        },
+        [](<span class="hljs-type">void</span>* p) <span class="hljs-keyword">noexcept</span> { <span class="hljs-built_in">static_cast</span>&lt;F*&gt;(p)-&gt;~<span class="hljs-built_in">F</span>(); },
+    };
+
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) <span class="hljs-type">unsigned</span> <span class="hljs-type">char</span> buf_[Cap];
+    <span class="hljs-type">const</span> Ops* ops_ = <span class="hljs-literal">nullptr</span>;
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">InplaceFunction</span>() = <span class="hljs-keyword">default</span>;
+
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">F</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">D</span> = std::<span class="hljs-type">decay_t</span>&lt;F&gt;,
+              <span class="hljs-keyword">class</span> = std::<span class="hljs-type">enable_if_t</span>&lt;!std::is_same_v&lt;D, InplaceFunction&gt;&gt;&gt;
+    <span class="hljs-built_in">InplaceFunction</span>(F&amp;&amp; f) {
+        <span class="hljs-built_in">static_assert</span>(<span class="hljs-built_in">sizeof</span>(D) &lt;= Cap, <span class="hljs-string">&quot;callable too large for InplaceFunction&quot;</span>);
+        <span class="hljs-built_in">static_assert</span>(<span class="hljs-built_in">alignof</span>(D) &lt;= <span class="hljs-built_in">alignof</span>(std::<span class="hljs-type">max_align_t</span>), <span class="hljs-string">&quot;callable over-aligned&quot;</span>);
+        <span class="hljs-built_in">static_assert</span>(std::is_nothrow_move_constructible_v&lt;D&gt;, <span class="hljs-string">&quot;callable must be nothrow movable&quot;</span>);
+        <span class="hljs-built_in">static_assert</span>(std::is_invocable_r_v&lt;R, D&amp;, Args...&gt;, <span class="hljs-string">&quot;wrong signature&quot;</span>);
+        ::<span class="hljs-keyword">new</span> (<span class="hljs-built_in">static_cast</span>&lt;<span class="hljs-type">void</span>*&gt;(buf_)) <span class="hljs-built_in">D</span>(std::forward&lt;F&gt;(f));
+        ops_ = &amp;ops_for&lt;D&gt;;
+    }
+    <span class="hljs-built_in">InplaceFunction</span>(InplaceFunction&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">ops_</span>(o.ops_) {
+        <span class="hljs-keyword">if</span> (ops_) { ops_-&gt;<span class="hljs-built_in">move</span>(buf_, o.buf_); o.ops_ = <span class="hljs-literal">nullptr</span>; }
+    }
+    InplaceFunction&amp; <span class="hljs-keyword">operator</span>=(InplaceFunction&amp;&amp; o) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-keyword">if</span> (<span class="hljs-keyword">this</span> != &amp;o) {
+            <span class="hljs-built_in">reset</span>();
+            <span class="hljs-keyword">if</span> (o.ops_) { o.ops_-&gt;<span class="hljs-built_in">move</span>(buf_, o.buf_); ops_ = o.ops_; o.ops_ = <span class="hljs-literal">nullptr</span>; }
+        }
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    <span class="hljs-built_in">InplaceFunction</span>(<span class="hljs-type">const</span> InplaceFunction&amp;) = <span class="hljs-keyword">delete</span>;
+    InplaceFunction&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> InplaceFunction&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">InplaceFunction</span>() { <span class="hljs-built_in">reset</span>(); }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reset</span><span class="hljs-params">()</span> <span class="hljs-keyword">noexcept</span> </span>{
+        <span class="hljs-keyword">if</span> (ops_) { ops_-&gt;<span class="hljs-built_in">destroy</span>(buf_); ops_ = <span class="hljs-literal">nullptr</span>; }
+    }
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-keyword">operator</span> <span class="hljs-title">bool</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> </span>{ <span class="hljs-keyword">return</span> ops_ != <span class="hljs-literal">nullptr</span>; }
+    <span class="hljs-function">R <span class="hljs-title">operator</span><span class="hljs-params">()</span><span class="hljs-params">(Args... a)</span> </span>{
+        <span class="hljs-keyword">if</span> (!ops_) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_function_call</span>();
+        <span class="hljs-keyword">return</span> ops_-&gt;<span class="hljs-built_in">invoke</span>(buf_, std::forward&lt;Args&gt;(a)...);
+    }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-type">int</span> base = <span class="hljs-number">10</span>;
+    InplaceFunction&lt;<span class="hljs-built_in">int</span>(<span class="hljs-type">int</span>)&gt; add = [base](<span class="hljs-type">int</span> x) { <span class="hljs-keyword">return</span> base + x; };
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;add(5) = %d\n&quot;</span>, <span class="hljs-built_in">add</span>(<span class="hljs-number">5</span>));
+
+    <span class="hljs-keyword">auto</span> owner = std::<span class="hljs-built_in">make_unique</span>&lt;std::string&gt;(<span class="hljs-string">&quot;owned by the lambda&quot;</span>);
+    InplaceFunction&lt;std::<span class="hljs-built_in">size_t</span>()&gt; len = [p = std::<span class="hljs-built_in">move</span>(owner)] { <span class="hljs-keyword">return</span> p-&gt;<span class="hljs-built_in">size</span>(); };   <span class="hljs-comment">// move-only capture</span>
+    InplaceFunction&lt;std::<span class="hljs-built_in">size_t</span>()&gt; len2 = std::<span class="hljs-built_in">move</span>(len);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;len2() = %zu, len empty: %s\n&quot;</span>, <span class="hljs-built_in">len2</span>(), len ? <span class="hljs-string">&quot;no&quot;</span> : <span class="hljs-string">&quot;yes&quot;</span>);
+
+    InplaceFunction&lt;<span class="hljs-built_in">void</span>(), <span class="hljs-number">64</span>&gt; hello = [s = std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;captured string&quot;</span>)] { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, s.<span class="hljs-built_in">c_str</span>()); };
+    <span class="hljs-built_in">hello</span>();
+    hello = [] { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;reassigned&quot;</span>); };
+    <span class="hljs-built_in">hello</span>();
+
+    InplaceFunction&lt;<span class="hljs-built_in">int</span>(<span class="hljs-type">int</span>)&gt; empty;
+    <span class="hljs-keyword">try</span> { <span class="hljs-built_in">empty</span>(<span class="hljs-number">1</span>); } <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_function_call&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;empty call throws&quot;</span>); }
+    <span class="hljs-comment">// InplaceFunction&lt;void(), 8&gt; tooBig = [s = std::string()] {};   // static_assert fires</span>
+}</code></pre>
+<pre class="out" data-out="ch18-k-inplace-fn">add(5) = 15
+len2() = 19, len empty: yes
+captured string
+reassigned
+empty call throws</pre>
+    <p><b>Complexity and pitfalls.</b> One indirect call per invocation, like <code>std::function</code>. Pitfalls: the converting constructor template hijacking the move constructor (excluded with the <code>is_same</code> constraint), forgetting to destroy the source after moving it (the move op does both), and forgetting <code>reset()</code> before move-assigning into a non-empty object. Inline-only wrappers like this are common in trading systems, where a hidden allocation on the order path is a latency bug.</p>
+    <p class="rating">Estimated rating: ~2000 · type erasure by hand with a static ops table and compile-time capacity checks</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>StackFirstResource&lt;N&gt;</code>, a <code>std::pmr::memory_resource</code> that serves allocations from an <code>N</code>-byte buffer inside the object (so it is on the stack when the resource is a local), falls back to an upstream resource when the buffer cannot satisfy a request, counts fallbacks, and reclaims space when the most recently allocated block is freed (LIFO).</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Override the three virtuals. <code>do_allocate</code> rounds the bump offset up to the requested alignment (always a power of two in pmr) and returns the next slice if it fits, otherwise counts a fallback and forwards to the upstream. <code>do_deallocate</code> forwards pointers it does not own; for its own blocks it rolls the offset back only if the block is the last one handed out, which makes stack-like usage (scoped containers) reuse the buffer. Identity is the only meaningful equality.</p>
+<pre data-run="ch18-k-stack-res" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory_resource&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;std::<span class="hljs-type">size_t</span> N&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">StackFirstResource</span> : <span class="hljs-keyword">public</span> std::pmr::memory_resource {
+    <span class="hljs-built_in">alignas</span>(std::<span class="hljs-type">max_align_t</span>) std::byte buf_[N];
+    std::<span class="hljs-type">size_t</span> used_ = <span class="hljs-number">0</span>;
+    std::pmr::memory_resource* upstream_;
+    <span class="hljs-type">int</span> fallbacks_ = <span class="hljs-number">0</span>;
+
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">owns</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">void</span>* p)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">auto</span> a = <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(p), b = <span class="hljs-built_in">reinterpret_cast</span>&lt;std::<span class="hljs-type">uintptr_t</span>&gt;(buf_);
+        <span class="hljs-keyword">return</span> a &gt;= b &amp;&amp; a &lt; b + N;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span>* <span class="hljs-title">do_allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> bytes, std::<span class="hljs-type">size_t</span> align)</span> <span class="hljs-keyword">override</span> </span>{
+        std::<span class="hljs-type">size_t</span> start = (used_ + align - <span class="hljs-number">1</span>) &amp; ~(align - <span class="hljs-number">1</span>);   <span class="hljs-comment">// align is a power of two</span>
+        <span class="hljs-keyword">if</span> (align &lt;= <span class="hljs-built_in">alignof</span>(std::<span class="hljs-type">max_align_t</span>) &amp;&amp; start &lt;= N &amp;&amp; bytes &lt;= N - start) {
+            used_ = start + bytes;
+            <span class="hljs-keyword">return</span> buf_ + start;
+        }
+        ++fallbacks_;
+        <span class="hljs-keyword">return</span> upstream_-&gt;<span class="hljs-built_in">allocate</span>(bytes, align);
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">do_deallocate</span><span class="hljs-params">(<span class="hljs-type">void</span>* p, std::<span class="hljs-type">size_t</span> bytes, std::<span class="hljs-type">size_t</span> align)</span> <span class="hljs-keyword">override</span> </span>{
+        <span class="hljs-keyword">if</span> (!<span class="hljs-built_in">owns</span>(p)) { upstream_-&gt;<span class="hljs-built_in">deallocate</span>(p, bytes, align); <span class="hljs-keyword">return</span>; }
+        <span class="hljs-keyword">if</span> (<span class="hljs-built_in">static_cast</span>&lt;std::byte*&gt;(p) + bytes == buf_ + used_)   <span class="hljs-comment">// most recent block: roll back</span>
+            used_ = <span class="hljs-built_in">static_cast</span>&lt;std::<span class="hljs-type">size_t</span>&gt;(<span class="hljs-built_in">static_cast</span>&lt;std::byte*&gt;(p) - buf_);
+    }
+    <span class="hljs-function"><span class="hljs-type">bool</span> <span class="hljs-title">do_is_equal</span><span class="hljs-params">(<span class="hljs-type">const</span> std::pmr::memory_resource&amp; o)</span> <span class="hljs-type">const</span> <span class="hljs-keyword">noexcept</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-keyword">this</span> == &amp;o; }
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">StackFirstResource</span><span class="hljs-params">(std::pmr::memory_resource* up = std::pmr::new_delete_resource())</span> : upstream_(up) {</span>}
+    <span class="hljs-built_in">StackFirstResource</span>(<span class="hljs-type">const</span> StackFirstResource&amp;) = <span class="hljs-keyword">delete</span>;
+    StackFirstResource&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> StackFirstResource&amp;) = <span class="hljs-keyword">delete</span>;
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">used</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> used_; }
+    <span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">fallbacks</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> fallbacks_; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    StackFirstResource&lt;<span class="hljs-number">1024</span>&gt; res;
+    {
+        std::<span class="hljs-function">pmr::vector&lt;<span class="hljs-type">int</span>&gt; <span class="hljs-title">v</span><span class="hljs-params">(&amp;res)</span></span>;
+        v.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">64</span>);                       <span class="hljs-comment">// 256 bytes from the buffer</span>
+        <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">64</span>; ++i) v.<span class="hljs-built_in">push_back</span>(i);
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after 64 ints: used %zu, fallbacks %d\n&quot;</span>, res.<span class="hljs-built_in">used</span>(), res.<span class="hljs-built_in">fallbacks</span>());
+    }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;after vector freed: used %zu\n&quot;</span>, res.<span class="hljs-built_in">used</span>());   <span class="hljs-comment">// LIFO free rolled back</span>
+
+    std::<span class="hljs-function">pmr::vector&lt;std::pmr::string&gt; <span class="hljs-title">words</span><span class="hljs-params">(&amp;res)</span></span>;
+    words.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">3</span>);
+    words.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-string">&quot;a long string that does not fit in the SSO buffer&quot;</span>);
+    words.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-string">&quot;short&quot;</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;strings: fallbacks %d\n&quot;</span>, res.<span class="hljs-built_in">fallbacks</span>());
+
+    std::<span class="hljs-function">pmr::vector&lt;<span class="hljs-type">char</span>&gt; <span class="hljs-title">big</span><span class="hljs-params">(&amp;res)</span></span>;
+    big.<span class="hljs-built_in">resize</span>(<span class="hljs-number">2000</span>);                        <span class="hljs-comment">// larger than the whole buffer: goes upstream</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;big: fallbacks %d, size %zu\n&quot;</span>, res.<span class="hljs-built_in">fallbacks</span>(), big.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch18-k-stack-res">after 64 ints: used 256, fallbacks 0
+after vector freed: used 0
+strings: fallbacks 0
+big: fallbacks 1, size 2000</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) allocate and deallocate. Pitfalls: alignment rounding that overflows (check <code>bytes &lt;= N - start</code> rather than <code>start + bytes &lt;= N</code>), forwarding a buffer pointer to the upstream (instant heap corruption), copying the resource (containers hold a pointer to it, so it must be non-copyable and outlive them), and expecting non-LIFO frees to reclaim space. Compared with <code>monotonic_buffer_resource</code>, this adds LIFO reuse and makes fallbacks observable, which is useful in tests that assert "no heap on the hot path".</p>
+    <p class="rating">Estimated rating: ~1600 · pmr virtual interface, alignment arithmetic and ownership checks</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>A singly linked list built from <code>std::unique_ptr&lt;Node&gt;</code> and a binary tree with <code>unique_ptr</code> children both crash with a stack overflow on deep inputs (a million nodes), in their destructors and in a recursive <code>max_depth</code>. Rewrite them so that no operation uses stack space proportional to the input, and prove it on a thread with a 512 KB stack.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> For the list, destroy nodes in a loop, detaching each node's <code>next</code> before the node dies: <code>head_ = std::move(head_-&gt;next)</code> releases the successor into <code>head_</code> first and then deletes the old head, whose <code>next</code> is already null. For the tree, replace recursion with an explicit stack held in a <code>std::vector</code> (heap memory that grows as needed): push children with their depth for <code>max_depth</code>, and for destruction move each node's children onto the stack before the node goes out of scope.</p>
+<pre data-run="ch18-k-deep" data-flags="tsan asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;pthread.h&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">List</span> {
+    <span class="hljs-keyword">struct</span> <span class="hljs-title class_">Node</span> {
+        <span class="hljs-type">int</span> value;
+        std::unique_ptr&lt;Node&gt; next;
+    };
+    std::unique_ptr&lt;Node&gt; head_;
+    std::<span class="hljs-type">size_t</span> size_ = <span class="hljs-number">0</span>;
+
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">List</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">List</span>(List&amp;&amp;) <span class="hljs-keyword">noexcept</span> = <span class="hljs-keyword">default</span>;
+    List&amp; <span class="hljs-keyword">operator</span>=(List&amp;&amp; o) <span class="hljs-keyword">noexcept</span> {
+        <span class="hljs-built_in">clear</span>();
+        head_ = std::<span class="hljs-built_in">move</span>(o.head_);
+        size_ = std::<span class="hljs-built_in">exchange</span>(o.size_, <span class="hljs-number">0</span>);
+        <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>;
+    }
+    ~<span class="hljs-built_in">List</span>() { <span class="hljs-built_in">clear</span>(); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">clear</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">while</span> (head_) head_ = std::<span class="hljs-built_in">move</span>(head_-&gt;next);   <span class="hljs-comment">// each node dies with next == nullptr</span>
+        size_ = <span class="hljs-number">0</span>;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_front</span><span class="hljs-params">(<span class="hljs-type">int</span> v)</span> </span>{
+        head_ = std::<span class="hljs-built_in">make_unique</span>&lt;Node&gt;(Node{v, std::<span class="hljs-built_in">move</span>(head_)});
+        ++size_;
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">TreeNode</span> {
+    <span class="hljs-type">int</span> value = <span class="hljs-number">0</span>;
+    std::unique_ptr&lt;TreeNode&gt; left, right;
+};
+
+<span class="hljs-function"><span class="hljs-type">static</span> std::<span class="hljs-type">size_t</span> <span class="hljs-title">max_depth</span><span class="hljs-params">(<span class="hljs-type">const</span> TreeNode* root)</span> </span>{
+    std::vector&lt;std::pair&lt;<span class="hljs-type">const</span> TreeNode*, std::<span class="hljs-type">size_t</span>&gt;&gt; stack;   <span class="hljs-comment">// heap, grows as needed</span>
+    <span class="hljs-keyword">if</span> (root) stack.<span class="hljs-built_in">push_back</span>({root, <span class="hljs-number">1</span>});
+    std::<span class="hljs-type">size_t</span> best = <span class="hljs-number">0</span>;
+    <span class="hljs-keyword">while</span> (!stack.<span class="hljs-built_in">empty</span>()) {
+        <span class="hljs-keyword">auto</span> [n, d] = stack.<span class="hljs-built_in">back</span>();
+        stack.<span class="hljs-built_in">pop_back</span>();
+        best = std::<span class="hljs-built_in">max</span>(best, d);
+        <span class="hljs-keyword">if</span> (n-&gt;left) stack.<span class="hljs-built_in">push_back</span>({n-&gt;left.<span class="hljs-built_in">get</span>(), d + <span class="hljs-number">1</span>});
+        <span class="hljs-keyword">if</span> (n-&gt;right) stack.<span class="hljs-built_in">push_back</span>({n-&gt;right.<span class="hljs-built_in">get</span>(), d + <span class="hljs-number">1</span>});
+    }
+    <span class="hljs-keyword">return</span> best;
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">destroy_tree</span><span class="hljs-params">(std::unique_ptr&lt;TreeNode&gt; root)</span> </span>{
+    std::vector&lt;std::unique_ptr&lt;TreeNode&gt;&gt; stack;
+    <span class="hljs-keyword">if</span> (root) stack.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(root));
+    <span class="hljs-keyword">while</span> (!stack.<span class="hljs-built_in">empty</span>()) {
+        std::unique_ptr&lt;TreeNode&gt; n = std::<span class="hljs-built_in">move</span>(stack.<span class="hljs-built_in">back</span>());
+        stack.<span class="hljs-built_in">pop_back</span>();
+        <span class="hljs-keyword">if</span> (n-&gt;left) stack.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(n-&gt;left));
+        <span class="hljs-keyword">if</span> (n-&gt;right) stack.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(n-&gt;right));
+    }   <span class="hljs-comment">// n is destroyed here with both children already detached</span>
+}
+
+<span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span>* <span class="hljs-title">work</span><span class="hljs-params">(<span class="hljs-type">void</span>*)</span> </span>{
+    List list;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">1&#x27;000&#x27;000</span>; ++i) list.<span class="hljs-built_in">push_front</span>(i);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;list size %zu\n&quot;</span>, list.<span class="hljs-built_in">size</span>());
+    list.<span class="hljs-built_in">clear</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;list cleared\n&quot;</span>);
+
+    <span class="hljs-keyword">auto</span> root = std::<span class="hljs-built_in">make_unique</span>&lt;TreeNode&gt;();
+    TreeNode* cur = root.<span class="hljs-built_in">get</span>();
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">999&#x27;999</span>; ++i) {           <span class="hljs-comment">// degenerate tree: a left spine</span>
+        cur-&gt;left = std::<span class="hljs-built_in">make_unique</span>&lt;TreeNode&gt;();
+        cur = cur-&gt;left.<span class="hljs-built_in">get</span>();
+    }
+    cur-&gt;right = std::<span class="hljs-built_in">make_unique</span>&lt;TreeNode&gt;();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;depth %zu\n&quot;</span>, <span class="hljs-built_in">max_depth</span>(root.<span class="hljs-built_in">get</span>()));
+    <span class="hljs-built_in">destroy_tree</span>(std::<span class="hljs-built_in">move</span>(root));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;tree destroyed\n&quot;</span>);
+    <span class="hljs-keyword">return</span> <span class="hljs-literal">nullptr</span>;
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-comment">// std::thread cannot set a stack size, so use pthreads: 512 KB on every platform.</span>
+    <span class="hljs-type">pthread_attr_t</span> attr;
+    <span class="hljs-built_in">pthread_attr_init</span>(&amp;attr);
+    <span class="hljs-built_in">pthread_attr_setstacksize</span>(&amp;attr, <span class="hljs-number">512</span> * <span class="hljs-number">1024</span>);
+    <span class="hljs-type">pthread_t</span> t;
+    <span class="hljs-keyword">if</span> (<span class="hljs-built_in">pthread_create</span>(&amp;t, &amp;attr, work, <span class="hljs-literal">nullptr</span>) != <span class="hljs-number">0</span>) <span class="hljs-keyword">return</span> <span class="hljs-number">1</span>;
+    <span class="hljs-built_in">pthread_join</span>(t, <span class="hljs-literal">nullptr</span>);
+    <span class="hljs-built_in">pthread_attr_destroy</span>(&amp;attr);
+}</code></pre>
+<pre class="out" data-out="ch18-k-deep">list size 1000000
+list cleared
+depth 1000001
+tree destroyed</pre>
+    <p><b>Complexity and pitfalls.</b> O(n) time for everything; O(1) extra space for the list and O(height) heap space (not stack) for the tree. Pitfalls: writing <code>head_.reset(head_-&gt;next.release())</code> in the wrong order and leaking, forgetting that the defaulted move assignment would destroy the old list recursively (hence the custom one), and forgetting that the tree's own <code>~TreeNode</code> is still recursive if a node is destroyed while it still owns children. Tail recursion does not save you: destructors run before <code>operator delete</code>, so the recursive call is not in tail position.</p>
+    <p class="rating">Estimated rating: ~1400 · standard recursion-to-iteration, with the destructor twist</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write a <code>FixedString&lt;N&gt;</code> that holds a string literal by value with no heap, can be used as a C++20 class-type template argument (<code>Counter&lt;"cache.miss"&gt;</code>), compares equal across lengths, and supports compile-time concatenation.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> A C++20 non-type template parameter may be a <i>structural</i> class type: a literal type whose bases and non-static members are all public and non-mutable. So the class is a public <code>char data[N]</code> plus a <code>constexpr</code> constructor from <code>const char (&amp;)[N]</code>, which lets class template argument deduction pick <code>N</code> from the literal (including the NUL). Each distinct literal makes a distinct <code>Counter</code> type with its own static. Concatenation is a <code>constexpr</code> function that computes the new size from the arguments' sizes.</p>
+<pre data-run="ch18-k-fixed-string"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;algorithm&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string_view&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;std::<span class="hljs-type">size_t</span> N&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">FixedString</span> {
+    <span class="hljs-type">char</span> data[N] {};                                 <span class="hljs-comment">// includes the terminating NUL</span>
+    <span class="hljs-function"><span class="hljs-keyword">constexpr</span> <span class="hljs-title">FixedString</span><span class="hljs-params">(<span class="hljs-type">const</span> <span class="hljs-type">char</span> (&amp;s)[N])</span> </span>{ std::<span class="hljs-built_in">copy_n</span>(s, N, data); }
+    <span class="hljs-function"><span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> N - <span class="hljs-number">1</span>; }
+    <span class="hljs-function"><span class="hljs-keyword">constexpr</span> std::string_view <span class="hljs-title">view</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> {data, N - <span class="hljs-number">1</span>}; }
+    <span class="hljs-function"><span class="hljs-keyword">constexpr</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">c_str</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> data; }
+    <span class="hljs-keyword">template</span> &lt;std::<span class="hljs-type">size_t</span> M&gt;
+    <span class="hljs-keyword">constexpr</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> FixedString&lt;M&gt;&amp; o) <span class="hljs-type">const</span> { <span class="hljs-keyword">return</span> <span class="hljs-built_in">view</span>() == o.<span class="hljs-built_in">view</span>(); }
+};
+
+<span class="hljs-comment">// C++20: a literal class type with public members can be a template argument.</span>
+<span class="hljs-keyword">template</span> &lt;FixedString Name&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Counter</span> {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> hits = <span class="hljs-number">0</span>;
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-type">void</span> <span class="hljs-title">hit</span><span class="hljs-params">()</span> </span>{ ++hits; }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::string_view <span class="hljs-title">name</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> Name.<span class="hljs-built_in">view</span>(); }
+};
+
+<span class="hljs-keyword">template</span> &lt;FixedString A, FixedString B&gt;
+<span class="hljs-function"><span class="hljs-keyword">constexpr</span> <span class="hljs-keyword">auto</span> <span class="hljs-title">concat</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> n = A.<span class="hljs-built_in">size</span>() + B.<span class="hljs-built_in">size</span>() + <span class="hljs-number">1</span>;
+    <span class="hljs-type">char</span> buf[n] {};
+    std::<span class="hljs-built_in">copy_n</span>(A.data, A.<span class="hljs-built_in">size</span>(), buf);
+    std::<span class="hljs-built_in">copy_n</span>(B.data, B.<span class="hljs-built_in">size</span>() + <span class="hljs-number">1</span>, buf + A.<span class="hljs-built_in">size</span>());
+    <span class="hljs-keyword">return</span> <span class="hljs-built_in">FixedString</span>&lt;n&gt;(buf);
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Counter&lt;<span class="hljs-string">&quot;cache.miss&quot;</span>&gt;::<span class="hljs-built_in">hit</span>();
+    Counter&lt;<span class="hljs-string">&quot;cache.miss&quot;</span>&gt;::<span class="hljs-built_in">hit</span>();
+    Counter&lt;<span class="hljs-string">&quot;cache.hit&quot;</span>&gt;::<span class="hljs-built_in">hit</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s = %d\n&quot;</span>, Counter&lt;<span class="hljs-string">&quot;cache.miss&quot;</span>&gt;::<span class="hljs-built_in">name</span>().<span class="hljs-built_in">data</span>(), Counter&lt;<span class="hljs-string">&quot;cache.miss&quot;</span>&gt;::hits);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s = %d\n&quot;</span>, Counter&lt;<span class="hljs-string">&quot;cache.hit&quot;</span>&gt;::<span class="hljs-built_in">name</span>().<span class="hljs-built_in">data</span>(), Counter&lt;<span class="hljs-string">&quot;cache.hit&quot;</span>&gt;::hits);
+
+    <span class="hljs-keyword">constexpr</span> <span class="hljs-keyword">auto</span> full = <span class="hljs-built_in">concat</span>&lt;<span class="hljs-string">&quot;order.&quot;</span>, <span class="hljs-string">&quot;filled&quot;</span>&gt;();
+    <span class="hljs-built_in">static_assert</span>(full.<span class="hljs-built_in">size</span>() == <span class="hljs-number">12</span> &amp;&amp; full == <span class="hljs-built_in">FixedString</span>(<span class="hljs-string">&quot;order.filled&quot;</span>));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s (%zu chars, sizeof %zu)\n&quot;</span>, full.<span class="hljs-built_in">c_str</span>(), full.<span class="hljs-built_in">size</span>(), <span class="hljs-keyword">sizeof</span> full);
+}</code></pre>
+<pre class="out" data-out="ch18-k-fixed-string">cache.miss = 2
+cache.hit = 1
+order.filled (12 chars, sizeof 13)</pre>
+    <p><b>Complexity and pitfalls.</b> Everything happens at compile time; at run time the object is exactly <code>N</code> bytes. Pitfalls: making <code>data</code> private (the type stops being structural and the template argument is rejected), forgetting that <code>N</code> counts the NUL, and comparing raw arrays with <code>==</code> (compares addresses, and is deprecated in C++20). This is the building block of compile-time format strings and string-keyed metrics registries.</p>
+    <p class="rating">Estimated rating: ~1600 · C++20 structural types and CTAD from array references</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch16-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>Stack allocation</b> is one <code>sub sp</code> per frame and free on return; <code>new</code> is a function call into a size-class allocator, tens of nanoseconds on the fast path.</li>
+<li><b>Stack sizes:</b> Linux main 8 MB (<code>ulimit -s</code>), glibc threads the same by default, musl threads 128 KB, macOS threads 512 KB, Windows 1 MB. Overflow is <code>SIGSEGV</code> on the guard page, never an exception. <code>std::thread</code> cannot set the size.</li>
+<li><b>SSO:</b> libstdc++ 32 bytes and 15 chars, libc++ 24 bytes and 22 chars, MSVC 32 and 15. Moving a short string copies; views into a short string do not follow a move.</li>
+<li><b>SBO:</b> <code>std::function</code> keeps callables of up to 16 bytes inline on both libraries (libstdc++ also needs trivially copyable); <code>std::any</code> 8 bytes (libstdc++) or 24 (libc++). Count allocations with an escaping object and an atomic counter.</li>
+<li><b>Small vectors</b> (<code>SmallVector</code>, <code>InlinedVector</code>, C++26 <code>inplace_vector</code>): raw aligned storage, placement new, O(N) move when inline. <code>std::vector</code> cannot do SSO because moves and swaps must not invalidate element pointers.</li>
+<li><b>alloca and VLAs</b> are non-standard in C++, have no failure path and live until the function returns. Use a fixed stack buffer with a heap fallback instead.</li>
+<li><b><code>[expr.new]</code></b> lets compilers elide or merge new-expressions even with a replaced <code>operator new</code>; GCC and Clang do it at <code>-O1</code> for non-escaping pointers. Never rely on it.</li>
+<li><b>Pass by value</b> trivially copyable types up to 16 bytes (<code>int</code>, <code>string_view</code>, <code>span</code>); non-trivial types such as <code>unique_ptr</code> go by invisible reference under the Itanium ABI. Return large objects by value: elision builds them in the caller's frame.</li>
+</ul>
+</section>

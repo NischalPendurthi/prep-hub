@@ -1,0 +1,1218 @@
+---
+title: emplace vs push_back
+part: Part D · Move semantics
+lede: `push_back` inserts an object you already have; `emplace_back` builds the object inside the container from constructor arguments. The difference is one move at most, but emplace also calls explicit constructors and allows narrowing, so it can turn a compile error into a leak or a silent bug. Interviewers like this topic because "always use emplace" is a popular wrong answer.
+desc: In-place construction, explicit constructors, when emplace is worse
+hours: 3
+prereqs: [Ch 18](#ch18) (moves), [Ch 19](#ch19) (perfect forwarding), [Ch 12](#ch12) (placement new)
+---
+<section id="ch20-what" data-roles="th"><div class="sec-head"><h2>What each function does</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p><b>Mental model.</b> A vector's spare capacity is raw memory. Something has to construct a <code>T</code> in the next free slot. <code>push_back</code> receives a finished <code>T</code> (by reference) and copy- or move-constructs the slot from it. <code>emplace_back</code> receives the ingredients and runs <code>T</code>'s constructor directly in the slot, so no intermediate <code>T</code> ever exists.</p>
+<pre><code class="language-cpp hljs"><span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(<span class="hljs-type">const</span> T&amp; value)</span></span>;                 <span class="hljs-comment">// copy-constructs the slot from value</span>
+<span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(T&amp;&amp; value)</span></span>;                      <span class="hljs-comment">// move-constructs the slot from value</span>
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span>... Args&gt;
+<span class="hljs-function">T&amp; <span class="hljs-title">emplace_back</span><span class="hljs-params">(Args&amp;&amp;... args)</span></span>;                <span class="hljs-comment">// constructs the slot from args (returns T&amp; since C++17)</span></code></pre>
+<p>Under the hood all three end in the same call: <code>std::allocator_traits&lt;A&gt;::construct(alloc, slot, args...)</code>. For <code>std::allocator</code> that is <code>std::construct_at(slot, std::forward&lt;Args&gt;(args)...)</code>, which is placement new with parentheses: <code>::new (static_cast&lt;void*&gt;(slot)) T(std::forward&lt;Args&gt;(args)...)</code>. <code>push_back(x)</code> is simply the case where the argument list is one <code>T</code>.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 280" role="img" aria-label="push_back of a temporary builds the temporary, then moves it into the slot; emplace_back constructs directly in the slot">
+<defs><marker id="ch20-c22a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="28" class="t-bold t-mono">v.push_back(Widget("id", 3));</text>
+<rect x="20" y="44" width="180" height="50" rx="6" class="d-trap"/>
+<text x="110" y="66" text-anchor="middle" class="t-mono t-small">temporary Widget</text>
+<text x="110" y="84" text-anchor="middle" class="t-small t-muted">1. ctor (caller's stack)</text>
+<rect x="420" y="44" width="70" height="50" class="d-box"/><text x="455" y="74" text-anchor="middle" class="t-mono t-small">w0</text>
+<rect x="490" y="44" width="70" height="50" class="d-box"/><text x="525" y="74" text-anchor="middle" class="t-mono t-small">w1</text>
+<rect x="560" y="44" width="70" height="50" class="d-acc"/><text x="595" y="74" text-anchor="middle" class="t-mono t-small">slot</text>
+<rect x="630" y="44" width="70" height="50" class="d-soft"/>
+<line x1="200" y1="69" x2="557" y2="69" class="d-line" marker-end="url(#ch22-c22a)"/>
+<text x="330" y="60" text-anchor="middle" class="t-small">2. move ctor into slot</text>
+<text x="110" y="114" text-anchor="middle" class="t-small t-muted">3. dtor of the temporary</text>
+<text x="20" y="160" class="t-bold t-mono">v.emplace_back("id", 3);</text>
+<rect x="20" y="176" width="180" height="50" rx="6" class="d-soft"/>
+<text x="110" y="198" text-anchor="middle" class="t-mono t-small">args: const char(&amp;)[3], int</text>
+<text x="110" y="216" text-anchor="middle" class="t-small t-muted">just references</text>
+<rect x="420" y="176" width="70" height="50" class="d-box"/><text x="455" y="206" text-anchor="middle" class="t-mono t-small">w0</text>
+<rect x="490" y="176" width="70" height="50" class="d-box"/><text x="525" y="206" text-anchor="middle" class="t-mono t-small">w1</text>
+<rect x="560" y="176" width="70" height="50" class="d-key"/><text x="595" y="206" text-anchor="middle" class="t-mono t-small">Widget</text>
+<rect x="630" y="176" width="70" height="50" class="d-soft"/>
+<line x1="200" y1="201" x2="557" y2="201" class="d-line-key" marker-end="url(#ch22-c22a)"/>
+<text x="330" y="192" text-anchor="middle" class="t-small">forward → ::new(slot) Widget(args...)</text>
+<text x="360" y="262" text-anchor="middle" class="t-small t-muted">One constructor call and no temporary. For cheap-to-move types the saving is a single move and destructor.</text>
+</svg></div><figcaption><b>The only thing emplace saves is the temporary.</b> push_back needs an existing T to bind its reference to; emplace_back forwards the constructor arguments and constructs in the slot.</figcaption></figure>
+
+<p>The same pairs exist across the library: <code>push_front</code>/<code>emplace_front</code> (deque, list, forward_list), <code>insert</code>/<code>emplace</code> (every standard container except <code>std::array</code>, at a position for sequences), <code>push</code>/<code>emplace</code> (stack, queue, priority_queue adaptors) and <code>insert</code>/<code>emplace</code>/<code>try_emplace</code> for associative containers.</p>
+</section>
+
+<section id="ch20-trace" data-roles="th"><div class="sec-head"><h2>Tracing every combination</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>A type that prints each special member call, a vector with enough capacity reserved so no reallocation interferes, and the eight interesting calls:</p>
+<pre data-run="ch22-trace"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">bool</span> tracing = <span class="hljs-literal">true</span>;
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-type">int</span> v;
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">int</span> x) : <span class="hljs-built_in">v</span>(x) { <span class="hljs-keyword">if</span> (tracing) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  ctor(%d)\n&quot;</span>, v); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp; o) : <span class="hljs-built_in">v</span>(o.v) { <span class="hljs-keyword">if</span> (tracing) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  copy(%d)\n&quot;</span>, v); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">v</span>(o.v) { <span class="hljs-keyword">if</span> (tracing) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  move(%d)\n&quot;</span>, v); }
+    ~<span class="hljs-built_in">T</span>() { <span class="hljs-keyword">if</span> (tracing) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  dtor(%d)\n&quot;</span>, v); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;T&gt; v;
+    v.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">16</span>);              <span class="hljs-comment">// no reallocation noise</span>
+    <span class="hljs-function">T <span class="hljs-title">t</span><span class="hljs-params">(<span class="hljs-number">0</span>)</span></span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;push_back(t):&quot;</span>);               v.<span class="hljs-built_in">push_back</span>(t);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;push_back(std::move(t)):&quot;</span>);    v.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">move</span>(t));
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;push_back(T(3)):&quot;</span>);            v.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">T</span>(<span class="hljs-number">3</span>));
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;push_back(4):&quot;</span>);               v.<span class="hljs-built_in">push_back</span>(<span class="hljs-number">4</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace_back(t):&quot;</span>);            v.<span class="hljs-built_in">emplace_back</span>(t);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace_back(std::move(t)):&quot;</span>); v.<span class="hljs-built_in">emplace_back</span>(std::<span class="hljs-built_in">move</span>(t));
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace_back(T(7)):&quot;</span>);         v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-built_in">T</span>(<span class="hljs-number">7</span>));
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace_back(8):&quot;</span>);            v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">8</span>);
+    tracing = <span class="hljs-literal">false</span>;            <span class="hljs-comment">// element destruction order differs by library</span>
+}</code></pre>
+<pre class="out" data-out="ch22-trace">  ctor(0)
+push_back(t):
+  copy(0)
+push_back(std::move(t)):
+  move(0)
+push_back(T(3)):
+  ctor(3)
+  move(3)
+  dtor(3)
+push_back(4):
+  ctor(4)
+  move(4)
+  dtor(4)
+emplace_back(t):
+  copy(0)
+emplace_back(std::move(t)):
+  move(0)
+emplace_back(T(7)):
+  ctor(7)
+  move(7)
+  dtor(7)
+emplace_back(8):
+  ctor(8)</pre>
+
+<h3 id="ch20-trace-table">Key facts</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Call</th><th>Special members</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>push_back(lvalue)</code></td><td>copy</td><td>identical to <code>emplace_back(lvalue)</code></td></tr>
+<tr><td><code>push_back(std::move(x))</code></td><td>move</td><td>identical to <code>emplace_back(std::move(x))</code></td></tr>
+<tr><td><code>push_back(T(args))</code></td><td>ctor + move + dtor</td><td>the prvalue must be materialised to bind to <code>T&amp;&amp;</code></td></tr>
+<tr><td><code>push_back(arg)</code>, implicit conversion</td><td>ctor + move + dtor</td><td>only works if the converting constructor is not <code>explicit</code></td></tr>
+<tr><td><code>emplace_back(T(args))</code></td><td>ctor + move + dtor</td><td>no better than <code>push_back</code>: you built the temporary yourself</td></tr>
+<tr><td><code>emplace_back(args)</code></td><td>ctor</td><td>the only case where emplace wins; calls <code>explicit</code> constructors too</td></tr>
+<tr><td>Return type</td><td><code>push_back</code>: <code>void</code></td><td><code>emplace_back</code>: <code>T&amp;</code> since C++17, <code>void</code> in C++11/14</td></tr>
+<tr><td>Braced argument <code>{1, 2}</code></td><td><code>push_back</code> works</td><td><code>emplace_back</code> does not compile (no type to deduce, <a href="#ch19">Ch 19</a>)</td></tr>
+</tbody></table></div>
+<div class="callout key"><p class="callout-title">Know this cold</p><p>Copy elision cannot reach into a container. A prvalue argument to <code>push_back</code> or <code>emplace_back</code> is always materialised as a temporary, because a reference parameter has to bind to an object. Only <code>emplace_back(ctor args)</code> avoids that object.</p></div>
+</section>
+
+<section id="ch20-returns" data-roles="th"><div class="sec-head"><h2>emplace_back returns a reference (C++17)</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Since C++17, <code>emplace_back</code> and <code>emplace_front</code> on <code>vector</code>, <code>deque</code>, <code>list</code> and <code>forward_list</code> (which has only <code>emplace_front</code>), and <code>emplace</code> on the <code>queue</code> and <code>stack</code> adaptors, return a reference to the inserted element (P0084, "Emplace Return Type"). <code>priority_queue::emplace</code> still returns <code>void</code>, because the new element is not at a known position. Before that you wrote <code>v.emplace_back(...); auto&amp; x = v.back();</code>. The reference is valid until the next operation that invalidates references (any reallocation for <code>vector</code>).</p>
+<pre data-run="ch22-returns"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Order</span> { std::string sym; <span class="hljs-type">int</span> qty; <span class="hljs-built_in">Order</span>(std::string s, <span class="hljs-type">int</span> q) : <span class="hljs-built_in">sym</span>(std::<span class="hljs-built_in">move</span>(s)), <span class="hljs-built_in">qty</span>(q) {} };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Order&gt; book;
+    Order&amp; o = book.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-string">&quot;AAPL&quot;</span>, <span class="hljs-number">100</span>);
+    o.qty += <span class="hljs-number">50</span>;
+    book.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-string">&quot;MSFT&quot;</span>, <span class="hljs-number">10</span>).qty *= <span class="hljs-number">3</span>;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> Order&amp; x : book) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s %d\n&quot;</span>, x.sym.<span class="hljs-built_in">c_str</span>(), x.qty);
+}</code></pre>
+<pre class="out" data-out="ch22-returns">AAPL 150
+MSFT 30</pre>
+<pre data-run="ch22-returns-14" data-mode="error" data-std="c++14"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;<span class="hljs-type">int</span>&gt; v;
+    <span class="hljs-type">int</span>&amp; r = v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">1</span>);   <span class="hljs-comment">// C++14: emplace_back returns void</span>
+    (<span class="hljs-type">void</span>)r;
+}</code></pre>
+<p>The returned reference is the safe way to touch the new element. Taking <code>o</code> above and then emplacing more elements is the bug: <code>o</code> refers into the old buffer once the vector grows (see the reallocation section below).</p>
+</section>
+
+<section id="ch20-worse" data-roles="th"><div class="sec-head"><h2>When emplace is no better, and when it is worse</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<h3 id="ch20-no-better">No better</h3>
+<ul>
+<li>Passing an existing object: <code>emplace_back(x)</code> copies and <code>emplace_back(std::move(x))</code> moves, exactly like <code>push_back</code>.</li>
+<li>Passing a temporary you built yourself: <code>emplace_back(T{...})</code> is the same as <code>push_back(T{...})</code>.</li>
+<li>Types that are cheap to move (<code>int</code>, small structs, <code>std::string</code> under SSO): the saved move costs nothing measurable.</li>
+<li>Associative containers when the key is often already present: <code>emplace</code> may build a node and throw it away (see the maps section below).</li>
+</ul>
+
+<h3 id="ch20-explicit">Explicit constructors are bypassed</h3>
+<p><code>push_back(arg)</code> uses copy-initialisation of a <code>T</code> parameter, which respects <code>explicit</code>. <code>emplace_back(arg)</code> uses direct-initialisation inside the container, which calls explicit constructors happily. That removes a safety net the class author put there on purpose.</p>
+<pre data-run="ch22-explicit" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt; v;
+    v.<span class="hljs-built_in">push_back</span>(<span class="hljs-keyword">new</span> <span class="hljs-built_in">int</span>(<span class="hljs-number">1</span>));     <span class="hljs-comment">// error: unique_ptr(pointer) is explicit</span>
+}</code></pre>
+<p>The emplace version compiles, and leaks if the vector has to grow and the allocation fails. The raw pointer is created as an argument; if <code>emplace_back</code> throws before the <code>unique_ptr</code> is constructed in the slot, nothing owns it:</p>
+<pre data-run="ch22-leak"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-type">static</span> <span class="hljs-type">bool</span> fail_next = <span class="hljs-literal">false</span>;
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">FlakyAlloc</span> {
+    <span class="hljs-keyword">using</span> value_type = T;
+    <span class="hljs-built_in">FlakyAlloc</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">U</span>&gt; <span class="hljs-built_in">FlakyAlloc</span>(<span class="hljs-type">const</span> FlakyAlloc&lt;U&gt;&amp;) <span class="hljs-keyword">noexcept</span> {}
+    <span class="hljs-function">T* <span class="hljs-title">allocate</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{
+        <span class="hljs-keyword">if</span> (fail_next) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        <span class="hljs-keyword">return</span> std::allocator&lt;T&gt;{}.<span class="hljs-built_in">allocate</span>(n);
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">deallocate</span><span class="hljs-params">(T* p, std::<span class="hljs-type">size_t</span> n)</span> <span class="hljs-keyword">noexcept</span> </span>{ std::allocator&lt;T&gt;{}.<span class="hljs-built_in">deallocate</span>(p, n); }
+    <span class="hljs-keyword">friend</span> <span class="hljs-type">bool</span> <span class="hljs-keyword">operator</span>==(<span class="hljs-type">const</span> FlakyAlloc&amp;, <span class="hljs-type">const</span> FlakyAlloc&amp;) { <span class="hljs-keyword">return</span> <span class="hljs-literal">true</span>; }
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Obj</span> {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> live = <span class="hljs-number">0</span>;
+    <span class="hljs-built_in">Obj</span>() { ++live; }
+    ~<span class="hljs-built_in">Obj</span>() { --live; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::unique_ptr&lt;Obj&gt;, FlakyAlloc&lt;std::unique_ptr&lt;Obj&gt;&gt;&gt; v;
+    v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-keyword">new</span> Obj);                       <span class="hljs-comment">// capacity 1</span>
+    fail_next = <span class="hljs-literal">true</span>;
+    <span class="hljs-keyword">try</span> { v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-keyword">new</span> Obj); }               <span class="hljs-comment">// growth fails before any unique_ptr owns it</span>
+    <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace_back(new Obj): bad_alloc&quot;</span>); }
+    <span class="hljs-keyword">try</span> { v.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">make_unique</span>&lt;Obj&gt;()); }  <span class="hljs-comment">// the temporary unique_ptr cleans up</span>
+    <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;push_back(make_unique): bad_alloc&quot;</span>); }
+    fail_next = <span class="hljs-literal">false</span>;
+    v.<span class="hljs-built_in">clear</span>();
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;live objects after clear: %d\n&quot;</span>, Obj::live);
+}</code></pre>
+<pre class="out" data-out="ch22-leak">emplace_back(new Obj): bad_alloc
+push_back(make_unique): bad_alloc
+live objects after clear: 1</pre>
+<p>The one surviving <code>Obj</code> is the leak. The rule: never pass a raw owning <code>new</code> as an argument; create the owner first with <code>std::make_unique</code>, then push or emplace it.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="Timeline of emplace_back(new Obj): the object is allocated, the vector growth throws, and nothing owns the object">
+<defs><marker id="ch20-c22b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<line x1="30" y1="60" x2="700" y2="60" class="d-line" marker-end="url(#ch22-c22b)"/>
+<text x="30" y="30" class="t-bold t-mono">v.emplace_back(new Obj)</text>
+<circle cx="110" cy="60" r="6" class="d-acc"/>
+<text x="110" y="88" text-anchor="middle" class="t-small">1. new Obj</text>
+<text x="110" y="104" text-anchor="middle" class="t-small t-muted">raw Obj*, no owner</text>
+<circle cx="300" cy="60" r="6" class="d-acc"/>
+<text x="300" y="88" text-anchor="middle" class="t-small">2. enter emplace_back</text>
+<text x="300" y="104" text-anchor="middle" class="t-small t-muted">size == capacity</text>
+<circle cx="490" cy="60" r="6" class="d-trap"/>
+<text x="490" y="88" text-anchor="middle" class="t-small t-trap">3. allocate throws</text>
+<text x="490" y="104" text-anchor="middle" class="t-small t-muted">bad_alloc</text>
+<circle cx="640" cy="60" r="6" class="d-trap"/>
+<text x="640" y="88" text-anchor="middle" class="t-small t-trap">4. Obj* lost</text>
+<text x="640" y="104" text-anchor="middle" class="t-small t-muted">leak</text>
+<line x1="30" y1="170" x2="700" y2="170" class="d-line" marker-end="url(#ch22-c22b)"/>
+<text x="30" y="140" class="t-bold t-mono">v.push_back(std::make_unique&lt;Obj&gt;())</text>
+<circle cx="110" cy="170" r="6" class="d-key"/>
+<text x="110" y="198" text-anchor="middle" class="t-small">1. unique_ptr temp</text>
+<text x="110" y="214" text-anchor="middle" class="t-small t-muted">owns the Obj</text>
+<circle cx="300" cy="170" r="6" class="d-acc"/>
+<text x="300" y="198" text-anchor="middle" class="t-small">2. enter push_back</text>
+<circle cx="490" cy="170" r="6" class="d-trap"/>
+<text x="490" y="198" text-anchor="middle" class="t-small t-trap">3. allocate throws</text>
+<circle cx="640" cy="170" r="6" class="d-key"/>
+<text x="640" y="198" text-anchor="middle" class="t-small t-key">4. temp dtor deletes</text>
+<text x="640" y="214" text-anchor="middle" class="t-small t-muted">no leak</text>
+</svg></div><figcaption><b>Ownership must exist before the call.</b> With emplace, the owner is constructed inside the container, after the step that can throw; with make_unique, the owner exists before the container does anything.</figcaption></figure>
+
+<h3 id="ch20-vector-of-vectors">vector&lt;vector&lt;int&gt;&gt;: braces vs parentheses</h3>
+<p><code>push_back({10})</code> copy-list-initialises an <code>std::vector&lt;int&gt;</code> from <code>{10}</code>, which picks the initializer-list constructor: one element, value 10. <code>emplace_back(10)</code> direct-initialises with parentheses, <code>std::vector&lt;int&gt;(10)</code>, which is the explicit size constructor: ten zeros. <code>push_back(10)</code> does not compile because that constructor is explicit.</p>
+<pre data-run="ch22-vv"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::vector&lt;<span class="hljs-type">int</span>&gt;&gt; vv;
+    vv.<span class="hljs-built_in">push_back</span>({<span class="hljs-number">10</span>});        <span class="hljs-comment">// {10}</span>
+    vv.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">10</span>);       <span class="hljs-comment">// ten zeros</span>
+    vv.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">3</span>, <span class="hljs-number">7</span>);     <span class="hljs-comment">// {7, 7, 7}</span>
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; x : vv) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;size %zu, first %d\n&quot;</span>, x.<span class="hljs-built_in">size</span>(), x[<span class="hljs-number">0</span>]);
+}</code></pre>
+<pre class="out" data-out="ch22-vv">size 1, first 10
+size 10, first 0
+size 3, first 7</pre>
+<p>A nastier example: <code>std::vector&lt;std::regex&gt; rs; rs.emplace_back(nullptr);</code> compiles (it calls the explicit <code>regex(const char*)</code> with a null pointer, undefined behaviour), while <code>rs.push_back(nullptr)</code> is rejected.</p>
+
+<h3 id="ch20-narrowing">Narrowing goes unnoticed</h3>
+<p>Placement new with parentheses allows narrowing conversions; a braced <code>push_back</code> does not.</p>
+<pre data-run="ch22-narrow"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::<span class="hljs-type">uint8_t</span>&gt; bytes;
+    bytes.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">300</span>);           <span class="hljs-comment">// compiles: 300 mod 256</span>
+    std::vector&lt;<span class="hljs-type">int</span>&gt; ints;
+    ints.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">3.99</span>);           <span class="hljs-comment">// compiles: truncates to 3</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d\n&quot;</span>, bytes[<span class="hljs-number">0</span>], ints[<span class="hljs-number">0</span>]);
+}</code></pre>
+<pre class="out" data-out="ch22-narrow">44 3</pre>
+<pre data-run="ch22-narrow-err" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdint&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::<span class="hljs-type">uint8_t</span>&gt; bytes;
+    bytes.<span class="hljs-built_in">push_back</span>({<span class="hljs-number">300</span>});            <span class="hljs-comment">// error: narrowing conversion inside braces</span>
+}</code></pre>
+
+<h3 id="ch20-aggregates">Aggregates: emplace before and after C++20</h3>
+<p>For <code>struct Point { int x, y; };</code>, <code>v.emplace_back(1, 2)</code> becomes <code>::new (p) Point(1, 2)</code>. Before C++20 aggregates could only be initialised with braces, so this failed to compile and people wrote <code>v.push_back({1, 2})</code>. C++20 added parenthesised aggregate initialisation (P0960), so it now works. Parenthesised aggregate init allows narrowing and does not extend lifetimes of temporaries bound to reference members, unlike braces.</p>
+<pre data-run="ch22-agg17" data-mode="error" data-std="c++17"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Point</span> { <span class="hljs-type">int</span> x, y; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Point&gt; v;
+    v.<span class="hljs-built_in">push_back</span>({<span class="hljs-number">1</span>, <span class="hljs-number">2</span>});      <span class="hljs-comment">// fine in every standard</span>
+    v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">1</span>, <span class="hljs-number">2</span>);     <span class="hljs-comment">// C++17: no constructor Point(int, int)</span>
+}</code></pre>
+<pre data-run="ch22-agg20"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Point</span> { <span class="hljs-type">int</span> x, y; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Point&gt; v;
+    v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">1</span>, <span class="hljs-number">2</span>);     <span class="hljs-comment">// C++20: parenthesised aggregate initialisation</span>
+    v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">3</span>);        <span class="hljs-comment">// y is value-initialised to 0</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;(%d,%d) (%d,%d)\n&quot;</span>, v[<span class="hljs-number">0</span>].x, v[<span class="hljs-number">0</span>].y, v[<span class="hljs-number">1</span>].x, v[<span class="hljs-number">1</span>].y);
+}</code></pre>
+<pre class="out" data-out="ch22-agg20">(1,2) (3,0)</pre>
+<div class="callout trap"><p class="callout-title">Interview trap</p><p>"Always prefer emplace_back because it is never slower." Abseil's Tip of the Week #112 recommends the opposite for the common case: use <code>push_back</code> when it works (you already have a <code>T</code>, or a braced initialiser), and <code>emplace_back</code> only when you are passing constructor arguments that <code>push_back</code> cannot take. <i>Effective Modern C++</i> Item 42 ("consider emplacement") lists the same dangers. Emplace trades type safety for one avoided move.</p></div>
+</section>
+
+<section id="ch20-maps" data-roles="th"><div class="sec-head"><h2>Associative containers: emplace, try_emplace, insert_or_assign</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>Map insertion functions differ in when they construct the value, and what happens if the key is already present.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Function</th><th>Key absent</th><th>Key present</th><th>Requirements</th></tr></thead>
+<tbody>
+<tr><td><code>insert(value_type)</code></td><td>moves or copies the pair into a node</td><td>nothing; you built the pair for nothing</td><td>a whole pair</td></tr>
+<tr><td><code>emplace(args...)</code></td><td>constructs the pair in a node</td><td>nothing inserted, but the node may be built and destroyed, and rvalue arguments may be moved from</td><td>pair constructible from args</td></tr>
+<tr><td><code>try_emplace(k, args...)</code> (C++17)</td><td>constructs the value from args</td><td><b>guaranteed</b> not to touch args</td><td>key separate from value args</td></tr>
+<tr><td><code>insert_or_assign(k, v)</code> (C++17)</td><td>constructs the value from <code>v</code></td><td>assigns <code>v</code> to the existing value</td><td>value assignable</td></tr>
+<tr><td><code>operator[](k)</code></td><td>value-initialises the value (default constructor, or zero for <code>int</code>), returns a reference</td><td>returns a reference</td><td>value default-constructible</td></tr>
+</tbody></table></div>
+<pre data-run="ch22-map"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;tuple&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">V</span> {
+    <span class="hljs-type">int</span> v;
+    <span class="hljs-built_in">V</span>() : <span class="hljs-built_in">v</span>(<span class="hljs-number">0</span>) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  V()&quot;</span>); }
+    <span class="hljs-built_in">V</span>(<span class="hljs-type">int</span> x) : <span class="hljs-built_in">v</span>(x) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  V(%d)\n&quot;</span>, v); }
+    <span class="hljs-built_in">V</span>(<span class="hljs-type">int</span> a, <span class="hljs-type">int</span> b) : <span class="hljs-built_in">v</span>(a * b) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  V(%d,%d)\n&quot;</span>, a, b); }
+    <span class="hljs-built_in">V</span>(<span class="hljs-type">const</span> V&amp; o) : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  copy&quot;</span>); }
+    <span class="hljs-built_in">V</span>(V&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  move&quot;</span>); }
+    V&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> V&amp; o) { v = o.v; std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  copy=&quot;</span>); <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+    V&amp; <span class="hljs-keyword">operator</span>=(V&amp;&amp; o) <span class="hljs-keyword">noexcept</span> { v = o.v; std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  move=&quot;</span>); <span class="hljs-keyword">return</span> *<span class="hljs-keyword">this</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::map&lt;<span class="hljs-type">int</span>, V&gt; m;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;insert({1, V(10)}):&quot;</span>);      m.<span class="hljs-built_in">insert</span>({<span class="hljs-number">1</span>, <span class="hljs-built_in">V</span>(<span class="hljs-number">10</span>)});
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace(2, 20):&quot;</span>);          m.<span class="hljs-built_in">emplace</span>(<span class="hljs-number">2</span>, <span class="hljs-number">20</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace(piecewise, 3, (4,5)):&quot;</span>);
+    m.<span class="hljs-built_in">emplace</span>(std::piecewise_construct, std::forward_as_tuple(<span class="hljs-number">3</span>), std::forward_as_tuple(<span class="hljs-number">4</span>, <span class="hljs-number">5</span>));
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;try_emplace(4, 6, 7):&quot;</span>);    m.<span class="hljs-built_in">try_emplace</span>(<span class="hljs-number">4</span>, <span class="hljs-number">6</span>, <span class="hljs-number">7</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;m[5] = 50:&quot;</span>);               m[<span class="hljs-number">5</span>] = <span class="hljs-number">50</span>;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;insert_or_assign(5, 55):&quot;</span>); m.<span class="hljs-built_in">insert_or_assign</span>(<span class="hljs-number">5</span>, <span class="hljs-number">55</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;insert_or_assign(6, 60):&quot;</span>); m.<span class="hljs-built_in">insert_or_assign</span>(<span class="hljs-number">6</span>, <span class="hljs-number">60</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace(1, 99) existing:&quot;</span>); <span class="hljs-keyword">auto</span> [it1, ok1] = m.<span class="hljs-built_in">emplace</span>(<span class="hljs-number">1</span>, <span class="hljs-number">99</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;try_emplace(1, 99) existing:&quot;</span>); <span class="hljs-keyword">auto</span> [it2, ok2] = m.<span class="hljs-built_in">try_emplace</span>(<span class="hljs-number">1</span>, <span class="hljs-number">99</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ok1=%d ok2=%d m[1]=%d m[3]=%d m[5]=%d\n&quot;</span>, ok1, ok2, it1-&gt;second.v, m.<span class="hljs-built_in">at</span>(<span class="hljs-number">3</span>).v, m.<span class="hljs-built_in">at</span>(<span class="hljs-number">5</span>).v);
+}</code></pre>
+<pre class="out" data-out="ch22-map">insert({1, V(10)}):
+  V(10)
+  move
+  move
+emplace(2, 20):
+  V(20)
+emplace(piecewise, 3, (4,5)):
+  V(4,5)
+try_emplace(4, 6, 7):
+  V(6,7)
+m[5] = 50:
+  V(50)
+  V()
+  move=
+insert_or_assign(5, 55):
+  V(55)
+  move=
+insert_or_assign(6, 60):
+  V(60)
+emplace(1, 99) existing:
+try_emplace(1, 99) existing:
+ok1=0 ok2=0 m[1]=10 m[3]=20 m[5]=55</pre>
+<p>Reading the trace:</p>
+<ul>
+<li><code>insert({1, V(10)})</code> builds <code>V(10)</code>, moves it into a temporary <code>pair&lt;const int, V&gt;</code>, then moves that pair's value into the node: two moves.</li>
+<li><code>emplace(2, 20)</code> and <code>try_emplace</code> construct the value once, in the node.</li>
+<li><code>m[5] = 50</code> constructs <code>V(50)</code> first (C++17 sequences the right operand of <code>=</code> before the left), then <code>operator[]</code> default-constructs the value, then move-assigns.</li>
+<li><code>insert_or_assign(5, 55)</code> on an existing key converts <code>55</code> to a <code>V</code> (its parameter is <code>M&amp;&amp;</code> with <code>M = int</code>, assigned through <code>V</code>'s converting constructor) and move-assigns.</li>
+<li><code>emplace(1, 99)</code> on an existing key built nothing here: both libstdc++ and libc++ look the key up first when the first argument already has the key type. That is an optimisation, not a promise.</li>
+</ul>
+
+<h3 id="ch20-emplace-moves">emplace can steal your argument even when it inserts nothing</h3>
+<p>When the key argument is not exactly the key type, the libraries must construct the node to learn the key. If the key is already present the node is destroyed, and anything you moved into it is gone.</p>
+<pre data-run="ch22-steal"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::map&lt;std::string, std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt; m;
+    m.<span class="hljs-built_in">emplace</span>(<span class="hljs-string">&quot;a&quot;</span>, std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">1</span>));
+
+    <span class="hljs-keyword">auto</span> p = std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">2</span>);
+    m.<span class="hljs-built_in">emplace</span>(<span class="hljs-string">&quot;a&quot;</span>, std::<span class="hljs-built_in">move</span>(p));                  <span class="hljs-comment">// const char* key: node built, then destroyed</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;emplace with \&quot;a\&quot;: p is %s\n&quot;</span>, p ? <span class="hljs-string">&quot;intact&quot;</span> : <span class="hljs-string">&quot;gone&quot;</span>);
+
+    <span class="hljs-keyword">auto</span> q = std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">3</span>);
+    m.<span class="hljs-built_in">try_emplace</span>(<span class="hljs-string">&quot;a&quot;</span>, std::<span class="hljs-built_in">move</span>(q));              <span class="hljs-comment">// guaranteed: q untouched when the key exists</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;try_emplace with \&quot;a\&quot;: q is %s\n&quot;</span>, q ? <span class="hljs-string">&quot;intact&quot;</span> : <span class="hljs-string">&quot;gone&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch22-steal">emplace with "a": p is gone
+try_emplace with "a": q is intact</pre>
+<p>The standard says <code>emplace</code> inserts "if and only if there is no element with an equivalent key"; it does not say the arguments are left alone. <code>try_emplace</code> was added in C++17 (N4279) exactly to make that guarantee, and also to allow a value that is not movable at all, since the key and the value arguments are separate.</p>
+
+<h3 id="ch20-piecewise">std::piecewise_construct</h3>
+<p><code>std::pair</code> has a constructor <code>pair(std::piecewise_construct_t, std::tuple&lt;A...&gt;, std::tuple&lt;B...&gt;)</code> that constructs <code>first</code> from the first tuple's elements and <code>second</code> from the second's. It is how you emplace into a map when the key or the value needs several constructor arguments, or when the value is neither copyable nor movable. <code>std::forward_as_tuple</code> builds a tuple of references, so nothing is copied on the way. Since C++17, <code>try_emplace(key, args...)</code> covers the common case (single-argument key) with less noise.</p>
+
+<h3 id="ch20-hint">emplace_hint and insert with a hint</h3>
+<p><code>m.emplace_hint(pos, args...)</code> inserts the element as close as possible to the position just before <code>pos</code>. If the hint is right (the new key belongs immediately before <code>pos</code>), insertion is amortised O(1) instead of O(log n). Inserting already-sorted data with <code>m.emplace_hint(m.end(), ...)</code> is the standard idiom. A wrong hint costs nothing beyond the normal lookup. Unordered containers accept hints too, but implementations mostly ignore them except for equivalent keys in multi-containers.</p>
+<pre data-run="ch22-hint"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::map&lt;<span class="hljs-type">int</span>, <span class="hljs-type">int</span>&gt; squares;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">5</span>; ++i)
+        squares.<span class="hljs-built_in">emplace_hint</span>(squares.<span class="hljs-built_in">end</span>(), i, i * i);    <span class="hljs-comment">// sorted input: O(1) each</span>
+    <span class="hljs-keyword">auto</span> it = squares.<span class="hljs-built_in">emplace_hint</span>(squares.<span class="hljs-built_in">find</span>(<span class="hljs-number">3</span>), <span class="hljs-number">2</span>, <span class="hljs-number">-1</span>); <span class="hljs-comment">// key exists: returns it</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;existing key 2 -&gt; %d, size %zu\n&quot;</span>, it-&gt;second, squares.<span class="hljs-built_in">size</span>());
+    <span class="hljs-keyword">for</span> (<span class="hljs-keyword">auto</span> [k, v] : squares) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d:%d &quot;</span>, k, v);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch22-hint">existing key 2 -&gt; 4, size 5
+0:0 1:1 2:4 3:9 4:16</pre>
+<p>Note the return type: <code>emplace_hint</code> returns an iterator only (not a <code>pair</code>), so you cannot tell from it whether insertion happened; compare the size before and after. <code>try_emplace(hint, k, args...)</code> has the same limitation; use the non-hint <code>try_emplace</code> when you need the <code>bool</code>.</p>
+</section>
+
+<section id="ch20-realloc" data-roles="th"><div class="sec-head"><h2>Reallocation, invalidation and reserve</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<p>When <code>size() == capacity()</code>, any vector insertion allocates a larger buffer (both libstdc++ and libc++ double it, starting from 1; MSVC grows by 1.5x), constructs the new element there, relocates the old elements with <code>std::move_if_noexcept</code> (<a href="#ch18">Ch 18</a>) and frees the old buffer. After that, <b>every</b> pointer, reference and iterator into the vector is invalid, including references you got from <code>emplace_back</code> earlier and <code>v.back()</code>.</p>
+<pre data-run="ch22-grow"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-type">int</span> v;
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">int</span> x) : <span class="hljs-built_in">v</span>(x) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  ctor(%d)\n&quot;</span>, v); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp; o) : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  copy(%d)\n&quot;</span>, v); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  move(%d)\n&quot;</span>, v); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  dtor&quot;</span>); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;T&gt; v;
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">1</span>; i &lt;= <span class="hljs-number">3</span>; ++i) {
+        std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;emplace_back(%d), capacity %zu:\n&quot;</span>, i, v.<span class="hljs-built_in">capacity</span>());
+        v.<span class="hljs-built_in">emplace_back</span>(i);
+    }
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace_back(v[0]) with spare capacity:&quot;</span>);
+    v.<span class="hljs-built_in">emplace_back</span>(v[<span class="hljs-number">0</span>]);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;end&quot;</span>);
+    v.<span class="hljs-built_in">clear</span>();
+}</code></pre>
+<pre class="out" data-out="ch22-grow" data-compiler="gcc">emplace_back(1), capacity 0:
+  ctor(1)
+emplace_back(2), capacity 1:
+  ctor(2)
+  move(1)
+  dtor
+emplace_back(3), capacity 2:
+  ctor(3)
+  move(1)
+  dtor
+  move(2)
+  dtor
+emplace_back(v[0]) with spare capacity:
+  copy(1)
+end
+  dtor
+  dtor
+  dtor
+  dtor</pre>
+<p>This output is for GCC/libstdc++. Two things are the same in libc++: the new element is constructed <b>before</b> the old ones are relocated (so <code>v.emplace_back(v[0])</code> is safe even when the vector grows, and the standard requires it), and the growth sequence is 1, 2, 4. One thing differs: libstdc++ relocates element by element (move, destroy, move, destroy), while libc++ moves all elements first and then destroys the old ones, so its third step prints <code>move(1) move(2) dtor dtor</code>.</p>
+
+<figure class="fig"><div class="svgwrap"><svg viewBox="0 0 720 230" role="img" aria-label="A reference taken before emplace_back still points into the old buffer after reallocation">
+<defs><marker id="ch20-c22c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker></defs>
+<text x="20" y="28" class="t-bold">before: capacity 3, size 3</text>
+<rect x="20" y="40" width="70" height="40" class="d-box"/><text x="55" y="65" text-anchor="middle" class="t-mono">1</text>
+<rect x="90" y="40" width="70" height="40" class="d-box"/><text x="125" y="65" text-anchor="middle" class="t-mono">2</text>
+<rect x="160" y="40" width="70" height="40" class="d-box"/><text x="195" y="65" text-anchor="middle" class="t-mono">3</text>
+<text x="380" y="28" class="t-bold">after emplace_back(4): capacity 6</text>
+<rect x="380" y="40" width="50" height="40" class="d-acc"/><text x="405" y="65" text-anchor="middle" class="t-mono">1</text>
+<rect x="430" y="40" width="50" height="40" class="d-acc"/><text x="455" y="65" text-anchor="middle" class="t-mono">2</text>
+<rect x="480" y="40" width="50" height="40" class="d-acc"/><text x="505" y="65" text-anchor="middle" class="t-mono">3</text>
+<rect x="530" y="40" width="50" height="40" class="d-key"/><text x="555" y="65" text-anchor="middle" class="t-mono">4</text>
+<rect x="580" y="40" width="50" height="40" class="d-soft"/>
+<rect x="630" y="40" width="50" height="40" class="d-soft"/>
+<rect x="20" y="120" width="210" height="40" rx="6" class="d-trap"/>
+<text x="125" y="145" text-anchor="middle" class="t-small t-trap">old buffer: freed</text>
+<rect x="20" y="180" width="120" height="34" rx="6" class="d-box"/>
+<text x="80" y="202" text-anchor="middle" class="t-mono t-small">int&amp; first</text>
+<line x1="80" y1="180" x2="55" y2="84" class="d-line-trap d-dash" marker-end="url(#ch22-c22c)"/>
+<text x="160" y="202" class="t-small t-trap">still points here: use-after-free</text>
+<line x1="230" y1="60" x2="377" y2="60" class="d-line" marker-end="url(#ch22-c22c)"/>
+<text x="305" y="52" text-anchor="middle" class="t-small">relocate</text>
+<text x="380" y="120" class="t-small">v.data(), v.begin(), v.back() now refer here.</text>
+<text x="380" y="140" class="t-small">Anything computed before the call does not.</text>
+<text x="380" y="172" class="t-small t-key">reserve(n) first, or re-fetch by index.</text>
+</svg></div><figcaption><b>Growth moves every element.</b> References, pointers and iterators obtained before a reallocating insertion keep pointing into memory that has been freed.</figcaption></figure>
+
+<h3 id="ch20-reserve">reserve and the invalidation rules</h3>
+<ul>
+<li><code>v.reserve(n)</code> with <code>n &gt; capacity()</code> reallocates once and invalidates everything. With <code>n &lt;= capacity()</code> it does nothing. It never shrinks. <code>shrink_to_fit()</code> is a non-binding request.</li>
+<li>After <code>reserve(n)</code>, insertions at the end do not invalidate references as long as <code>size() &lt;= n</code>. Insertions in the middle still invalidate everything at and after the insertion point.</li>
+<li>Calling <code>reserve(size() + 1)</code> before each push in a loop defeats geometric growth and makes the loop O(n²) on libraries that allocate exactly what you ask for. Reserve once, with the final size.</li>
+<li><code>std::deque::emplace_back</code> invalidates iterators but <b>not</b> references to existing elements, and it never relocates them. That is why a deque can hold non-movable types, and a vector cannot grow with them.</li>
+<li><code>std::list</code> and node-based maps never invalidate references on insertion.</li>
+</ul>
+</section>
+
+<section id="ch20-concept" data-roles="dr"><div class="sec-head"><h2>Concept and tricky questions</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the difference between <code>push_back</code> and <code>emplace_back</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>push_back</code> takes a <code>T</code> (by <code>const T&amp;</code> or <code>T&amp;&amp;</code>) and copy- or move-constructs the new element from it. <code>emplace_back</code> takes constructor arguments by forwarding reference and constructs the element in place with <code>allocator_traits::construct</code>, using direct-initialisation with parentheses.</p>
+    <p><b>Why.</b> The practical difference is only visible when the argument is not already a <code>T</code>: <code>emplace_back(args)</code> skips the temporary and its move and destructor. Two side effects follow from direct-initialisation: explicit constructors are callable and narrowing is allowed. People often say "emplace avoids a copy"; it avoids a temporary, and when you pass an existing object it copies just the same.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is <code>v.emplace_back(std::move(s))</code> faster than <code>v.push_back(std::move(s))</code> for a <code>std::string s</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> No. Both perform exactly one move construction into the slot.</p>
+    <p><b>Why.</b> <code>emplace_back</code> forwards a <code>std::string&amp;&amp;</code> to <code>std::string(std::string&amp;&amp;)</code>; <code>push_back(T&amp;&amp;)</code> calls the same constructor. After inlining the generated code is identical. Emplace only helps when the arguments differ from <code>T</code> itself, such as <code>v.emplace_back(10, 'x')</code> or <code>v.emplace_back("literal")</code>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span><code>std::vector&lt;std::unique_ptr&lt;Widget&gt;&gt; v; v.emplace_back(new Widget);</code> compiles while <code>push_back(new Widget)</code> does not. What can go wrong with the emplace version?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A leak. If the vector is full, <code>emplace_back</code> allocates a new buffer before constructing the <code>unique_ptr</code>. If that allocation throws, the raw <code>Widget*</code> has no owner and is never deleted.</p>
+    <p><b>Why.</b> <code>unique_ptr</code>'s pointer constructor is <code>explicit</code> precisely to stop implicit ownership transfer from raw pointers; emplace's direct-initialisation bypasses it. With <code>v.push_back(std::make_unique&lt;Widget&gt;())</code> (or <code>emplace_back</code> of that), the owner exists before the container does anything that can throw, so a failure destroys the temporary <code>unique_ptr</code> and the object. This is Item 42 of <i>Effective Modern C++</i>.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>For <code>std::vector&lt;std::vector&lt;int&gt;&gt; vv;</code>, what do <code>vv.push_back({10})</code>, <code>vv.emplace_back(10)</code> and <code>vv.push_back(10)</code> do?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>push_back({10})</code> appends a vector holding the single value 10. <code>emplace_back(10)</code> appends a vector of ten zeros. <code>push_back(10)</code> does not compile.</p>
+    <p><b>Why.</b> Braces initialise the parameter with list-initialisation, which strongly prefers the <code>initializer_list</code> constructor. Emplace constructs with parentheses, <code>vector&lt;int&gt;(10)</code>, which is the size constructor. That constructor is <code>explicit</code>, so the implicit conversion <code>push_back(10)</code> would need is not allowed. Same tokens, three different outcomes.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What does <code>emplace_back</code> return, and since when?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> A reference to the inserted element (<code>T&amp;</code>) since C++17 for <code>vector</code>, <code>deque</code> and <code>list</code> (also <code>emplace_front</code>). In C++11 and C++14 it returned <code>void</code>.</p>
+    <p><b>Why.</b> P0084 changed it so that <code>auto&amp; x = v.emplace_back(...);</code> replaces the two-step <code>emplace_back</code> plus <code>back()</code>. <code>push_back</code> still returns <code>void</code>. The reference has the same lifetime rules as any element reference: the next reallocation invalidates it. Associative <code>emplace</code> returns <code>pair&lt;iterator, bool&gt;</code>, and <code>emplace_hint</code> returns just an iterator.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>After <code>std::vector&lt;int&gt; v; v.emplace_back();</code>, what is <code>v.back()</code>? And for <code>struct Raw { int x; }; std::vector&lt;Raw&gt; r; r.emplace_back();</code>, what is <code>r.back().x</code>?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Both are <code>0</code>. An empty argument list value-initialises the element.</p>
+    <p><b>Why.</b> <code>emplace_back()</code> ends in <code>std::construct_at(p)</code>, which is <code>::new (p) T()</code>, with empty parentheses. <code>T()</code> is value-initialisation, which zero-initialises an <code>int</code> and an aggregate like <code>Raw</code> (a class with no user-provided default constructor is zeroed first). The usual wrong answer is "indeterminate, like <code>int x;</code>" or <code>new int</code>, which are default-initialisation. The same rule makes <code>std::vector&lt;int&gt; v(n)</code> and <code>resize(n)</code> write n zeros; avoiding that cost needs C++23's <code>resize_and_overwrite</code> (strings only) or an allocator whose <code>construct</code> default-initialises. A type with a user-provided constructor that leaves members uninitialised (<code>Ctor() {}</code>) is not zeroed: value-initialisation just calls that constructor.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is <code>std::piecewise_construct</code> for? Give an example.</p>
+  <pre><code class="language-cpp hljs">std::map&lt;std::string, std::vector&lt;<span class="hljs-type">int</span>&gt;&gt; m;
+m.<span class="hljs-built_in">emplace</span>(std::piecewise_construct,
+          std::forward_as_tuple(<span class="hljs-string">&quot;primes&quot;</span>),
+          std::forward_as_tuple(<span class="hljs-number">5</span>, <span class="hljs-number">0</span>));     <span class="hljs-comment">// key &quot;primes&quot;, value: five zeros</span></code></pre>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It selects <code>pair</code>'s constructor that builds <code>first</code> and <code>second</code> each from their own argument tuple, so a map element can be constructed in place when the key or the value needs several constructor arguments (or none).</p>
+    <p><b>Why.</b> Without it, <code>m.emplace("primes", 5, 0)</code> would try <code>pair(const char*, int, int)</code>, which does not exist. <code>forward_as_tuple</code> makes tuples of references, so the arguments are forwarded, not copied. It is also how you insert a value that cannot be moved, such as a <code>std::mutex</code>: <code>m.emplace(std::piecewise_construct, std::forward_as_tuple(k), std::tuple&lt;&gt;())</code>. Since C++17 <code>try_emplace(k, args...)</code> does the same job more readably.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>When does <code>emplace_back</code> give a real, measurable improvement over <code>push_back</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> When you pass constructor arguments for a type whose temporary is expensive to create, move or destroy, or for a type that cannot be moved at all (in a <code>deque</code>, <code>list</code> or map). Examples: <code>v.emplace_back(1024, '\0')</code> for strings, a type with a large inline array, a type holding a mutex.</p>
+    <p><b>Why.</b> The saved work is one temporary construction's worth of move plus destructor. For a <code>std::string</code> built from a long literal, <code>push_back("...")</code> allocates once for the temporary and then moves the pointer, so allocations are the same; only the small move and destructor are saved. For types where a move equals a copy (large <code>std::array</code> members), the saving is a full copy. Measure before rewriting code for it.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Is <code>v.emplace_back(v[0])</code> safe when the vector is full and must reallocate?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Yes. The standard library must handle arguments that refer into the container itself, and libstdc++ and libc++ do it by constructing the new element in the new buffer before relocating (and destroying) the old elements.</p>
+    <p><b>Why.</b> The library may not assume that an argument is unrelated to the container. <code>push_back(v[0])</code> has always had to work, and LWG 2164 (resolved in C++20) added the note to the sequence-container requirements that for <code>a.emplace(p, args)</code> "args may directly or indirectly refer to a value in a", so even <code>v.emplace(v.begin(), v.back())</code>, a middle insertion where the referenced element is about to be shifted, must work. Implementations handle that case by constructing the new value into a temporary first. Your own containers must use the same order for appends: allocate, construct the new element, relocate, free. The common wrong answer is "undefined, take a copy first"; a hand-rolled vector that grows first and then reads the argument does read freed memory, but the standard one does not.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What is the difference between <code>m[k] = v</code> and <code>m.insert_or_assign(k, v)</code>?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> For a new key, <code>m[k] = v</code> default-constructs the value and then assigns <code>v</code>; <code>insert_or_assign</code> constructs the value directly from <code>v</code>. For an existing key, both assign. <code>insert_or_assign</code> also tells you which happened (it returns <code>pair&lt;iterator, bool&gt;</code>) and works for values without a default constructor.</p>
+    <p><b>Why.</b> <code>operator[]</code> must return a reference before the assignment runs, so it has to put some value in the node first. That costs a default construction plus an assignment and fails to compile if the value type has no default constructor. <code>insert_or_assign</code> (C++17) was added to fix exactly this.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span>Does <code>v.reserve(100)</code> invalidate iterators? Does a later <code>push_back</code> invalidate references if <code>v.size()</code> was 10?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>reserve(100)</code> invalidates all iterators, pointers and references if 100 exceeds the current capacity, because it reallocates. After it, push_backs up to size 100 invalidate only the <code>end()</code> iterator.</p>
+    <p><b>Why.</b> <code>[vector.capacity]</code>: reallocation invalidates everything, and no reallocation happens during insertions until the size would exceed the reserved capacity. People think <code>reserve</code> is a pure hint that leaves existing references alone. Also, <code>reserve</code> with a smaller value never shrinks, and <code>resize</code> is a different operation that changes <code>size()</code> and constructs elements.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="tricky">
+  <p class="dq"><span class="lvl">Tricky</span><code>struct P { int x, y; }; std::vector&lt;P&gt; v; v.emplace_back(1, 2);</code> Does it compile?</p>
+  <details class="q" data-kind="tricky"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> In C++20, yes. In C++17 and earlier, no.</p>
+    <p><b>Why.</b> <code>emplace_back</code> uses <code>::new (p) P(1, 2)</code>, with parentheses. An aggregate has no constructor taking two ints, and before C++20 aggregates could only be initialised with braces. P0960 (C++20) allows parenthesised aggregate initialisation, which differs from braces in two ways: narrowing is allowed and temporaries bound to reference members are not lifetime-extended. In C++17 code use <code>v.push_back({1, 2})</code> or give <code>P</code> a constructor.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="concept">
+  <p class="dq"><span class="lvl">Concept</span>What does <code>emplace_hint</code> do and when is it O(1)?</p>
+  <details class="q" data-kind="concept"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> It inserts the element using the iterator as a starting point, placing it as close as possible to just before the hint. If the element belongs immediately before the hint, insertion is amortised constant time; otherwise it falls back to the normal O(log n) search.</p>
+    <p><b>Why.</b> For tree-based maps, checking "does the key fit between <code>prev(hint)</code> and <code>hint</code>" takes two comparisons, then the node is linked in and the tree rebalanced (amortised O(1)). Bulk-loading sorted data with <code>emplace_hint(m.end(), ...)</code> is the common use. C++03 specified the fast case as "inserted right after the hint", C++11 (LWG 233) changed it to "just before". Old code that passes <code>prev(end())</code> for appends is still correct, but the constant-time path is only guaranteed for the C++11 form (libstdc++ happens to check both sides).</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch20-reading" data-roles="dr"><div class="sec-head"><h2>Predict the output and find the bug</h2><div class="sec-tools"><span class="role dr">Drills</span></div></div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>The vector has room for exactly one element. What is printed?</p>
+  <pre data-run="ch22-o-room"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">T</span> {
+    <span class="hljs-type">int</span> v;
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">int</span> x) : <span class="hljs-built_in">v</span>(x) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ctor(%d)\n&quot;</span>, v); }
+    <span class="hljs-built_in">T</span>(<span class="hljs-type">const</span> T&amp; o) : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;copy(%d)\n&quot;</span>, v); }
+    <span class="hljs-built_in">T</span>(T&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;move(%d)\n&quot;</span>, v); }
+    ~<span class="hljs-built_in">T</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;dtor(%d)\n&quot;</span>, v); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;T&gt; v;
+    v.<span class="hljs-built_in">reserve</span>(<span class="hljs-number">1</span>);
+    v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">1</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;--&quot;</span>);
+    v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">2</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;-- end&quot;</span>);
+    v.<span class="hljs-built_in">pop_back</span>();
+    v.<span class="hljs-built_in">pop_back</span>();
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch22-o-room">ctor(1)
+--
+ctor(2)
+move(1)
+dtor(1)
+-- end
+dtor(2)
+dtor(1)</pre>
+    <p><b>Answer.</b> The first emplace constructs in place. The second needs a bigger buffer: <code>ctor(2)</code> runs first, directly in the new buffer, then element 1 is moved across and the old copy destroyed. The two <code>pop_back</code> calls destroy the last element, then the first.</p>
+    <p><b>Why.</b> Constructing the new element before relocation is what makes self-referencing arguments safe. The moved-from element still prints <code>dtor(1)</code> because this type's move copies the int. With a single old element the libstdc++ and libc++ traces agree; with more, their order of moves and destructors differs, which is why the program pops explicitly instead of relying on the vector's destructor order.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A vector of strings, four ways to add an element. For each string the program prints its size and last character. What is the output?</p>
+  <pre data-run="ch22-o-strings"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;std::string&gt; v;
+    v.<span class="hljs-built_in">push_back</span>({<span class="hljs-number">3</span>, <span class="hljs-string">&#x27;a&#x27;</span>});
+    v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">3</span>, <span class="hljs-string">&#x27;b&#x27;</span>);
+    v.<span class="hljs-built_in">push_back</span>(std::<span class="hljs-built_in">string</span>(<span class="hljs-number">3</span>, <span class="hljs-string">&#x27;c&#x27;</span>));
+    v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-string">&quot;dd&quot;</span>, <span class="hljs-number">1</span>);
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">const</span> <span class="hljs-keyword">auto</span>&amp; s : v) std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%zu%c &quot;</span>, s.<span class="hljs-built_in">size</span>(), s.<span class="hljs-built_in">back</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;\n&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch22-o-strings">2a 3b 3c 1d</pre>
+    <p><b>Answer.</b> <code>push_back({3, 'a'})</code> makes the two-character string <code>"\x03a"</code>; <code>emplace_back(3, 'b')</code> makes <code>"bbb"</code>; <code>push_back(std::string(3, 'c'))</code> makes <code>"ccc"</code>; <code>emplace_back("dd", 1)</code> makes <code>"d"</code>.</p>
+    <p><b>Why.</b> The braces in <code>push_back</code> list-initialise a <code>std::string</code>, and list-initialisation picks the <code>initializer_list&lt;char&gt;</code> constructor whenever it is viable, so <code>3</code> becomes the character with code 3. Emplace uses parentheses, which selects <code>string(size_type count, char ch)</code>. The last call selects <code>string(const char* s, size_type n)</code>, which takes the first <code>n</code> characters. Same tokens, different constructors: the brace-vs-paren split is the root of most emplace surprises.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>Inserting into a map with keys that already exist. What is printed?</p>
+  <pre data-run="ch22-o-mapexist"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::map&lt;std::string, <span class="hljs-type">int</span>&gt; m{{<span class="hljs-string">&quot;a&quot;</span>, <span class="hljs-number">1</span>}};
+    <span class="hljs-keyword">auto</span> [i1, ok1] = m.<span class="hljs-built_in">insert</span>({<span class="hljs-string">&quot;a&quot;</span>, <span class="hljs-number">2</span>});
+    <span class="hljs-keyword">auto</span> [i2, ok2] = m.<span class="hljs-built_in">emplace</span>(<span class="hljs-string">&quot;a&quot;</span>, <span class="hljs-number">3</span>);
+    <span class="hljs-keyword">auto</span> [i3, ok3] = m.<span class="hljs-built_in">try_emplace</span>(<span class="hljs-string">&quot;a&quot;</span>, <span class="hljs-number">4</span>);
+    <span class="hljs-keyword">auto</span> [i4, ok4] = m.<span class="hljs-built_in">insert_or_assign</span>(<span class="hljs-string">&quot;a&quot;</span>, <span class="hljs-number">5</span>);
+    m[<span class="hljs-string">&quot;b&quot;</span>];
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d%d%d%d a=%d b=%d size=%zu\n&quot;</span>, ok1, ok2, ok3, ok4, m[<span class="hljs-string">&quot;a&quot;</span>], m[<span class="hljs-string">&quot;b&quot;</span>], m.<span class="hljs-built_in">size</span>());
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch22-o-mapexist">0000 a=5 b=0 size=2</pre>
+    <p><b>Answer.</b> All four report "not inserted" (<code>false</code>), but <code>insert_or_assign</code> overwrote the value with 5. <code>m["b"]</code> as a bare statement inserts a value-initialised <code>0</code>.</p>
+    <p><b>Why.</b> <code>insert</code>, <code>emplace</code> and <code>try_emplace</code> never modify an existing element; the <code>bool</code> is the only sign they did nothing. <code>insert_or_assign</code> returns <code>false</code> to mean "assigned rather than inserted". The <code>operator[]</code> side effect is a classic: using <code>m[k]</code> to test for presence silently adds entries; use <code>find</code>, <code>contains</code> (C++20) or <code>at</code> instead.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>A non-copyable, non-movable type in three containers. What compiles and what is printed?</p>
+  <pre data-run="ch22-o-pinned"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;deque&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;list&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pinned</span> {
+    <span class="hljs-type">int</span> id;
+    std::mutex m;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span>}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::deque&lt;Pinned&gt; d;
+    d.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">1</span>);
+    d.<span class="hljs-built_in">emplace_front</span>(<span class="hljs-number">0</span>);
+    std::list&lt;Pinned&gt; l;
+    l.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">2</span>);
+    std::map&lt;<span class="hljs-type">int</span>, Pinned&gt; mp;
+    mp.<span class="hljs-built_in">try_emplace</span>(<span class="hljs-number">7</span>, <span class="hljs-number">3</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %d %d %d\n&quot;</span>, d[<span class="hljs-number">0</span>].id, d[<span class="hljs-number">1</span>].id, l.<span class="hljs-built_in">front</span>().id, mp.<span class="hljs-built_in">at</span>(<span class="hljs-number">7</span>).id);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch22-o-pinned">0 1 2 3</pre>
+    <p><b>Answer.</b> All of it compiles and prints <code>0 1 2 3</code>.</p>
+    <p><b>Why.</b> <code>std::mutex</code> makes <code>Pinned</code> neither copyable nor movable. <code>deque</code>, <code>list</code> and maps never relocate existing elements, so <code>emplace</code> into them only needs the constructor. <code>std::vector&lt;Pinned&gt;::emplace_back</code> would not compile, because growing a vector must move or copy elements. <code>push_back(Pinned(1))</code> would fail in every container: it needs a move constructor to get the temporary into the slot.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="output">
+  <p class="dq"><span class="lvl">Output</span>What does this print, and why might it surprise a reviewer?</p>
+  <pre data-run="ch22-o-narrow"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Price</span> {
+    <span class="hljs-type">long</span> ticks;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Price</span><span class="hljs-params">(<span class="hljs-type">long</span> t)</span> : ticks(t) {</span>}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;Price&gt; book;
+    <span class="hljs-type">double</span> mid = <span class="hljs-number">101.75</span>;
+    book.<span class="hljs-built_in">emplace_back</span>(mid * <span class="hljs-number">4</span>);      <span class="hljs-comment">// intended: quarter ticks</span>
+    book.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">-0.9</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%ld %ld\n&quot;</span>, book[<span class="hljs-number">0</span>].ticks, book[<span class="hljs-number">1</span>].ticks);
+}</code></pre>
+  <details class="q" data-kind="output"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch22-o-narrow">407 0</pre>
+    <p><b>Answer.</b> <code>407 0</code>. Both doubles are converted to <code>long</code> by truncation toward zero, and the explicit constructor is called without complaint.</p>
+    <p><b>Why.</b> The double-to-long conversion happens inside the container's <code>::new (p) Price(std::forward&lt;double&gt;(d))</code>, a parenthesised direct-initialisation, so narrowing is allowed and the <code>explicit</code> is ignored. <code>book.push_back(Price{mid * 4})</code> is ill-formed (narrowing in braces: Clang rejects it, GCC only emits a <code>-Wnarrowing</code> warning for a non-constant value), and <code>book.push_back(mid * 4)</code> would fail because the constructor is explicit. In trading code, a silent truncation of a price is the kind of bug that costs money, so avoid emplace for types whose constructors take numeric arguments that could be the wrong type.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>This program reads the first price after adding a fourth one. ASan reports a heap-use-after-free. Why?</p>
+  <pre data-run="ch22-b-dangle" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;<span class="hljs-type">int</span>&gt; prices{<span class="hljs-number">100</span>, <span class="hljs-number">101</span>, <span class="hljs-number">102</span>};
+    <span class="hljs-type">int</span>&amp; best = prices[<span class="hljs-number">0</span>];
+    prices.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">103</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;best=%d\n&quot;</span>, best);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>prices{100, 101, 102}</code> has capacity 3 in both standard libraries, so <code>emplace_back(103)</code> reallocates, and <code>best</code> refers into the freed old buffer.</p>
+    <p><b>Why.</b> Every reallocation invalidates all references, pointers and iterators. Fixes: keep an index (<code>std::size_t best = 0;</code>) and read <code>prices[best]</code> later, call <code>reserve</code> with the final size before taking references, or use a container that does not relocate (<code>std::deque</code> for appends). The output is marked undefined behaviour: without ASan this often prints 100 because the freed memory has not been reused yet, which is why such bugs survive testing.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The loop duplicates every even number. It crashes under ASan. What is wrong?</p>
+  <pre data-run="ch22-b-loop" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::vector&lt;<span class="hljs-type">int</span>&gt; v{<span class="hljs-number">1</span>, <span class="hljs-number">2</span>, <span class="hljs-number">3</span>, <span class="hljs-number">4</span>};
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span>&amp; x : v)
+        <span class="hljs-keyword">if</span> (x % <span class="hljs-number">2</span> == <span class="hljs-number">0</span>) v.<span class="hljs-built_in">push_back</span>(x);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;size=%zu\n&quot;</span>, v.<span class="hljs-built_in">size</span>());
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> Inserting into a vector while iterating it with a range-for. The loop's hidden <code>begin</code> and <code>end</code> iterators (and <code>x</code>) are invalidated by the first reallocation, so the next increment reads freed memory.</p>
+    <p><b>Why.</b> Range-for caches <code>auto __end = v.end()</code> before the loop. Even with enough capacity it would be wrong, because the cached end would not include the new elements. Fix: iterate by index up to the original size, <code>for (std::size_t i = 0, n = v.size(); i &lt; n; ++i) if (v[i] % 2 == 0) v.push_back(v[i]);</code>, which is safe because <code>push_back(v[i])</code> handles self-reference. Or collect into a second vector and append afterwards.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A session table stores entries with <code>operator[]</code>. Why does it not compile, and what is the fix?</p>
+  <pre data-run="ch22-b-subscript" data-mode="error"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Session</span> {
+    std::string user;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Session</span><span class="hljs-params">(std::string u)</span> : user(std::move(u)) {</span>}
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::map&lt;<span class="hljs-type">int</span>, Session&gt; sessions;
+    sessions[<span class="hljs-number">42</span>] = <span class="hljs-built_in">Session</span>(<span class="hljs-string">&quot;ada&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>operator[]</code> must default-construct a <code>Session</code> when the key is missing, and <code>Session</code> has no default constructor. Use <code>sessions.try_emplace(42, "ada")</code> (insert only) or <code>sessions.insert_or_assign(42, Session("ada"))</code> (insert or overwrite).</p>
+    <p><b>Why.</b> <code>operator[]</code> is compiled as one function that handles both the "found" and "not found" paths, so the default constructor is required even if the key always exists at run time. Adding a default constructor just to satisfy it weakens the class invariant (a session without a user). <code>try_emplace</code> also avoids the extra assignment.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>A monitor keeps a list of sensors it tracks. ASan aborts at the end of <code>main</code>. Why does <code>push_back</code> catch this at compile time while <code>emplace_back</code> does not?</p>
+  <pre data-run="ch22-b-own" data-mode="ub" data-flags="asan san-fail"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Sensor</span> { <span class="hljs-type">int</span> id; };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Sensor primary{<span class="hljs-number">1</span>};
+    std::vector&lt;std::unique_ptr&lt;Sensor&gt;&gt; owned;
+    owned.<span class="hljs-built_in">emplace_back</span>(&amp;primary);        <span class="hljs-comment">// compiles: unique_ptr(Sensor*) is explicit</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;tracking sensor %d\n&quot;</span>, owned[<span class="hljs-number">0</span>]-&gt;id);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+    <p><b>Answer.</b> <code>emplace_back(&amp;primary)</code> calls the explicit constructor <code>unique_ptr(Sensor*)</code>, so the vector now "owns" a stack object. When <code>owned</code> is destroyed it calls <code>delete</code> on <code>&amp;primary</code>, and ASan reports "attempting free on address which was not malloc()-ed". <code>owned.push_back(&amp;primary)</code> would be rejected, because the implicit conversion from <code>Sensor*</code> to <code>unique_ptr</code> is exactly what <code>explicit</code> forbids. Fix: if the vector should own, write <code>owned.push_back(std::make_unique&lt;Sensor&gt;(primary))</code>; if it only observes, make it <code>std::vector&lt;Sensor*&gt;</code>.</p>
+    <p><b>Why.</b> <code>explicit</code> on <code>unique_ptr</code>'s pointer constructor exists to make every ownership transfer visible in the source. Emplace's direct-initialisation skips that check, so the leak in this chapter's theory and this bad <code>delete</code> are two faces of the same problem. People say "emplace and push_back are the same except for performance"; for types with explicit constructors they accept different programs. Without ASan the output is undefined: the bad <code>delete</code> may abort, corrupt the heap or appear to work.</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="bug">
+  <p class="dq"><span class="lvl">Find the bug</span>The registry is meant to keep the first connection for each host. Sometimes the second connection object is destroyed even though it was never stored. Why?</p>
+  <pre data-run="ch22-b-steal"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Conn</span> {
+    std::string host;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Conn</span><span class="hljs-params">(std::string h)</span> : host(std::move(h)) {</span>}
+    ~<span class="hljs-built_in">Conn</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;closing %s\n&quot;</span>, host.<span class="hljs-built_in">c_str</span>()); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::map&lt;std::string, std::unique_ptr&lt;Conn&gt;&gt; registry;
+    registry.<span class="hljs-built_in">emplace</span>(<span class="hljs-string">&quot;db&quot;</span>, std::<span class="hljs-built_in">make_unique</span>&lt;Conn&gt;(<span class="hljs-string">&quot;db#1&quot;</span>));
+    <span class="hljs-keyword">auto</span> spare = std::<span class="hljs-built_in">make_unique</span>&lt;Conn&gt;(<span class="hljs-string">&quot;db#2&quot;</span>);
+    registry.<span class="hljs-built_in">emplace</span>(<span class="hljs-string">&quot;db&quot;</span>, std::<span class="hljs-built_in">move</span>(spare));       <span class="hljs-comment">// key already present</span>
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;spare is %s\n&quot;</span>, spare ? <span class="hljs-string">&quot;still ours&quot;</span> : <span class="hljs-string">&quot;gone&quot;</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;end of main&quot;</span>);
+}</code></pre>
+  <details class="q" data-kind="bug"><summary>Answer</summary><div class="a">
+<pre class="out" data-out="ch22-b-steal">closing db#2
+spare is gone
+end of main
+closing db#1</pre>
+    <p><b>Answer.</b> The key is passed as <code>const char*</code>, so <code>emplace</code> constructs the node (moving <code>spare</code> into it) before it can compare keys. The key exists, the node is destroyed, and <code>db#2</code> is closed. Use <code>registry.try_emplace("db", std::move(spare))</code>, which leaves <code>spare</code> untouched when the key exists.</p>
+    <p><b>Why.</b> The standard does not promise that a failed <code>emplace</code> leaves its arguments alone. Both standard libraries look the key up first only when the first argument already has the key type (<code>std::string</code> here), so the behaviour even depends on how the caller spells the key. <code>try_emplace</code> was introduced in C++17 for exactly this.</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch20-coding" data-roles="cd"><div class="sec-head"><h2>Write the code</h2><div class="sec-tools"><span class="role cd">Coding</span></div></div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>TinyVector&lt;T&gt;</code> with <code>push_back(const T&amp;)</code>, <code>push_back(T&amp;&amp;)</code>, <code>emplace_back(Args&amp;&amp;...)</code> returning <code>T&amp;</code>, <code>reserve</code>, <code>size</code>, <code>capacity</code> and <code>operator[]</code>. Growth doubles, relocates with <code>std::move_if_noexcept</code>, and must handle <code>v.emplace_back(v[0])</code> when full. Trace it with a noisy type.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Both <code>push_back</code> overloads forward to <code>emplace_back</code>. On growth, allocate the new block, construct the new element at index <code>size</code> in it first (the arguments may refer to old elements), then relocate the old elements, destroy them and free the old block. If constructing the new element throws, free the new block; if relocation throws (only possible when copying), destroy what was built.</p>
+<pre data-run="ch22-c-tinyvec" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">TinyVector</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">TinyVector</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">TinyVector</span>(<span class="hljs-type">const</span> TinyVector&amp;) = <span class="hljs-keyword">delete</span>;
+    TinyVector&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> TinyVector&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">TinyVector</span>() { std::<span class="hljs-built_in">destroy_n</span>(data_, size_); alloc_.<span class="hljs-built_in">deallocate</span>(data_, cap_); }
+
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(<span class="hljs-type">const</span> T&amp; v)</span> </span>{ <span class="hljs-built_in">emplace_back</span>(v); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(T&amp;&amp; v)</span> </span>{ <span class="hljs-built_in">emplace_back</span>(std::<span class="hljs-built_in">move</span>(v)); }
+
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span>... Args&gt;
+    <span class="hljs-function">T&amp; <span class="hljs-title">emplace_back</span><span class="hljs-params">(Args&amp;&amp;... args)</span> </span>{
+        <span class="hljs-keyword">if</span> (size_ &lt; cap_) {
+            T&amp; r = *std::<span class="hljs-built_in">construct_at</span>(data_ + size_, std::forward&lt;Args&gt;(args)...);
+            ++size_;                         <span class="hljs-comment">// only after construction succeeded</span>
+            <span class="hljs-keyword">return</span> r;
+        }
+        <span class="hljs-keyword">return</span> <span class="hljs-built_in">grow_and_emplace</span>(cap_ ? <span class="hljs-number">2</span> * cap_ : <span class="hljs-number">1</span>, std::forward&lt;Args&gt;(args)...);
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">reserve</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> n)</span> </span>{ <span class="hljs-keyword">if</span> (n &gt; cap_) <span class="hljs-built_in">relocate_to</span>(n); }
+
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">capacity</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> cap_; }
+    T&amp; <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) { <span class="hljs-keyword">return</span> data_[i]; }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span>... Args&gt;
+    <span class="hljs-function">T&amp; <span class="hljs-title">grow_and_emplace</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> ncap, Args&amp;&amp;... args)</span> </span>{
+        T* nd = alloc_.<span class="hljs-built_in">allocate</span>(ncap);
+        <span class="hljs-keyword">try</span> {
+            std::<span class="hljs-built_in">construct_at</span>(nd + size_, std::forward&lt;Args&gt;(args)...);   <span class="hljs-comment">// before relocation</span>
+        } <span class="hljs-built_in">catch</span> (...) {
+            alloc_.<span class="hljs-built_in">deallocate</span>(nd, ncap);
+            <span class="hljs-keyword">throw</span>;
+        }
+        <span class="hljs-keyword">try</span> {
+            <span class="hljs-built_in">move_elements</span>(nd);
+        } <span class="hljs-built_in">catch</span> (...) {
+            std::<span class="hljs-built_in">destroy_at</span>(nd + size_);
+            alloc_.<span class="hljs-built_in">deallocate</span>(nd, ncap);
+            <span class="hljs-keyword">throw</span>;
+        }
+        <span class="hljs-built_in">adopt</span>(nd, ncap);
+        <span class="hljs-keyword">return</span> data_[size_++];
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">relocate_to</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> ncap)</span> </span>{
+        T* nd = alloc_.<span class="hljs-built_in">allocate</span>(ncap);
+        <span class="hljs-keyword">try</span> { <span class="hljs-built_in">move_elements</span>(nd); } <span class="hljs-built_in">catch</span> (...) { alloc_.<span class="hljs-built_in">deallocate</span>(nd, ncap); <span class="hljs-keyword">throw</span>; }
+        <span class="hljs-built_in">adopt</span>(nd, ncap);
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">move_elements</span><span class="hljs-params">(T* nd)</span> </span>{          <span class="hljs-comment">// strong guarantee: on throw, nd holds nothing</span>
+        std::<span class="hljs-type">size_t</span> i = <span class="hljs-number">0</span>;
+        <span class="hljs-keyword">try</span> {
+            <span class="hljs-keyword">for</span> (; i &lt; size_; ++i) std::<span class="hljs-built_in">construct_at</span>(nd + i, std::<span class="hljs-built_in">move_if_noexcept</span>(data_[i]));
+        } <span class="hljs-built_in">catch</span> (...) {
+            std::<span class="hljs-built_in">destroy_n</span>(nd, i);
+            <span class="hljs-keyword">throw</span>;
+        }
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">adopt</span><span class="hljs-params">(T* nd, std::<span class="hljs-type">size_t</span> ncap)</span> </span>{
+        std::<span class="hljs-built_in">destroy_n</span>(data_, size_);
+        alloc_.<span class="hljs-built_in">deallocate</span>(data_, cap_);
+        data_ = nd;
+        cap_ = ncap;
+    }
+
+    std::allocator&lt;T&gt; alloc_;
+    T* data_ = <span class="hljs-literal">nullptr</span>;
+    std::<span class="hljs-type">size_t</span> size_ = <span class="hljs-number">0</span>, cap_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Noisy</span> {
+    <span class="hljs-type">int</span> v;
+    <span class="hljs-built_in">Noisy</span>(<span class="hljs-type">int</span> x) : <span class="hljs-built_in">v</span>(x) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  ctor(%d)\n&quot;</span>, v); }
+    <span class="hljs-built_in">Noisy</span>(<span class="hljs-type">int</span> a, <span class="hljs-type">int</span> b) : <span class="hljs-built_in">v</span>(a * <span class="hljs-number">10</span> + b) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  ctor(%d,%d)\n&quot;</span>, a, b); }
+    <span class="hljs-built_in">Noisy</span>(<span class="hljs-type">const</span> Noisy&amp; o) : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  copy(%d)\n&quot;</span>, v); }
+    <span class="hljs-built_in">Noisy</span>(Noisy&amp;&amp; o) <span class="hljs-keyword">noexcept</span> : <span class="hljs-built_in">v</span>(o.v) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  move(%d)\n&quot;</span>, v); }
+    ~<span class="hljs-built_in">Noisy</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  dtor(%d)\n&quot;</span>, v); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    TinyVector&lt;Noisy&gt; v;
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace_back(1):&quot;</span>);      v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">1</span>);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace_back(v[0]):&quot;</span>);   v.<span class="hljs-built_in">emplace_back</span>(v[<span class="hljs-number">0</span>]);       <span class="hljs-comment">// full: grows, reads v[0] first</span>
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;push_back(Noisy(3)):&quot;</span>);  v.<span class="hljs-built_in">push_back</span>(<span class="hljs-built_in">Noisy</span>(<span class="hljs-number">3</span>));
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;emplace_back(4, 2):&quot;</span>);   Noisy&amp; r = v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">4</span>, <span class="hljs-number">2</span>);
+    r.v += <span class="hljs-number">100</span>;
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;size=%zu cap=%zu last=%d\n&quot;</span>, v.<span class="hljs-built_in">size</span>(), v.<span class="hljs-built_in">capacity</span>(), v[<span class="hljs-number">3</span>].v);
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;destroy:&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch22-c-tinyvec">emplace_back(1):
+  ctor(1)
+emplace_back(v[0]):
+  copy(1)
+  move(1)
+  dtor(1)
+push_back(Noisy(3)):
+  ctor(3)
+  move(3)
+  move(1)
+  move(1)
+  dtor(1)
+  dtor(1)
+  dtor(3)
+emplace_back(4, 2):
+  ctor(4,2)
+size=4 cap=4 last=142
+destroy:
+  dtor(1)
+  dtor(1)
+  dtor(3)
+  dtor(142)</pre>
+    <p><b>Complexity and pitfalls.</b> Amortised O(1) appends. In the second block the copy of <code>v[0]</code> is made into the new buffer before the old element is moved and destroyed, which is what keeps the self-reference valid. The third block shows the full cost of <code>push_back</code> of a temporary during growth: the temporary is built, moved into the new slot, both old elements are relocated and destroyed, and finally the temporary dies. The fourth block shows <code>emplace_back(4, 2)</code> constructing in place and returning a usable reference. Pitfalls: growing first and constructing second (reads freed memory for <code>v.emplace_back(v[0])</code>); using <code>std::move</code> instead of <code>move_if_noexcept</code> for relocation; incrementing <code>size_</code> before construction succeeds; forgetting that the element destructor order of this class (front to back) is a choice, and libc++ chooses back to front.</p>
+    <p class="rating">Estimated rating: ~1900 · placement construction, exception-safe growth and the self-reference ordering in one class</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>my_try_emplace(map, key, args...)</code> for a <code>std::map</code> using only <code>lower_bound</code>, <code>key_comp</code> and <code>emplace_hint</code>, with the same guarantee as <code>try_emplace</code>: when the key exists, the value arguments are not touched. Return <code>std::pair&lt;iterator, bool&gt;</code>.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> <code>lower_bound(key)</code> returns the first element not less than <code>key</code>. If it is not <code>end()</code> and <code>key</code> is not less than its key, the key exists: return it with <code>false</code> without touching the arguments. Otherwise <code>lower_bound</code> is exactly the correct hint (the new key belongs just before it), so <code>emplace_hint</code> with <code>piecewise_construct</code> inserts in amortised O(1) after the O(log n) lookup.</p>
+<pre data-run="ch22-c-tryemplace" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;tuple&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">Map</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">K</span>, <span class="hljs-keyword">class</span>... Args&gt;
+<span class="hljs-function">std::pair&lt;<span class="hljs-keyword">typename</span> Map::iterator, <span class="hljs-type">bool</span>&gt; <span class="hljs-title">my_try_emplace</span><span class="hljs-params">(Map&amp; m, K&amp;&amp; key, Args&amp;&amp;... args)</span> </span>{
+    <span class="hljs-keyword">auto</span> it = m.<span class="hljs-built_in">lower_bound</span>(key);
+    <span class="hljs-keyword">if</span> (it != m.<span class="hljs-built_in">end</span>() &amp;&amp; !m.<span class="hljs-built_in">key_comp</span>()(key, it-&gt;first)) <span class="hljs-keyword">return</span> {it, <span class="hljs-literal">false</span>};
+    it = m.<span class="hljs-built_in">emplace_hint</span>(it, std::piecewise_construct,
+                        std::forward_as_tuple(std::forward&lt;K&gt;(key)),
+                        std::forward_as_tuple(std::forward&lt;Args&gt;(args)...));
+    <span class="hljs-keyword">return</span> {it, <span class="hljs-literal">true</span>};
+}
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    std::map&lt;std::string, std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt; m;
+    <span class="hljs-keyword">auto</span> [a, ok1] = <span class="hljs-built_in">my_try_emplace</span>(m, std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;x&quot;</span>), std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">1</span>));
+    <span class="hljs-keyword">auto</span> p = std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">2</span>);
+    <span class="hljs-keyword">auto</span> [b, ok2] = <span class="hljs-built_in">my_try_emplace</span>(m, std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;x&quot;</span>), std::<span class="hljs-built_in">move</span>(p));
+    <span class="hljs-keyword">auto</span> [c, ok3] = <span class="hljs-built_in">my_try_emplace</span>(m, std::<span class="hljs-built_in">string</span>(<span class="hljs-string">&quot;w&quot;</span>), std::<span class="hljs-built_in">move</span>(p));
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;ok=%d%d%d x=%d w=%d p=%s size=%zu\n&quot;</span>, ok1, ok2, ok3, *a-&gt;second, *c-&gt;second,
+                p ? <span class="hljs-string">&quot;set&quot;</span> : <span class="hljs-string">&quot;null&quot;</span>, m.<span class="hljs-built_in">size</span>());
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;first key=%s\n&quot;</span>, m.<span class="hljs-built_in">begin</span>()-&gt;first.<span class="hljs-built_in">c_str</span>());
+}</code></pre>
+<pre class="out" data-out="ch22-c-tryemplace">ok=101 x=1 w=2 p=null size=2
+first key=w</pre>
+    <p><b>Complexity and pitfalls.</b> O(log n) lookup plus amortised O(1) linking. The second call leaves <code>p</code> owning 2, which the third call then moves into the new <code>"w"</code> entry; that is why <code>p</code> is null only at the end. Pitfalls: comparing with <code>==</code> instead of the map's comparator (wrong for custom orderings); calling <code>emplace</code> instead of <code>emplace_hint</code> after the lookup (correct, but it repeats the O(log n) search); passing the key as <code>std::forward&lt;K&gt;(key)</code> to <code>lower_bound</code> and then forwarding it again (forward once, at the last use, <a href="#ch19">Ch 19</a>).</p>
+    <p class="rating">Estimated rating: ~1600 · needs lower_bound equivalence via the comparator and the exact hint semantics</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Write <code>safe_emplace_back(v, args...)</code>, which behaves like <code>v.emplace_back(args...)</code> but refuses (at compile time) a single argument that is not implicitly convertible to the element type, and refuses narrowing for single arithmetic arguments. Multi-argument calls stay allowed. Show which calls compile using a <code>requires</code> check.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> For one argument, require <code>std::is_convertible_v&lt;A, T&gt;</code> (rejects explicit constructors) and that <code>T{std::declval&lt;A&gt;()}</code> is well-formed (brace initialisation rejects narrowing). For zero or several arguments, require <code>std::constructible_from&lt;T, Args...&gt;</code> and forward to <code>emplace_back</code>.</p>
+<pre data-run="ch22-c-safe"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;concepts&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;type_traits&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;vector&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">A</span>&gt;
+<span class="hljs-keyword">concept</span> SafeSingle = std::is_convertible_v&lt;A, T&gt; &amp;&amp; <span class="hljs-built_in">requires</span>(A&amp;&amp; a) { T{std::forward&lt;A&gt;(a)}; };
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... Args&gt;
+<span class="hljs-keyword">concept</span> SafeArgs = (<span class="hljs-keyword">sizeof</span>...(Args) != <span class="hljs-number">1</span> &amp;&amp; std::constructible_from&lt;T, Args...&gt;) ||
+                   (<span class="hljs-keyword">sizeof</span>...(Args) == <span class="hljs-number">1</span> &amp;&amp; (SafeSingle&lt;T, Args&gt; &amp;&amp; ...));
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span> <span class="hljs-title class_">Alloc</span>, <span class="hljs-keyword">class</span>... Args&gt;
+    <span class="hljs-function"><span class="hljs-keyword">requires</span> SafeArgs&lt;T, Args...&gt;
+T&amp; <span class="hljs-title">safe_emplace_back</span><span class="hljs-params">(std::vector&lt;T, Alloc&gt;&amp; v, Args&amp;&amp;... args)</span> </span>{
+    <span class="hljs-keyword">return</span> v.<span class="hljs-built_in">emplace_back</span>(std::forward&lt;Args&gt;(args)...);
+}
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">V</span>, <span class="hljs-keyword">class</span>... Args&gt;
+<span class="hljs-keyword">constexpr</span> <span class="hljs-type">bool</span> can_emplace = <span class="hljs-built_in">requires</span>(V&amp; v, Args&amp;&amp;... a) { <span class="hljs-built_in">safe_emplace_back</span>(v, std::forward&lt;Args&gt;(a)...); };
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    <span class="hljs-keyword">using</span> UP = std::vector&lt;std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt;;
+    <span class="hljs-keyword">using</span> VV = std::vector&lt;std::vector&lt;<span class="hljs-type">int</span>&gt;&gt;;
+    <span class="hljs-keyword">using</span> VI = std::vector&lt;<span class="hljs-type">int</span>&gt;;
+    <span class="hljs-built_in">static_assert</span>(!can_emplace&lt;UP, <span class="hljs-type">int</span>*&gt;);                 <span class="hljs-comment">// explicit constructor</span>
+    <span class="hljs-built_in">static_assert</span>(can_emplace&lt;UP, std::unique_ptr&lt;<span class="hljs-type">int</span>&gt;&gt;);  <span class="hljs-comment">// an owner is fine</span>
+    <span class="hljs-built_in">static_assert</span>(!can_emplace&lt;VV, <span class="hljs-type">int</span>&gt;);                  <span class="hljs-comment">// explicit size constructor</span>
+    <span class="hljs-built_in">static_assert</span>(can_emplace&lt;VV, <span class="hljs-type">int</span>, <span class="hljs-type">int</span>&gt;);              <span class="hljs-comment">// multi-arg: allowed on purpose</span>
+    <span class="hljs-built_in">static_assert</span>(!can_emplace&lt;VI, <span class="hljs-type">double</span>&gt;);               <span class="hljs-comment">// narrowing</span>
+    <span class="hljs-built_in">static_assert</span>(can_emplace&lt;VI, <span class="hljs-type">short</span>&gt;);                 <span class="hljs-comment">// widening</span>
+
+    UP up;
+    <span class="hljs-built_in">safe_emplace_back</span>(up, std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">5</span>));
+    VV vv;
+    <span class="hljs-built_in">safe_emplace_back</span>(vv, <span class="hljs-number">3</span>, <span class="hljs-number">9</span>);
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%d %zu %d\n&quot;</span>, *up[<span class="hljs-number">0</span>], vv[<span class="hljs-number">0</span>].<span class="hljs-built_in">size</span>(), vv[<span class="hljs-number">0</span>][<span class="hljs-number">0</span>]);
+}</code></pre>
+<pre class="out" data-out="ch22-c-safe">5 3 9</pre>
+    <p><b>Complexity and pitfalls.</b> Compile-time only. The brace test also rejects types that are not brace-constructible from themselves in odd ways, and for aggregates <code>T{a}</code> means "first member from <code>a</code>", so the check is a heuristic rather than a proof. Multi-argument calls still go through explicit constructors; that is usually what the caller means (<code>emplace_back(3, 9)</code> for "three nines").</p>
+    <p class="rating">Estimated rating: ~1700 · concept composition with a pack-size switch and a narrowing probe through brace initialisation</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Build a <code>Registry</code> that owns polymorphic plugins by name: <code>template &lt;class T, class... Args&gt; T&amp; create(std::string name, Args&amp;&amp;... args)</code> constructs a <code>T</code> (derived from <code>Plugin</code>) with forwarded arguments, stores it in an <code>unordered_map&lt;std::string, std::unique_ptr&lt;Plugin&gt;&gt;</code> and returns a reference to the concrete type. Creating a duplicate name must throw <code>std::invalid_argument</code> without constructing anything.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Look the name up first; if present, throw before building anything. Otherwise <code>std::make_unique&lt;T&gt;(std::forward&lt;Args&gt;(args)...)</code>, keep a raw <code>T*</code> to return, and move the owner into the map with <code>try_emplace</code>. The owner exists before the map allocates, so a failing insert cannot leak. The reference stays valid across rehashes because the map stores pointers and node-based maps never move their nodes.</p>
+<pre data-run="ch22-c-registry" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;concepts&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;stdexcept&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;string&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;unordered_map&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Plugin</span> {
+    <span class="hljs-keyword">virtual</span> ~<span class="hljs-built_in">Plugin</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-function"><span class="hljs-keyword">virtual</span> <span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">kind</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>= <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">Registry</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, <span class="hljs-keyword">class</span>... Args&gt;
+        <span class="hljs-function"><span class="hljs-keyword">requires</span> std::derived_from&lt;T, Plugin&gt;
+    T&amp; <span class="hljs-title">create</span><span class="hljs-params">(std::string name, Args&amp;&amp;... args)</span> </span>{
+        <span class="hljs-keyword">if</span> (items_.<span class="hljs-built_in">contains</span>(name)) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">invalid_argument</span>(<span class="hljs-string">&quot;duplicate plugin: &quot;</span> + name);
+        <span class="hljs-keyword">auto</span> obj = std::<span class="hljs-built_in">make_unique</span>&lt;T&gt;(std::forward&lt;Args&gt;(args)...);
+        T&amp; ref = *obj;
+        items_.<span class="hljs-built_in">try_emplace</span>(std::<span class="hljs-built_in">move</span>(name), std::<span class="hljs-built_in">move</span>(obj));
+        <span class="hljs-keyword">return</span> ref;
+    }
+    <span class="hljs-function">Plugin* <span class="hljs-title">find</span><span class="hljs-params">(<span class="hljs-type">const</span> std::string&amp; name)</span> <span class="hljs-type">const</span> </span>{
+        <span class="hljs-keyword">auto</span> it = items_.<span class="hljs-built_in">find</span>(name);
+        <span class="hljs-keyword">return</span> it == items_.<span class="hljs-built_in">end</span>() ? <span class="hljs-literal">nullptr</span> : it-&gt;second.<span class="hljs-built_in">get</span>();
+    }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> items_.<span class="hljs-built_in">size</span>(); }
+<span class="hljs-keyword">private</span>:
+    std::unordered_map&lt;std::string, std::unique_ptr&lt;Plugin&gt;&gt; items_;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Counter</span> : Plugin {
+    <span class="hljs-type">static</span> <span class="hljs-keyword">inline</span> <span class="hljs-type">int</span> made = <span class="hljs-number">0</span>;
+    <span class="hljs-type">int</span> start;
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Counter</span><span class="hljs-params">(<span class="hljs-type">int</span> s)</span> : start(s) {</span> ++made; }
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">kind</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;counter&quot;</span>; }
+};
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Echo</span> : Plugin {
+    std::string prefix;
+    std::unique_ptr&lt;<span class="hljs-type">int</span>&gt; level;
+    <span class="hljs-built_in">Echo</span>(std::string p, std::unique_ptr&lt;<span class="hljs-type">int</span>&gt; l) : <span class="hljs-built_in">prefix</span>(std::<span class="hljs-built_in">move</span>(p)), <span class="hljs-built_in">level</span>(std::<span class="hljs-built_in">move</span>(l)) {}
+    <span class="hljs-function"><span class="hljs-type">const</span> <span class="hljs-type">char</span>* <span class="hljs-title">kind</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> <span class="hljs-keyword">override</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-string">&quot;echo&quot;</span>; }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    Registry r;
+    Counter&amp; c = r.<span class="hljs-built_in">create</span>&lt;Counter&gt;(<span class="hljs-string">&quot;hits&quot;</span>, <span class="hljs-number">10</span>);
+    Echo&amp; e = r.<span class="hljs-built_in">create</span>&lt;Echo&gt;(<span class="hljs-string">&quot;log&quot;</span>, <span class="hljs-string">&quot;&gt; &quot;</span>, std::<span class="hljs-built_in">make_unique</span>&lt;<span class="hljs-type">int</span>&gt;(<span class="hljs-number">3</span>));   <span class="hljs-comment">// move-only argument</span>
+    <span class="hljs-keyword">for</span> (<span class="hljs-type">int</span> i = <span class="hljs-number">0</span>; i &lt; <span class="hljs-number">100</span>; ++i) r.<span class="hljs-built_in">create</span>&lt;Counter&gt;(<span class="hljs-string">&quot;c&quot;</span> + std::<span class="hljs-built_in">to_string</span>(i), i);   <span class="hljs-comment">// rehashes</span>
+    c.start += <span class="hljs-number">1</span>;                                                      <span class="hljs-comment">// still valid</span>
+    <span class="hljs-keyword">try</span> { r.<span class="hljs-built_in">create</span>&lt;Counter&gt;(<span class="hljs-string">&quot;hits&quot;</span>, <span class="hljs-number">99</span>); }
+    <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::invalid_argument&amp; ex) { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;%s\n&quot;</span>, ex.<span class="hljs-built_in">what</span>()); }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;hits=%d echo=%s%d kinds=%s,%s made=%d size=%zu\n&quot;</span>, c.start, e.prefix.<span class="hljs-built_in">c_str</span>(),
+                *e.level, r.<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;hits&quot;</span>)-&gt;<span class="hljs-built_in">kind</span>(), r.<span class="hljs-built_in">find</span>(<span class="hljs-string">&quot;log&quot;</span>)-&gt;<span class="hljs-built_in">kind</span>(), Counter::made, r.<span class="hljs-built_in">size</span>());
+}</code></pre>
+<pre class="out" data-out="ch22-c-registry">duplicate plugin: hits
+hits=11 echo=&gt; 3 kinds=counter,echo made=101 size=102</pre>
+    <p><b>Complexity and pitfalls.</b> Average O(1) per operation plus the construction. <code>made=101</code> proves the duplicate call constructed nothing. Pitfalls: checking existence after constructing (wasted work and side effects); <code>items_.emplace(name, new T(...))</code> (the explicit-constructor leak from this chapter); returning <code>*items_[name]</code> as <code>Plugin&amp;</code> and <code>static_cast</code>ing later; taking <code>name</code> as <code>const std::string&amp;</code> and then copying it into the map (by value plus move is one copy fewer for rvalue names).</p>
+    <p class="rating">Estimated rating: ~1500 · combines forwarding, make_unique, try_emplace and reference stability of node containers</p>
+  </div></details>
+</div>
+
+<div class="drill" data-kind="code">
+  <p class="dq"><span class="lvl">Code</span>Implement <code>InplaceVector&lt;T, N&gt;</code>, a fixed-capacity vector with no heap allocation (the shape of C++26's <code>std::inplace_vector</code>), with <code>emplace_back</code> returning <code>T&amp;</code>, <code>push_back</code> overloads, <code>pop_back</code>, <code>size</code>, <code>operator[]</code> and a destructor. When full, <code>emplace_back</code> throws <code>std::bad_alloc</code> without constructing anything. Elements must never move, so non-movable types work.</p>
+  <details class="q" data-kind="code"><summary>Answer</summary><div class="a">
+    <p><b>Approach.</b> Store <code>alignas(T) std::byte buf_[N * sizeof(T)]</code> and a count. <code>emplace_back</code> checks capacity first, then constructs with <code>std::construct_at</code> at slot <code>size_</code>. Access goes through <code>std::launder(reinterpret_cast&lt;T*&gt;(buf_) + i)</code> because the objects were created in raw storage (see <a href="#ch12">Ch 12</a>). Copying and moving the container itself are deleted to keep the example short.</p>
+<pre data-run="ch22-c-inplace" data-flags="asan"><code class="language-cpp hljs"><span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstddef&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;cstdio&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;memory&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;mutex&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;new&gt;</span></span>
+<span class="hljs-meta">#<span class="hljs-keyword">include</span> <span class="hljs-string">&lt;utility&gt;</span></span>
+
+<span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span> <span class="hljs-title class_">T</span>, std::<span class="hljs-type">size_t</span> N&gt;
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">InplaceVector</span> {
+<span class="hljs-keyword">public</span>:
+    <span class="hljs-built_in">InplaceVector</span>() = <span class="hljs-keyword">default</span>;
+    <span class="hljs-built_in">InplaceVector</span>(<span class="hljs-type">const</span> InplaceVector&amp;) = <span class="hljs-keyword">delete</span>;
+    InplaceVector&amp; <span class="hljs-keyword">operator</span>=(<span class="hljs-type">const</span> InplaceVector&amp;) = <span class="hljs-keyword">delete</span>;
+    ~<span class="hljs-built_in">InplaceVector</span>() { <span class="hljs-keyword">while</span> (size_) <span class="hljs-built_in">pop_back</span>(); }
+
+    <span class="hljs-keyword">template</span> &lt;<span class="hljs-keyword">class</span>... Args&gt;
+    <span class="hljs-function">T&amp; <span class="hljs-title">emplace_back</span><span class="hljs-params">(Args&amp;&amp;... args)</span> </span>{
+        <span class="hljs-keyword">if</span> (size_ == N) <span class="hljs-keyword">throw</span> std::<span class="hljs-built_in">bad_alloc</span>();
+        T* p = std::<span class="hljs-built_in">construct_at</span>(<span class="hljs-built_in">slot</span>(size_), std::forward&lt;Args&gt;(args)...);
+        ++size_;                                   <span class="hljs-comment">// only after construction succeeded</span>
+        <span class="hljs-keyword">return</span> *p;
+    }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(<span class="hljs-type">const</span> T&amp; v)</span> </span>{ <span class="hljs-built_in">emplace_back</span>(v); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">push_back</span><span class="hljs-params">(T&amp;&amp; v)</span> </span>{ <span class="hljs-built_in">emplace_back</span>(std::<span class="hljs-built_in">move</span>(v)); }
+    <span class="hljs-function"><span class="hljs-type">void</span> <span class="hljs-title">pop_back</span><span class="hljs-params">()</span> </span>{ std::<span class="hljs-built_in">destroy_at</span>(&amp;(*<span class="hljs-keyword">this</span>)[--size_]); }
+
+    T&amp; <span class="hljs-keyword">operator</span>[](std::<span class="hljs-type">size_t</span> i) { <span class="hljs-keyword">return</span> *std::<span class="hljs-built_in">launder</span>(<span class="hljs-built_in">slot</span>(i)); }
+    <span class="hljs-function">std::<span class="hljs-type">size_t</span> <span class="hljs-title">size</span><span class="hljs-params">()</span> <span class="hljs-type">const</span> </span>{ <span class="hljs-keyword">return</span> size_; }
+    <span class="hljs-function"><span class="hljs-type">static</span> <span class="hljs-keyword">constexpr</span> std::<span class="hljs-type">size_t</span> <span class="hljs-title">capacity</span><span class="hljs-params">()</span> </span>{ <span class="hljs-keyword">return</span> N; }
+
+<span class="hljs-keyword">private</span>:
+    <span class="hljs-function">T* <span class="hljs-title">slot</span><span class="hljs-params">(std::<span class="hljs-type">size_t</span> i)</span> </span>{ <span class="hljs-keyword">return</span> <span class="hljs-built_in">reinterpret_cast</span>&lt;T*&gt;(buf_) + i; }
+    <span class="hljs-built_in">alignas</span>(T) std::byte buf_[<span class="hljs-function">N * <span class="hljs-title">sizeof</span><span class="hljs-params">(T)</span>]</span>;
+    std::<span class="hljs-type">size_t</span> size_ = <span class="hljs-number">0</span>;
+};
+
+<span class="hljs-keyword">struct</span> <span class="hljs-title class_">Pinned</span> {
+    <span class="hljs-type">int</span> id;
+    std::mutex m;                                  <span class="hljs-comment">// not copyable, not movable</span>
+    <span class="hljs-function"><span class="hljs-keyword">explicit</span> <span class="hljs-title">Pinned</span><span class="hljs-params">(<span class="hljs-type">int</span> i)</span> : id(i) {</span> std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  make %d\n&quot;</span>, id); }
+    ~<span class="hljs-built_in">Pinned</span>() { std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;  drop %d\n&quot;</span>, id); }
+};
+
+<span class="hljs-function"><span class="hljs-type">int</span> <span class="hljs-title">main</span><span class="hljs-params">()</span> </span>{
+    InplaceVector&lt;Pinned, <span class="hljs-number">2</span>&gt; v;
+    Pinned&amp; first = v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">1</span>);
+    v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">2</span>);
+    <span class="hljs-keyword">try</span> { v.<span class="hljs-built_in">emplace_back</span>(<span class="hljs-number">3</span>); }
+    <span class="hljs-built_in">catch</span> (<span class="hljs-type">const</span> std::bad_alloc&amp;) { std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;  full&quot;</span>); }
+    std::<span class="hljs-built_in">printf</span>(<span class="hljs-string">&quot;first=%d size=%zu sizeof ok=%d\n&quot;</span>, first.id, v.<span class="hljs-built_in">size</span>(),
+                <span class="hljs-built_in">sizeof</span>(v) &gt;= <span class="hljs-number">2</span> * <span class="hljs-built_in">sizeof</span>(Pinned));
+    v.<span class="hljs-built_in">pop_back</span>();
+    std::<span class="hljs-built_in">puts</span>(<span class="hljs-string">&quot;end&quot;</span>);
+}</code></pre>
+<pre class="out" data-out="ch22-c-inplace">  make 1
+  make 2
+  full
+first=1 size=2 sizeof ok=1
+  drop 2
+end
+  drop 1</pre>
+    <p><b>Complexity and pitfalls.</b> O(1) for every operation and zero allocations, which is why low-latency code favours this shape for small bounded collections. References are never invalidated by insertion, since elements never move. Pitfalls: incrementing <code>size_</code> before construction (a throwing constructor leaves a "live" garbage slot that the destructor will destroy); forgetting <code>alignas(T)</code>; using <code>T buf_[N]</code> instead of raw bytes, which default-constructs N objects up front and requires a default constructor; omitting <code>std::launder</code>, which is technically required when reaching objects through a pointer to the byte array.</p>
+    <p class="rating">Estimated rating: ~1700 · raw aligned storage, construct_at, launder and the size-after-construction ordering</p>
+  </div></details>
+</div>
+</section>
+
+<section id="ch20-cheatsheet" data-roles="th"><div class="sec-head"><h2>Cheat sheet</h2><div class="sec-tools"><span class="role th">Theory</span></div></div>
+<ul>
+<li><b>push_back(x)</b> copies or moves an existing <code>T</code>; <b>emplace_back(args)</b> constructs in the slot via <code>allocator_traits::construct</code>, with parentheses.</li>
+<li>Only <code>emplace_back(ctor args)</code> avoids work: the temporary, its move and its destructor. With an existing object or a <code>T{...}</code> argument the two are identical.</li>
+<li><b>Dangers of emplace</b>: calls explicit constructors (<code>emplace_back(new T)</code> into <code>unique_ptr</code>s leaks on growth failure; <code>vector&lt;vector&lt;int&gt;&gt;::emplace_back(10)</code> is ten zeros), allows narrowing, cannot take braced lists.</li>
+<li><b>Aggregates</b>: <code>emplace_back(1, 2)</code> needs C++20 parenthesised aggregate init.</li>
+<li><code>emplace_back</code> returns <code>T&amp;</code> since C++17 (void before); <code>emplace_hint</code> returns an iterator; associative <code>emplace</code> returns <code>pair&lt;iterator, bool&gt;</code>.</li>
+<li><b>Maps</b>: <code>try_emplace</code> never touches arguments if the key exists; <code>insert_or_assign</code> overwrites; <code>operator[]</code> needs a default constructor; <code>piecewise_construct</code> + <code>forward_as_tuple</code> for multi-argument keys or values.</li>
+<li><b>Growth</b>: new element constructed first, then relocation with <code>move_if_noexcept</code>; every reference and iterator dies. <code>reserve</code> once with the final size; deque and node containers never relocate.</li>
+</ul>
+</section>

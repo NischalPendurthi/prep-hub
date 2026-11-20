@@ -23,7 +23,7 @@
   var TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
 
   var TOOLS = [
-    { id: "guide", name: "C++ / OS Guide", href: "guide/" },
+    { id: "guide", name: "C++ / OS", href: "guide/" },
     { id: "langs", name: "Languages", href: "langs/" },
     { id: "topics", name: "Topics", href: "topics/" },
     { id: "mcq", name: "MCQ Prep", href: "mcq/" },
