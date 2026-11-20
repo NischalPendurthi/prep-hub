@@ -7,6 +7,8 @@
   /* Keys of seed entries this browser has already merged, so a deleted entry stays deleted.
      The seed is checked on every load, so publishing a new seed needs no site deploy. */
   var SEED_SEEN = "applications.seedSeen.v1";
+  /* The seed's tag per entry when this browser last merged it, so a changed seed tag is applied once. */
+  var SEED_TAGS = "applications.seedTags.v1";
   var OLD_SEED_DONE = "applications.seeded.v4";   /* set by the previous version, which merged the current seed */
   var PRIVATE_SEED = "https://api.github.com/repos/NischalPendurthi/prep-hub-private/contents/applications.json";
   var STATUSES = [
@@ -240,24 +242,34 @@
   }
 
   /* Seed entries this browser hasn't seen before are added; ones it has seen are left alone,
-     so a removed entry stays removed and a tag you chose is kept. Untagged entries take the seed's tag. */
+     so a removed entry stays removed and a tag you chose is kept until the seed's tag for it changes.
+     Untagged entries take the seed's tag. */
   function mergeSeed(data) {
     var seed = clean(data);
     var seen = readSeen();
     if (!seed || !seen) return;
     if (seen === "migrate") seen = new Set(seed.map(keyOf));   /* the old version already merged this seed */
+    var tags;
+    try { tags = JSON.parse(localStorage.getItem(SEED_TAGS)) || {}; } catch (e) { tags = {}; }
     var byKey = new Map(apps.map(function (a) { return [keyOf(a), a]; }));
     var changed = false;
     seed.forEach(function (d) {
       var k = keyOf(d), have = byKey.get(k);
+      /* seeds before seedTags existed tagged every entry "hope" */
+      var prev = k in tags ? tags[k] : (seen.has(k) ? "hope" : null);
+      tags[k] = d.status;
       if (!seen.has(k)) {
         seen.add(k);
         if (!have) { apps.push(d); byKey.set(k, d); changed = true; }
       }
-      if (have && !have.status && d.status) { have.status = d.status; changed = true; }
+      if (have && d.status && have.status !== d.status && (!have.status || prev !== d.status)) {
+        have.status = d.status;
+        changed = true;
+      }
     });
     try {
       localStorage.setItem(SEED_SEEN, JSON.stringify(Array.from(seen)));
+      localStorage.setItem(SEED_TAGS, JSON.stringify(tags));
       localStorage.removeItem(OLD_SEED_DONE);
     } catch (e) {}
     if (changed) { save(); render(); }
