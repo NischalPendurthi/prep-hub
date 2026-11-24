@@ -2,7 +2,7 @@
 title: Indexing
 part: Part A · Storage
 lede: An index turns a scan of the whole relation into a handful of page reads. This chapter covers ordered indices, the B+-tree in full (search, insert, delete, bulk loading and its height arithmetic), hashing, the write-optimized LSM tree with Bloom filters, bitmap indices, and the spatial and vector indices that turn up in modern systems.
-desc: clustering vs secondary, dense vs sparse, B+-tree structure, splits and merges, bulk loading, secondary indices storing keys, hashing, LSM trees, stepped merge, Bloom filters, bitmap indices, R-trees, HNSW
+desc: clustering vs secondary, dense vs sparse, B+-tree structure, splits and merges, bulk loading, secondary indices storing keys, hashing, LSM trees, stepped merge, Bloom filters, bitmap indices, BRIN and learned indices, R-trees, HNSW
 hours: 4
 prereqs: Chapter 1, binary search, logarithms
 ---
@@ -259,6 +259,38 @@ print(f"{bitmap(ratings, 5):08b} AND {bitmap(country, 'IN'):08b} = {m:08b}, coun
 
 Bitmaps are small: with 100-byte records, a bitmap is 1/800 of the relation's size. They are ANDed a machine word at a time, and counting set bits is a single instruction or a 256-entry table lookup per byte. A bitmap can also replace the list of record IDs for a common key in a B+-tree leaf: once more than 1/64 of the records have the value, one bit per record beats 64-bit IDs.
 
+## Block-range and learned indices {#ch02-brin .th}
+
+When a column follows the physical order of the table, such as the timestamp of an append-only log, a full secondary index is overkill: the key already says roughly where the row is.
+
+- A **block-range index** (PostgreSQL's BRIN, zone maps elsewhere) stores only the minimum and maximum key of each range of pages, 128 by default. It is tiny, but a lookup reads every page of every range whose [min, max] holds the key, and one late row with an old key stretches its range's minimum for good.
+- A **learned index** (Kraska et al., 2018) treats the index as a function: in sorted data, position = N · CDF(key), so a model can predict where a key is, and a short search within the model's recorded error finishes the job. Piecewise-linear models fitted with a guaranteed error bound (as in the PGM-index) are cheap to evaluate and to store.
+- Combined: model key → page, read only the pages inside the error window, and keep the rows that don't fit, such as late arrivals, in a small exact index. Rows that arrive in order need no index entry at all.
+
+```python run=db-c02-brin
+rows_per_page, pages, R = 100, 2000, 128
+keys = [p * 1000 + r * 10 for p in range(pages) for r in range(rows_per_page)]   # in physical order, like a log
+keys[150_050] = 5                                                                # one late row, on page 1500
+page = lambda i: i // rows_per_page
+
+# BRIN: min and max key per range of R pages; a lookup reads every range that could hold the key
+summ = {}
+for i, k in enumerate(keys):
+    lo, hi = summ.get(page(i) // R, (k, k))
+    summ[page(i) // R] = (min(lo, k), max(hi, k))
+
+# learned: one line from key to page; rows more than a page off it are stored exactly
+slope = (pages - 1) / (keys[-1] - keys[0])
+exceptions = [i for i, k in enumerate(keys) if abs(page(i) - int(k * slope)) > 1]
+
+q = 1_234_560
+print("BRIN pages read:   ", sum(R for lo, hi in summ.values() if lo <= q <= hi))
+print("model pages read:  ", 3, "around page", int(q * slope))
+print("rows stored exactly:", len(exceptions), [keys[i] for i in exceptions])
+```
+
+One late row doubles what BRIN reads for an unrelated key. The model reads 3 pages and stores the late row exactly. The catch is the same for both: the column must follow physical order, and a lookup filters whole pages, so for a single cached row a B+-tree is still faster.
+
 ## Spatial and vector indices {#ch02-spatial .th}
 
 - **k-d tree**: each level splits space in two on one dimension, cycling through the dimensions. The **k-d-B tree** gives each node many children for disk.
@@ -286,6 +318,22 @@ print({l: counts[l] for l in sorted(counts)})
 Each level ends up about a quarter the size of the one below, like a skip list.
 
 ## Drills: indexing {#ch02-drills .dr}
+
+:::drill concept
+Why does one late row hurt a block-range index so much?
+---
+**Answer.** It lowers its range's minimum, so every lookup for a key between that minimum and the range's maximum now reads the whole range as well.
+
+**Why.** A min/max summary can't say a key is only in one row of the range. A learned index with an exception store keeps that row out of the model.
+:::
+
+:::drill concept
+Why does a learned index need an error bound per model?
+---
+**Answer.** The prediction is approximate. Searching within the worst error recorded on the real keys guarantees a present key is found.
+
+**Why.** Accuracy only changes how much is searched; the bound is what makes it correct.
+:::
 
 :::drill concept
 Why must a secondary index be dense, while a clustering index can be sparse?
@@ -499,4 +547,5 @@ The real thing merges runs with a streaming k-way merge (`heapq.merge`) instead 
 - LSM: memtable → sorted runs → merges; sequential writes, tombstones for deletes, lookups check every level. Stepped merge trades read cost for write cost.
 - Bloom filter: no false negatives; about 1% false positives at 10 bits per key with k ≈ 7.
 - Bitmaps: one per value, AND/OR a word at a time, tiny for low-cardinality columns.
+- BRIN: min/max per page range, tiny but reads whole ranges. Learned: predict position from the key, search within a recorded error, store misfits exactly.
 - R-tree search follows every overlapping child. HNSW: random levels with P(≥L) = 1/k^L, greedy descent.

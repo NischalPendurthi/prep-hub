@@ -1055,6 +1055,10 @@
   "hash": "3d177d81549e2faf",
   "out": "10 bits/key, 1 hash(es): 9.516%\n10 bits/key, 2 hash(es): 3.286%\n10 bits/key, 3 hash(es): 1.741%\n10 bits/key, 7 hash(es): 0.819%\nmissed inserted keys: 0  measured FP rate: 0.808%"
  },
+ "python:db-c02-brin": {
+  "hash": "299f06677a510dac",
+  "out": "BRIN pages read:    256\nmodel pages read:   3 around page 1233\nrows stored exactly: 1 [5]"
+ },
  "python:db-c02-c-extendable": {
   "hash": "0ce3c75aedce70f2",
   "out": "global depth 3 | directory size 8 | buckets 4\n000 ld=3 [0, 8]\n001 ld=1 [1, 5]\n010 ld=2 [2]\n011 ld=1 [1, 5]\n100 ld=3 [4]\n101 ld=1 [1, 5]\n110 ld=2 [2]\n111 ld=1 [1, 5]"
